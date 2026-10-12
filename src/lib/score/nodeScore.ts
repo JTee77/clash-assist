@@ -64,14 +64,16 @@ function scoreThroughput(cards: CheckCard[]): {
   if (mbps == null) {
     return { score: levelToScore(bw.level), note: bw.conclusion, measured: true };
   }
-  if (mbps >= 40) return { score: 100, note: `下行约 ${mbps} Mbps，很充裕`, measured: true };
-  if (mbps >= 15) return { score: 88, note: `下行约 ${mbps} Mbps，够快`, measured: true };
-  if (mbps >= 5) return { score: 72, note: `下行约 ${mbps} Mbps，日常能用`, measured: true };
-  if (mbps >= 1.5) return { score: 50, note: `下行约 ${mbps} Mbps，偏慢`, measured: true };
+  // 文案里的数字取整：≥10 取整，否则 1 位小数（避免 4.745562254259502 Mbps 这类长小数）
+  const shown = mbps >= 10 ? Math.round(mbps) : Math.round(mbps * 10) / 10;
+  if (mbps >= 40) return { score: 100, note: `下行约 ${shown} Mbps，很充裕`, measured: true };
+  if (mbps >= 15) return { score: 88, note: `下行约 ${shown} Mbps，够快`, measured: true };
+  if (mbps >= 5) return { score: 72, note: `下行约 ${shown} Mbps，日常能用`, measured: true };
+  if (mbps >= 1.5) return { score: 50, note: `下行约 ${shown} Mbps，偏慢`, measured: true };
   if (mbps >= 0.4) {
-    return { score: 28, note: `下行约 ${mbps} Mbps，明显偏慢`, measured: true };
+    return { score: 28, note: `下行约 ${shown} Mbps，明显偏慢`, measured: true };
   }
-  return { score: 10, note: `下行约 ${mbps} Mbps，几乎不好用`, measured: true };
+  return { score: 10, note: `下行约 ${shown} Mbps，几乎不好用`, measured: true };
 }
 
 export const SERVICE_IDS = [
