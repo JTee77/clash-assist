@@ -7,6 +7,8 @@ export type RunnerProgress = {
   current?: number;
   total?: number;
   testingNode?: string;
+  /** 机器可读阶段（CLI NDJSON 进度用；GUI 只看 text） */
+  stage?: "precheck" | "switch" | "test" | "restore";
 };
 
 /** Shared UI hooks — no React; HomePage wires setState here. */

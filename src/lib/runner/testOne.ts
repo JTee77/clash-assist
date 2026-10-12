@@ -33,6 +33,11 @@ export async function testOne(
 
     const isCurrent = node.name === connection.currentProxy;
     if (!isCurrent && config && !connection.usingMock && !forceMock) {
+      hooks.onProgress({
+        text: `正在切换到 ${node.name}…`,
+        testingNode: node.name,
+        stage: "switch",
+      });
       snap = await resolveSelectorSnapshot(config, connection.currentProxy);
       const group =
         (await findSelectorGroup(config, node.name)) ?? snap?.group;
@@ -49,7 +54,11 @@ export async function testOne(
       await new Promise((r) => setTimeout(r, 250));
     }
 
-    hooks.onProgress({ text: `正在检测 ${node.name}…`, testingNode: node.name });
+    hooks.onProgress({
+      text: `正在检测 ${node.name}…`,
+      testingNode: node.name,
+      stage: "test",
+    });
     hooks.onNodeCards(asRunning(NODE_PLACEHOLDERS));
 
     const r = await runNodeDiagnostics(hooks.onUpsertNodeCard, {
@@ -68,6 +77,10 @@ export async function testOne(
     // 与 testAll 同一套切回决策/文案。切过但没记下原节点时也必须报错，不可静默。
     const plan = planRestore(didSwitch, snap);
     if (plan.kind === "restore" && config) {
+      hooks.onProgress({
+        text: `正在切回原先节点：${plan.now}…`,
+        stage: "restore",
+      });
       const restored = await restoreProxy(config, {
         group: plan.group,
         now: plan.now,
