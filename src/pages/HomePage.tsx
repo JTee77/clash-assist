@@ -369,6 +369,11 @@ export function HomePage({
         )
       : null;
   const progressDisplay = splitProgressDisplay(progress);
+  // 进度条始终占位：切换/准备等无比例阶段沿用上一次的比例（运行开始为 0），只换文字，停止按钮不移动
+  const lastPctRef = useRef(0);
+  if (!running) lastPctRef.current = 0;
+  else if (progressPct != null) lastPctRef.current = progressPct;
+  const barPct = progressPct ?? lastPctRef.current;
 
   const allExpanded =
     orderedNodes.length > 0 && orderedNodes.every((n) => expanded.has(n.name));
@@ -583,20 +588,18 @@ export function HomePage({
                           </>
                         ) : null}
                       </span>
-                      {progressPct != null ? (
+                      <span
+                        className="ws-progress-bar"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={barPct}
+                      >
                         <span
-                          className="ws-progress-bar"
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-valuenow={progressPct}
-                        >
-                          <span
-                            className="ws-progress-fill"
-                            style={{ width: `${progressPct}%` }}
-                          />
-                        </span>
-                      ) : null}
+                          className="ws-progress-fill"
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </span>
                     </span>
                     <button
                       type="button"
