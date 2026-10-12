@@ -345,7 +345,7 @@ describe("CliEnvelope", () => {
 
 describe("帮助与文案", () => {
   it("只推广 verge；FlClash 标为即将支持", () => {
-    expect(CLI_HELP_TEXT).toContain("0.1.16");
+    expect(CLI_HELP_TEXT).toContain("0.1.17");
     expect(CLI_HELP_TEXT).toContain("仅支持 verge");
     expect(CLI_HELP_TEXT).toContain("FlClash 即将支持");
     expect(CLI_HELP_TEXT).toContain("serve");

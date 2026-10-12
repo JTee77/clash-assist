@@ -282,7 +282,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
   };
 }
 
-export const CLI_HELP_TEXT = `Egress Checker CLI 0.1.16（与 GUI 共用 runner / egress / score）
+export const CLI_HELP_TEXT = `Egress Checker CLI 0.1.17（与 GUI 共用 runner / egress / score）
 
 用法：
   egress-checker --cli <command> [options]
