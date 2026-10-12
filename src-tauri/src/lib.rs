@@ -1,3 +1,4 @@
+mod cli_shim;
 mod cli_serve;
 mod dns;
 mod dns_query;
@@ -393,7 +394,16 @@ fn get_cli_argv() -> Vec<String> {
 
 /// CLI 子命令全集。
 /// ⚠️ 必须与 TS `src/lib/cli/parse.ts` 的 `CLI_COMMANDS` 完全一致（cli.test.ts 有同步断言）。
-pub const CLI_VERBS: &[&str] = &["help", "discover", "gate", "check", "env", "serve"];
+pub const CLI_VERBS: &[&str] = &[
+    "help",
+    "discover",
+    "nodes",
+    "gate",
+    "check",
+    "env",
+    "serve",
+    "install-shim",
+];
 
 /// 是否进入 CLI（隐藏主窗）。规则与 TS `parseCliArgv().cliMode` 逐条对齐：
 /// - 选项区出现 `--cli` / `--help` / `-h` → 是
@@ -534,6 +544,32 @@ fn cli_stderr(line: String) -> Result<(), String> {
     writeln!(out, "{line}").map_err(|e| e.to_string())?;
     out.flush().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// macOS 版本（CLI 在 < 14 上 check/env 会卡死，前端据此快速失败）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliOsInfo {
+    os: &'static str,
+    version: Option<String>,
+    major: Option<u32>,
+}
+
+#[tauri::command]
+fn cli_os_info() -> CliOsInfo {
+    let version = cli_shim::macos_version();
+    let major = version.as_deref().and_then(cli_shim::major_of);
+    CliOsInfo {
+        os: std::env::consts::OS,
+        version,
+        major,
+    }
+}
+
+/// `--cli install-shim [--dir D]`
+#[tauri::command]
+fn cli_install_shim(dir: Option<String>) -> Result<cli_shim::ShimResult, cli_shim::ShimError> {
+    cli_shim::install(dir.as_deref())
 }
 
 #[tauri::command]
@@ -696,6 +732,8 @@ pub fn run() {
             cli_stderr,
             cli_exit,
             cli_abort_requested,
+            cli_os_info,
+            cli_install_shim,
             cli_serve_start,
             cli_serve_poll,
             cli_serve_respond,

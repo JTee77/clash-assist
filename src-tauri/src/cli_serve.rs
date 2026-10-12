@@ -30,6 +30,7 @@ const JOB_WAIT_SECS: u64 = 600;
 pub enum ServeRoute {
     Health,
     Discover,
+    Nodes,
     Gate,
     Env,
     CheckCurrent,
@@ -42,6 +43,7 @@ impl ServeRoute {
         match self {
             Self::Health => "health",
             Self::Discover => "discover",
+            Self::Nodes => "nodes",
             Self::Gate => "gate",
             Self::Env => "env",
             Self::CheckCurrent => "check/current",
@@ -63,6 +65,7 @@ pub fn match_route(method: &str, path: &str) -> Option<ServeRoute> {
     match (method, path) {
         ("GET", "/health") => Some(ServeRoute::Health),
         ("POST", "/v1/discover") => Some(ServeRoute::Discover),
+        ("POST", "/v1/nodes") => Some(ServeRoute::Nodes),
         ("POST", "/v1/gate") => Some(ServeRoute::Gate),
         ("POST", "/v1/env") => Some(ServeRoute::Env),
         ("POST", "/v1/check/current") => Some(ServeRoute::CheckCurrent),
@@ -309,7 +312,7 @@ pub fn serve_stop() -> Result<(), String> {
         for (_, tx) in map.drain() {
             let _ = tx.send(HttpReply {
                 status: 503,
-                body: r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭"}}"#.into(),
+                body: r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭","hint":"serve 正在退出，稍后重新启动 egress-checker --cli serve 再请求。"}}"#.into(),
                 content_type: "application/json; charset=utf-8".into(),
             });
         }
@@ -368,7 +371,7 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
             &mut stream,
             503,
             "application/json; charset=utf-8",
-            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭"}}"#,
+            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭","hint":"serve 正在退出，稍后重新启动 egress-checker --cli serve 再请求。"}}"#,
         )?;
         return Ok(());
     }
@@ -378,7 +381,7 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
             &mut stream,
             401,
             "application/json; charset=utf-8",
-            r#"{"ok":false,"error":{"code":"unauthorized","message":"缺少或错误的 token。请用 Authorization: Bearer <token> 或 X-Egress-Token: <token>。"}}"#,
+            r#"{"ok":false,"error":{"code":"unauthorized","message":"缺少或错误的 token。请用 Authorization: Bearer <token> 或 X-Egress-Token: <token>。","hint":"token 在 serve 启动时打印（stdout 横幅 data.token），每次启动都会变；请用最新 token。"}}"#,
         )?;
         return Ok(());
     }
@@ -391,9 +394,9 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
             404
         };
         let msg = if status == 405 {
-            r#"{"ok":false,"error":{"code":"method_not_allowed","message":"方法不允许。可用：GET /health；POST /v1/discover|gate|env|check/current|check/all|check/node"}}"#
+            r#"{"ok":false,"error":{"code":"method_not_allowed","message":"方法不允许。可用：GET /health；POST /v1/discover|nodes|gate|env|check/current|check/all|check/node","hint":"业务路由都用 POST；健康检查用 GET /health。"}}"#
         } else {
-            r#"{"ok":false,"error":{"code":"not_found","message":"未知路径。可用：GET /health；POST /v1/discover|gate|env|check/current|check/all|check/node"}}"#
+            r#"{"ok":false,"error":{"code":"not_found","message":"未知路径。可用：GET /health；POST /v1/discover|nodes|gate|env|check/current|check/all|check/node","hint":"业务路由都用 POST；健康检查用 GET /health。"}}"#
         };
         write_response(&mut stream, status, "application/json; charset=utf-8", msg)?;
         return Ok(());
@@ -424,7 +427,7 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
             &mut stream,
             503,
             "application/json; charset=utf-8",
-            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 已关闭"}}"#,
+            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 已关闭","hint":"重新启动 egress-checker --cli serve，并使用新打印的 token。"}}"#,
         )?;
         return Ok(());
     }
@@ -438,7 +441,7 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
                 &mut stream,
                 504,
                 "application/json; charset=utf-8",
-                r#"{"ok":false,"error":{"code":"timeout","message":"等待 WebView 处理超时"}}"#,
+                r#"{"ok":false,"error":{"code":"timeout","message":"等待 WebView 处理超时","hint":"check all 节点多时会很久：用 --limit / --region 缩小范围，或改用一次性 CLI。"}}"#,
             )?;
         }
     }
@@ -451,6 +454,7 @@ fn looks_like_known_path(path: &str) -> bool {
         path,
         "/health"
             | "/v1/discover"
+            | "/v1/nodes"
             | "/v1/gate"
             | "/v1/env"
             | "/v1/check/current"
@@ -579,7 +583,7 @@ pub fn format_ready_human(info: &ServeStartInfo) -> String {
          token: {token}\n\
          每个请求需带：Authorization: Bearer {token}\n\
          或：X-Egress-Token: {token}\n\
-         路由：GET /health；POST /v1/discover|gate|env|check/current|check/all|check/node\n\
+         路由：GET /health；POST /v1/discover|nodes|gate|env|check/current|check/all|check/node\n\
          Ctrl+C 停止监听并退出。",
         base = info.base_url,
         token = info.token,
@@ -606,6 +610,7 @@ mod tests {
             match_route("POST", "/v1/check/node?x=1"),
             Some(ServeRoute::CheckNode)
         );
+        assert_eq!(match_route("POST", "/v1/nodes"), Some(ServeRoute::Nodes));
         assert_eq!(match_route("GET", "/v1/discover"), None);
         assert_eq!(match_route("POST", "/v1/nope"), None);
         assert_eq!(match_route("PUT", "/health"), None);
