@@ -49,7 +49,15 @@ cd egress-checker && pnpm install && pnpm tauri dev
 
 ## 打包（DMG）
 
-Apple Silicon 上跑 `pnpm tauri build`，产物在 `src-tauri/target/release/bundle/dmg/*.dmg`。默认 **未签名 / 未公证**，首次打开可能需 **右键 → 打开**。
+Apple Silicon 上跑 `pnpm tauri build`，产物在 `src-tauri/target/release/bundle/dmg/*.dmg`。安装包带本地签名（ad-hoc，免费的完整性签名），但**未经苹果公证**。
+
+### 首次打开说明
+
+第一次打开时 macOS 会提示「Apple 无法验证…」，按下面三步操作，之后就能正常打开：
+
+1. 弹窗里点 **「完成」**（不要点「移到废纸篓」）。
+2. 打开 **系统设置 › 隐私与安全性**，拉到下方，点 **「仍要打开」**。
+3. 再弹出的确认框里还是点 **「仍要打开」**，按提示完成身份验证。
 
 ## 免责声明
 

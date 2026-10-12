@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build unsigned arm64 .app / .dmg for Apple Silicon Macs.
+# Build ad-hoc signed (not notarized) arm64 .app / .dmg for Apple Silicon Macs.
 # Must run on macOS (Apple Silicon). Linux CI cannot produce a real DMG.
 set -euo pipefail
 
@@ -28,5 +28,7 @@ echo "Artifacts (typical):"
 echo "  src-tauri/target/release/bundle/macos/Egress Checker.app"
 echo "  src-tauri/target/release/bundle/dmg/*.dmg"
 echo
-echo "Unsigned / not notarized: first open may need 右键 → 打开 (Right-click → Open)."
+APP="src-tauri/target/release/bundle/macos/Egress Checker.app"
+codesign --verify --deep --strict "$APP" || { echo "error: ad-hoc signature invalid; users would see 已损坏" >&2; exit 1; }
+echo "Ad-hoc signed, not notarized. 首次打开：点「完成」→ 系统设置 › 隐私与安全性 → 仍要打开 → 确认框再点「仍要打开」并按提示完成身份验证。"
 echo "Apple Silicon (arm64) only."
