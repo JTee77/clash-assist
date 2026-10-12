@@ -404,13 +404,22 @@ export function round(n: number, digits = 2): number {
   return Math.round(n * f) / f;
 }
 
-/** 递归把 data 里所有非整数四舍五入到 2 位小数（Mbps、ms、分数等）。 */
-export function roundDeep<T>(v: T, digits = 2): T {
+/** 文案里 4 位以上小数的数字（如「4.745562254259502 Mbps」）取到 digits 位；IP / 版本号不受影响（只认 4+ 位小数）。 */
+export function roundText(s: string, digits = 2): string {
+  return s.replace(/(?<![\d.])(\d+)\.(\d{4,})(?![\d.])/g, (m) => String(round(Number(m), digits)));
+}
+
+/** 只对这些「说明文案」字段做 roundText；节点名等标识绝不改动。 */
+const PROSE_KEYS = new Set(["blurb", "conclusion", "process", "suggestion", "note", "hint", "message", "summary", "detail", "tip"]);
+
+/** 递归把 data 里所有非整数四舍五入到 2 位小数（Mbps、ms、分数等）；文案字段里的长小数同样取整。 */
+export function roundDeep<T>(v: T, digits = 2, key?: string): T {
   if (typeof v === "number") return round(v, digits) as T;
-  if (Array.isArray(v)) return v.map((x) => roundDeep(x, digits)) as T;
+  if (typeof v === "string") return (key && PROSE_KEYS.has(key) ? roundText(v, digits) : v) as T;
+  if (Array.isArray(v)) return v.map((x) => roundDeep(x, digits, key)) as T;
   if (v && typeof v === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(v)) out[k] = roundDeep(x, digits);
+    for (const [k, x] of Object.entries(v)) out[k] = roundDeep(x, digits, k);
     return out as T;
   }
   return v;

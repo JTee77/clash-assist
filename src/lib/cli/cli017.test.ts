@@ -379,3 +379,11 @@ describe("serve body", () => {
     expect(parsedFromServeJob(base, { route: "nodes", body: "{" }).early?.error?.code).toBe("invalid_body");
   });
 });
+
+describe("文案里的长小数", () => {
+  it("roundText 只动 4+ 位小数", async () => {
+    const { roundText } = await import("./dispatch");
+    expect(roundText("下行约 4.745562254259502 Mbps，偏慢")).toBe("下行约 4.75 Mbps，偏慢");
+    expect(roundText("IP 1.2.3.4 版本 0.1.17 延迟 12.5 ms")).toBe("IP 1.2.3.4 版本 0.1.17 延迟 12.5 ms");
+  });
+});

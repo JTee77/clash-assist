@@ -103,7 +103,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 - 失败：`ok: false`，带 `error: { code, message, hint }`。`hint` 是一句可执行的中文「下一步怎么做」，按 code 固定（全表见 `help --json` 的 `data.spec.errorCodes`）。部分失败（`restore_failed` / `aborted` / `check_failed` / `gate_failed`）**同时带 `data`**（已测到的结果、`restoreError` 等），便于脚本收尾。
 - 未知命令时 `command` 回显用户写的词（如 `"frobnicate"`）。
 - 密钥不会写入 JSON（`discover` 只回 host / port / mixedPort / source / sockPath）。
-- **数字取整**：`data` 里所有非整数统一四舍五入到 **2 位小数**（Mbps、ms 等）；评分 `totalScore` 为 **1 位小数**。整数不变。
+- **数字取整**：`data` 里所有非整数统一四舍五入到 **2 位小数**（Mbps、ms 等）；评分 `totalScore` 为 **1 位小数**。整数不变。说明文案字段（`blurb` / `conclusion` / `process` / `note` / `hint` 等）里 4 位以上的小数也取到 2 位；节点名等标识不动。
 
 ### 退出码
 
