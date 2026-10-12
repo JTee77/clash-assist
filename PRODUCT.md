@@ -1,4 +1,4 @@
-# Egress Checker — 产品说明（v0.1.16）
+# Egress Checker — 产品说明（v0.1.17）
 
 ## 定位
 **Egress Checker** 是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
@@ -32,11 +32,23 @@
 - 对无开放 API 的客户端假装「全节点扫遍」
 - 宣称「翻墙 / 突破防火墙」
 
-## 当前版本与本轮目标（0.1.16）
+## 当前版本与本轮目标（0.1.17）
 
-**当前版本：0.1.16**（自 0.1.12 起；0.1.15 已发）。
+**当前版本：0.1.17**。
 
-本轮目标：**CLI 收口**（闸门、严格解析、切回、Ctrl+C、文档）+ **最小可用 `serve`**（127.0.0.1 + token 鉴权，映射 discover/gate/env/check）。许可证已改为 **GPL-3.0**（[PR #20](https://github.com/JTee77/egress-checker/pull/20)）。CLI 收口见 [PR #21](https://github.com/JTee77/egress-checker/pull/21)；`serve` 见 [PR #22](https://github.com/JTee77/egress-checker/pull/22)。
+本轮目标：**CLI 补齐（面向 AI 助手）**——不加与 CLI 无关的功能：
+- `install-shim` 短命令（`egress-checker`），文档写明应用内完整路径
+- `check` / `env` 往 stderr 写 NDJSON 进度（`--no-progress` 关闭），stdout 仍是一行 envelope
+- `nodes` 全量节点列表（`--region` / `--match` / `--limit`）；`discover` 行为不变
+- 子集检测：`check all --region/--match/--limit`、`check nodes <名…>`；serve `/v1/check/all`、`/v1/nodes` 接受同样的 body
+- 规则模式下 `currentProxy` 与 GUI 同一判定（修复 CLI 恒为 null），识别不到时给 `currentProxyReason`
+- 输出数字取整；macOS < 14 跑 `check` / `env` 立即 `os_unsupported`；每个错误码带中文 `hint`
+- `help --json` 的 `data.spec` 机器可读清单；新增 [docs/AGENTS-CLI.md](./docs/AGENTS-CLI.md)
+- 合入 ad-hoc 签名 + DMG 背景（[PR #23](https://github.com/JTee77/egress-checker/pull/23)）
+
+### 0.1.16
+
+目标：**CLI 收口**（闸门、严格解析、切回、Ctrl+C、文档）+ **最小可用 `serve`**（127.0.0.1 + token 鉴权，映射 discover/gate/env/check）。许可证已改为 **GPL-3.0**（[PR #20](https://github.com/JTee77/egress-checker/pull/20)）。CLI 收口见 [PR #21](https://github.com/JTee77/egress-checker/pull/21)；`serve` 见 [PR #22](https://github.com/JTee77/egress-checker/pull/22)。
 
 0.1.15 已发：窄窗排版、使用中识别、FlClash 即将支持、商店只写通/不通、取消记录过期清理等。
 
@@ -44,7 +56,7 @@
 
 「明确不做」见上文，本版不变。
 
-## 当前产品形态（0.1.12 基线 → 0.1.16）
+## 当前产品形态（0.1.12 基线 → 0.1.17）
 
 ### 单页 GUI（无侧栏多模式）
 - **无**「首页 | 节点 | 设置 | 关于」侧栏多页；工作区是一条渐进流程：选软件 → 获取节点 → 环境检查 / 测节点
@@ -63,13 +75,18 @@
 ### 轻量门槛
 获取节点后先 `runLightGate`：客户端是否连上、海外是否大致通、是否像未走代理直连。不过则口语提示，不进入节点测评。
 
-### CLI（0.1.12 骨架；0.1.16 收口 + 最小 serve）
+### CLI（0.1.12 骨架；0.1.16 收口 + 最小 serve；0.1.17 面向 AI 助手补齐）
 与 GUI **共用** `lib/runner` + `egress` + `score` + `mihomo`。**目前只支持 `--client verge`**（Clash Verge / Clash Verge Rev）；FlClash 即将支持，暂不可用。
 
 ```text
 egress-checker --cli discover --client verge
+egress-checker --cli nodes --client verge [--region 日本] [--match 关键词] [--limit N]
 egress-checker --cli gate --client verge
 egress-checker --cli check current|node <名>|all --client verge
+egress-checker --cli check all --client verge --region HK --limit 3
+egress-checker --cli check nodes "香港 01" "日本 02" --client verge
+egress-checker --cli help --json        # data.spec 机器可读
+egress-checker --cli install-shim       # 之后可直接 egress-checker …
 egress-checker --cli env --client verge
 egress-checker --cli check all --mock --no-json
 egress-checker --cli serve --client verge [--port 17890]
@@ -82,6 +99,8 @@ egress-checker --cli serve --mock
 - 严格解析：未知命令 / 未知选项 / 多余参数 / 非法 `--client` 都是 ok:false，不静默变成 help、不回落。
 - `check node` / `check all` 切回失败 → `restore_failed`，`data.restoreError` 与 GUI 红字同一句。
 - Ctrl+C：`check all` 在当前节点测完后停止并切回（同 GUI「停止并切回」）。
+
+- 进度：`check` / `env` 往 stderr 写 NDJSON（`--no-progress` 关闭）；错误带中文 `hint`；数字取整；macOS < 14 的 `check` / `env` 直接 `os_unsupported`。
 
 错误码、三种 `check` 数据形状、`discover` 节点截断、serve 鉴权与路由等细节见 [docs/CLI.md](./docs/CLI.md)。
 
