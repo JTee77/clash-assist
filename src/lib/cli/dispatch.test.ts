@@ -137,7 +137,7 @@ describe("参数 / 闸门错误：ok:false，且不碰网络", () => {
   it("help 永远 ok", async () => {
     const env = await run(["help"]);
     expect(env.ok).toBe(true);
-    expect((env.data as { text: string }).text).toContain("0.1.16");
+    expect((env.data as { text: string }).text).toContain("0.1.17");
   });
 });
 
@@ -186,7 +186,7 @@ describe("check node", () => {
     h.runLightGate.mockResolvedValue({ ok: false, message: "连不上VPN软件" });
     const env = await run(["check", "node", "B", "-c", "verge"]);
     expect(env.ok).toBe(false);
-    expect(env.error).toEqual({ code: "gate_failed", message: "连不上VPN软件" });
+    expect(env.error).toMatchObject({ code: "gate_failed", message: "连不上VPN软件" });
     expect(h.switchProxy).not.toHaveBeenCalled();
     expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
   });
@@ -249,7 +249,7 @@ describe("check all", () => {
     h.restoreProxy.mockResolvedValue(false);
     const env = await run(["check", "all", "-c", "verge"]);
     expect(env.ok).toBe(false);
-    expect(env.error).toEqual({ code: "restore_failed", message: "没能切回原先节点「A」。" });
+    expect(env.error).toMatchObject({ code: "restore_failed", message: "没能切回原先节点「A」。" });
     const d = env.data as CheckAllData;
     expect(d.restoreError).toBe("没能切回原先节点「A」。");
     expect(d.hint).toBeNull();
@@ -266,7 +266,7 @@ describe("check all", () => {
       shouldAbort: () => aborted,
     });
     expect(env.ok).toBe(false);
-    expect(env.error).toEqual({ code: "aborted", message: CLI_ABORT_MESSAGE });
+    expect(env.error).toMatchObject({ code: "aborted", message: CLI_ABORT_MESSAGE });
     const d = env.data as CheckAllData;
     expect(d.aborted).toBe(true);
     expect(d.count).toBe(1);

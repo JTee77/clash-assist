@@ -8,8 +8,56 @@ import {
   errEnvelope,
   okEnvelope,
   type CliEnvelope,
+  type NodeFilter,
   type ParsedCli,
 } from "./types";
+
+/** /v1/nodes 与 /v1/check/all 的 body：{ region?, match?, limit?, names? }（都可省；空 body = 不筛选） */
+export function parseFilterBody(
+  body: string,
+  allowNames: boolean,
+): { ok: true; filter: NodeFilter; names: string[] } | { ok: false; message: string } {
+  const filter: NodeFilter = { region: null, match: null, limit: null };
+  if (!body.trim()) return { ok: true, filter, names: [] };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(body);
+  } catch {
+    return { ok: false, message: "body 不是合法 JSON。" };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, message: "body 必须是 JSON 对象。" };
+  }
+  const o = raw as Record<string, unknown>;
+  const allowed = ["region", "match", "limit", ...(allowNames ? ["names"] : [])];
+  const extra = Object.keys(o).filter((k) => !allowed.includes(k));
+  if (extra.length) {
+    return { ok: false, message: `不认识的字段：${extra.join(", ")}（可用：${allowed.join(", ")}）` };
+  }
+  for (const k of ["region", "match"] as const) {
+    const v = o[k];
+    if (v === undefined || v === null) continue;
+    const list = Array.isArray(v) ? v : [v];
+    if (!list.every((x) => typeof x === "string")) {
+      return { ok: false, message: `${k} 必须是字符串或字符串数组。` };
+    }
+    filter[k] = (list as string[]).map((x) => x.trim()).filter(Boolean).join(",") || null;
+  }
+  if (o.limit !== undefined && o.limit !== null) {
+    if (typeof o.limit !== "number" || !Number.isInteger(o.limit) || o.limit < 1) {
+      return { ok: false, message: "limit 必须是正整数。" };
+    }
+    filter.limit = o.limit;
+  }
+  let names: string[] = [];
+  if (o.names !== undefined && o.names !== null) {
+    if (!Array.isArray(o.names) || !o.names.every((x) => typeof x === "string")) {
+      return { ok: false, message: "names 必须是字符串数组。" };
+    }
+    names = (o.names as string[]).map((x) => x.trim()).filter(Boolean);
+  }
+  return { ok: true, filter, names };
+}
 
 export { CLI_SERVE_DEFAULT_PORT };
 
@@ -50,11 +98,41 @@ export function parsedFromServeJob(
     command: "help",
     commandToken: null,
     checkTarget: undefined,
+    filter: { region: null, match: null, limit: null },
+    dir: null,
+    // HTTP 回包只有一个 envelope；进度不经 HTTP 推送
+    progress: false,
   };
 
   switch (job.route) {
     case "discover":
       return { parsed: { ...shared, command: "discover" } };
+    case "nodes":
+    case "check/all": {
+      const isAll = job.route === "check/all";
+      const r = parseFilterBody(job.body, isAll);
+      if (!r.ok) {
+        return {
+          parsed: shared,
+          early: errEnvelope(
+            isAll ? "check" : "nodes",
+            "invalid_body",
+            `POST /v1/${job.route}：${r.message}`,
+            version(),
+          ),
+        };
+      }
+      const withFilter = { ...shared, filter: r.filter };
+      return isAll
+        ? {
+            parsed: {
+              ...withFilter,
+              command: "check",
+              checkTarget: r.names.length ? { kind: "all", names: r.names } : { kind: "all" },
+            },
+          }
+        : { parsed: { ...withFilter, command: "nodes" } };
+    }
     case "gate":
       return { parsed: { ...shared, command: "gate" } };
     case "env":
@@ -65,14 +143,6 @@ export function parsedFromServeJob(
           ...shared,
           command: "check",
           checkTarget: { kind: "current" },
-        },
-      };
-    case "check/all":
-      return {
-        parsed: {
-          ...shared,
-          command: "check",
-          checkTarget: { kind: "all" },
         },
       };
     case "check/node": {
@@ -189,6 +259,7 @@ export function serveReadyEnvelope(
       routes: [
         "GET /health",
         "POST /v1/discover",
+        "POST /v1/nodes",
         "POST /v1/gate",
         "POST /v1/env",
         "POST /v1/check/current",

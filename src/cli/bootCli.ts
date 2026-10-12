@@ -14,7 +14,10 @@ import {
   resolveCliClient,
   resolveServePort,
   serveReadyEnvelope,
+  withHint,
+  type CliDispatchOptions,
   type CliEnvelope,
+  type CliOsInfo,
   type ParsedCli,
   type ServeJob,
   type ServeStartInfo,
@@ -74,6 +77,31 @@ async function exit(code: number): Promise<void> {
   }
 }
 
+/** 系统信息（macOS 版本）；拿不到就不做版本闸门。 */
+async function osInfo(): Promise<CliOsInfo | null> {
+  try {
+    return await invoke<CliOsInfo>("cli_os_info");
+  } catch {
+    return null;
+  }
+}
+
+/** 进度 NDJSON → stderr。按顺序串行写，结束前 flush。 */
+function progressSink(enabled: boolean): {
+  onProgress?: CliDispatchOptions["onProgress"];
+  flush: () => Promise<void>;
+} {
+  let chain: Promise<void> = Promise.resolve();
+  if (!enabled) return { flush: () => chain };
+  return {
+    onProgress: (ev) => {
+      const line = JSON.stringify(ev);
+      chain = chain.then(() => emitErr(line)).catch(() => {});
+    },
+    flush: () => chain,
+  };
+}
+
 function appVersion(): string {
   try {
     return typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0";
@@ -94,7 +122,7 @@ async function bootServe(parsed: ParsedCli): Promise<void> {
       version: ver,
       command: "serve",
       ranAt: new Date().toISOString(),
-      error: client.error,
+      error: withHint(client.error),
     };
     await emit(JSON.stringify(env));
     await exit(1);
@@ -113,7 +141,7 @@ async function bootServe(parsed: ParsedCli): Promise<void> {
         version: ver,
         command: "serve",
         ranAt: new Date().toISOString(),
-        error: { code: "serve_bind_failed", message },
+        error: withHint({ code: "serve_bind_failed", message }),
       }),
     );
     await exit(1);
@@ -126,11 +154,12 @@ async function bootServe(parsed: ParsedCli): Promise<void> {
     `token: ${info.token}\n` +
     `每个请求需带：Authorization: Bearer ${info.token}\n` +
     `或：X-Egress-Token: ${info.token}\n` +
-    `路由：GET /health；POST /v1/discover|gate|env|check/current|check/all|check/node\n` +
+    `路由：GET /health；POST /v1/discover|nodes|gate|env|check/current|check/all|check/node\n` +
     `请求串行处理。Ctrl+C 停止监听并退出。`;
   await emitErr(human);
   await emit(JSON.stringify(serveReadyEnvelope(info, ver)));
 
+  const os = await osInfo();
   const abort = watchAbort();
   try {
     while (!abort.isAborted()) {
@@ -150,6 +179,7 @@ async function bootServe(parsed: ParsedCli): Promise<void> {
       try {
         envelope = await dispatchServeJob(parsed, job, {
           shouldAbort: abort.isAborted,
+          osInfo: os,
         });
       } catch (err) {
         envelope = {
@@ -157,10 +187,10 @@ async function bootServe(parsed: ParsedCli): Promise<void> {
           version: ver,
           command: "serve",
           ranAt: new Date().toISOString(),
-          error: {
+          error: withHint({
             code: "serve_handler_error",
             message: err instanceof Error ? err.message : String(err),
-          },
+          }),
         };
       }
       try {
@@ -212,10 +242,10 @@ export async function bootCli(): Promise<void> {
         version: appVersion(),
         command: "boot",
         ranAt: new Date().toISOString(),
-        error: {
+        error: withHint({
           code: "argv_unavailable",
           message: err instanceof Error ? err.message : String(err),
-        },
+        }),
       }),
     );
     await exit(1);
@@ -230,9 +260,15 @@ export async function bootCli(): Promise<void> {
   }
 
   const abort = watchAbort();
+  const progress = progressSink(parsed.progress);
   let envelope: CliEnvelope;
   try {
-    const run = dispatchCli(parsed, { shouldAbort: abort.isAborted });
+    const run = dispatchCli(parsed, {
+      shouldAbort: abort.isAborted,
+      onProgress: progress.onProgress,
+      osInfo: await osInfo(),
+      installShim: (dir) => invoke("cli_install_shim", { dir }),
+    });
     if (cliCommandSwitchesNodes(parsed)) {
       // 可能切换过节点：必须等 runner 停下并切回，不能提前退出。
       envelope = await run;
@@ -249,15 +285,16 @@ export async function bootCli(): Promise<void> {
       version: appVersion(),
       command: parsed.command,
       ranAt: new Date().toISOString(),
-      error: {
+      error: withHint({
         code: "boot_error",
         message: err instanceof Error ? err.message : String(err),
-      },
+      }),
     };
   } finally {
     abort.stop();
   }
 
+  await progress.flush();
   // 默认一行 JSON；--no-json 输出人类摘要（help 为纯文本）。
   await emit(parsed.json ? JSON.stringify(envelope) : formatCliHuman(envelope));
   await exit(cliExitCode(envelope));

@@ -362,11 +362,13 @@ describe("formatCliHuman（--no-json）", () => {
     );
   });
 
-  it("失败：一行 ✗ + code + message", () => {
+  it("失败：首行 ✗ + code + message，次行建议（hint）", () => {
     const out = formatCliHuman(
-      errEnvelope("frobnicate", "unknown_command", "未知命令：frobnicate", "0.1.16"),
+      errEnvelope("frobnicate", "unknown_command", "未知命令：frobnicate", "0.1.17"),
     );
-    expect(out).toBe("✗ frobnicate 失败 [unknown_command] 未知命令：frobnicate");
+    const lines = out.split("\n");
+    expect(lines[0]).toBe("✗ frobnicate 失败 [unknown_command] 未知命令：frobnicate");
+    expect(lines[1]).toMatch(/^  建议：.*help --json/);
   });
 
   it("discover 摘要（含截断提示），不是 JSON", () => {

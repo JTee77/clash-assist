@@ -1,7 +1,11 @@
+import { hintFor } from "./hints";
+
 /** Stable stdout JSON shape for --cli / 本地脚本。 */
 export type CliError = {
   code: string;
   message: string;
+  /** 可执行的下一步（中文）；errEnvelope 按 code 自动填 */
+  hint?: string;
 };
 
 /**
@@ -20,15 +24,28 @@ export type CliEnvelope<T = unknown> = {
 export type CliCommandName =
   | "help"
   | "discover"
+  | "nodes"
   | "gate"
   | "check"
   | "env"
-  | "serve";
+  | "serve"
+  | "install-shim";
 
 export type CheckTarget =
   | { kind: "current" }
   | { kind: "node"; name: string }
-  | { kind: "all" };
+  /** check all（可带筛选）与 check nodes <a> <b>…（names 非空）共用：输出 target:"all" */
+  | { kind: "all"; names?: string[] };
+
+/** nodes / check all / check nodes 的筛选。 */
+export type NodeFilter = {
+  /** 地区（逗号分隔多个）：等于/包含节点 region，或别名（HK、日本、🇯🇵…） */
+  region: string | null;
+  /** 节点名关键词（逗号分隔多个，任一命中；不区分大小写） */
+  match: string | null;
+  /** 最多取前 N 个（筛选之后） */
+  limit: number | null;
+};
 
 export type ParsedCli = {
   /** 与 Rust `is_cli_mode` 同规则：含 --cli / --help / -h，或首个位置参数是已知子命令 */
@@ -49,6 +66,11 @@ export type ParsedCli = {
   port: number | null;
   /** 是否显式给了 --port（含非法值，非法时 parseError） */
   portGiven: boolean;
+  filter: NodeFilter;
+  /** install-shim 的 --dir */
+  dir: string | null;
+  /** NDJSON 进度事件写 stderr（默认开；--no-progress / --quiet 关闭） */
+  progress: boolean;
   /** 未知命令 / 未知选项 / 缺值 / 多余参数；非空时 dispatch 返回 ok:false */
   parseError: CliError | null;
   /** 原始 argv（诊断用） */
@@ -81,7 +103,7 @@ export function errEnvelope<T = never>(
     version,
     command,
     ranAt: new Date().toISOString(),
-    error: { code, message },
+    error: withHint({ code, message }),
   };
   if (data !== undefined) env.data = data;
   return env;
@@ -93,4 +115,11 @@ export function errEnvelope<T = never>(
  */
 export function cliExitCode(env: Pick<CliEnvelope, "ok">): 0 | 1 {
   return env.ok ? 0 : 1;
+}
+
+/** 按 code 补上 hint（已有 hint 不覆盖）。 */
+export function withHint(e: CliError): CliError {
+  if (e.hint) return e;
+  const hint = hintFor(e.code);
+  return hint ? { ...e, hint } : e;
 }
