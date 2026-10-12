@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,33 +43,7 @@ function colCountFor(vw: number): number {
   return Math.min(8, Math.max(1, Math.floor((vw - 72) / 307)));
 }
 
-const PROGRESS_TEXT_FONT =
-  '600 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-
-function measureProgressTextWidth(text: string): number {
-  if (typeof document === "undefined" || !text) return 0;
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return text.length * 12;
-  ctx.font = PROGRESS_TEXT_FONT;
-  return ctx.measureText(text).width;
-}
-
-function widestNodeName(names: string[]): string {
-  if (names.length === 0) return "";
-  let best = names[0]!;
-  let bestW = -1;
-  for (const name of names) {
-    const w = measureProgressTextWidth(name);
-    if (w > bestW) {
-      bestW = w;
-      best = name;
-    }
-  }
-  return best;
-}
-
-/** 进度文案拆成「阶段」+「节点名」。两段都完整显示，不截断。 */
+/** 进度文案拆成「阶段」+「节点名」。全部检测时节点名在 CSS 里定宽截断（title 给全名）。 */
 function splitProgressDisplay(p: RunnerProgress | null): {
   phase: string;
   node?: string;
@@ -132,10 +105,6 @@ export function HomePage({
   const [switchHint, setSwitchHint] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const abortAllRef = useRef(false);
-  const progressGroupRef = useRef<HTMLDivElement | null>(null);
-  const abortBtnRef = useRef<HTMLButtonElement | null>(null);
-  /** 「停止并切回」是否单独换行：只看窗口宽度 + 最长进度文字，不看当前节点名 */
-  const [abortStacked, setAbortStacked] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [testingNode, setTestingNode] = useState<string | null>(null);
@@ -400,39 +369,11 @@ export function HomePage({
         )
       : null;
   const progressDisplay = splitProgressDisplay(progress);
-
-  const progressReserveLabel = useMemo(() => {
-    const total = progress?.total ?? nodes.length;
-    if (total <= 0 || nodes.length === 0) return "";
-    const widest = widestNodeName(nodes.map((n) => n.name));
-    if (!widest) return `检测 ${total}/${total}`;
-    return `检测 ${total}/${total}（${widest}）`;
-  }, [nodes, progress?.total]);
-
-  useLayoutEffect(() => {
-    if (!(running && mode === "all")) {
-      setAbortStacked(false);
-      return;
-    }
-    const el = progressGroupRef.current;
-    if (!el || !progressReserveLabel) {
-      setAbortStacked(false);
-      return;
-    }
-    const update = () => {
-      const btnW = abortBtnRef.current?.offsetWidth ?? 88;
-      const textW = measureProgressTextWidth(progressReserveLabel);
-      const barW = 72;
-      const gaps = 8 + 10; // 文字↔条、条↔停止
-      const need = textW + gaps + barW + btnW;
-      setAbortStacked(el.clientWidth + 0.5 < need);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [running, mode, progressReserveLabel]);
-
+  // 进度条始终占位：切换/准备等无比例阶段沿用上一次的比例（运行开始为 0），只换文字，停止按钮不移动
+  const lastPctRef = useRef(0);
+  if (!running) lastPctRef.current = 0;
+  else if (progressPct != null) lastPctRef.current = progressPct;
+  const barPct = progressPct ?? lastPctRef.current;
 
   const allExpanded =
     orderedNodes.length > 0 && orderedNodes.every((n) => expanded.has(n.name));
@@ -621,8 +562,7 @@ export function HomePage({
                 </div>
                 {running && mode === "all" ? (
                   <div
-                    ref={progressGroupRef}
-                    className={`ws-progress-group${abortStacked ? " is-abort-stacked" : ""}`}
+                    className="ws-progress-group"
                     role="status"
                     aria-live="polite"
                   >
@@ -635,29 +575,33 @@ export function HomePage({
                             </span>
                             {progressDisplay.node ? (
                               <span className="ws-progress-node">
-                                （{progressDisplay.node}）
+                                （
+                                <span
+                                  className="ws-progress-node-name"
+                                  title={progressDisplay.node}
+                                >
+                                  {progressDisplay.node}
+                                </span>
+                                ）
                               </span>
                             ) : null}
                           </>
                         ) : null}
                       </span>
-                      {progressPct != null ? (
+                      <span
+                        className="ws-progress-bar"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={barPct}
+                      >
                         <span
-                          className="ws-progress-bar"
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-valuenow={progressPct}
-                        >
-                          <span
-                            className="ws-progress-fill"
-                            style={{ width: `${progressPct}%` }}
-                          />
-                        </span>
-                      ) : null}
+                          className="ws-progress-fill"
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </span>
                     </span>
                     <button
-                      ref={abortBtnRef}
                       type="button"
                       className="btn btn-sm ws-abort-btn"
                       onClick={onAbortAll}

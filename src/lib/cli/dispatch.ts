@@ -9,6 +9,7 @@ import { runNodeDiagnostics, type CheckCard, type EgressReport } from "../egress
 import {
   clientLabel,
   defaultConfig,
+  detectRegion,
   discoverAndProbe,
   getProxies,
   isClientId,
@@ -27,15 +28,20 @@ import {
   type NodeStars,
 } from "../score";
 import { CLI_HELP_TEXT, type ParsedCli } from "./parse";
+import { CLI_SPEC } from "./spec";
 import {
   errEnvelope,
   okEnvelope,
   type CliEnvelope,
   type CliError,
+  type NodeFilter,
 } from "./types";
 
 /** discover 的 data.nodes 最多列这么多个（nodeCount 仍是总数）。 */
 export const CLI_NODES_LIMIT = 50;
+
+/** 安装到 /Applications 后的二进制完整路径（文档 / install-shim 输出用）。 */
+export const CLI_APP_BINARY = "/Applications/Egress Checker.app/Contents/MacOS/egress-checker";
 
 /** 唯一受支持软件的提示（与 GUI 选择器一致：只有 Clash Verge 可选）。 */
 export const CLI_ONLY_VERGE = "当前仅支持 Clash Verge（--client verge）。";
@@ -61,6 +67,8 @@ export type DiscoverData = {
   status: ConnectionState["status"];
   message: string;
   currentProxy: string | null;
+  /** currentProxy 为 null 时的原因（中文）；识别到时为 null */
+  currentProxyReason: string | null;
   usingMock: boolean;
   config: {
     host: string;
@@ -75,6 +83,29 @@ export type DiscoverData = {
   /** 已连上但读节点列表失败时的原因；否则 null */
   nodesError: string | null;
   nodes: { name: string; type: string; region: string }[];
+};
+
+export type NodesData = {
+  clientId: ClientId;
+  status: ConnectionState["status"];
+  currentProxy: string | null;
+  /** 全部节点数（筛选前） */
+  total: number;
+  /** 本次返回的节点数（筛选 + limit 后） */
+  count: number;
+  filter: NodeFilter;
+  nodesError: string | null;
+  nodes: CliNodeRow[];
+};
+
+export type CliNodeRow = {
+  name: string;
+  type: string;
+  region: string;
+  /** 是否为当前在用节点 */
+  current: boolean;
+  /** 客户端最近一次测速（ms；0 = 失败；null = 没测过） */
+  lastDelay: number | null;
 };
 
 export type GateData = {
@@ -115,6 +146,8 @@ export type CheckAllData = {
   target: "all";
   clientId: ClientId;
   count: number;
+  /** 本次纳入检测的节点（筛选 / check nodes 之后）；未筛选时为 null（= 全部） */
+  selection: { filter: NodeFilter; names: string[] | null; selected: string[] } | null;
   scores: (CliScore & { nodeName: string })[];
   hint: string | null;
   restoreError: string | null;
@@ -265,13 +298,18 @@ async function loadConnection(
     };
     return { connection, nodes: list, nodesError: null };
   }
-  const connection = await discoverAndProbe(undefined, clientId);
+  const connection: ConnectionState = {
+    ...(await discoverAndProbe(undefined, clientId)),
+  };
   let nodes: ProxyNode[] = [];
   let nodesError: string | null = null;
   if (connection.config && connection.status === "connected") {
     try {
       const r = await getProxies(connection.config);
       nodes = r.nodes;
+      // 与 GUI useConnection 同一合并：discoverAndProbe 本身不读 /proxies，
+      // currentProxy 来自节点列表（resolveCurrentProxy，规则模式下也能识别主选择组）。
+      connection.currentProxy = r.currentProxy ?? connection.currentProxy;
       if (!nodes.length) {
         nodesError = r.error ?? "节点列表为空";
       }
@@ -356,17 +394,234 @@ function collectingHooks(): {
 }
 
 function cliScore(s: NodeScoreResult): CliScore {
-  return { stars: s.stars, totalScore: s.totalScore, blurb: s.blurb };
+  return { stars: s.stars, totalScore: round(s.totalScore, 1), blurb: s.blurb };
 }
+
+/** 保留 digits 位小数（去掉浮点尾巴，如 86.33333333 → 86.3）。 */
+export function round(n: number, digits = 2): number {
+  if (!Number.isFinite(n) || Number.isInteger(n)) return n;
+  const f = 10 ** digits;
+  return Math.round(n * f) / f;
+}
+
+/** 文案里 4 位以上小数的数字（如「4.745562254259502 Mbps」）取到 digits 位；IP / 版本号不受影响（只认 4+ 位小数）。 */
+export function roundText(s: string, digits = 2): string {
+  return s.replace(/(?<![\d.])(\d+)\.(\d{4,})(?![\d.])/g, (m) => String(round(Number(m), digits)));
+}
+
+/** 只对这些「说明文案」字段做 roundText；节点名等标识绝不改动。 */
+const PROSE_KEYS = new Set(["blurb", "conclusion", "process", "suggestion", "note", "hint", "message", "summary", "detail", "tip"]);
+
+/** 递归把 data 里所有非整数四舍五入到 2 位小数（Mbps、ms、分数等）；文案字段里的长小数同样取整。 */
+export function roundDeep<T>(v: T, digits = 2, key?: string): T {
+  if (typeof v === "number") return round(v, digits) as T;
+  if (typeof v === "string") return (key && PROSE_KEYS.has(key) ? roundText(v, digits) : v) as T;
+  if (Array.isArray(v)) return v.map((x) => roundDeep(x, digits, key)) as T;
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = roundDeep(x, digits, k);
+    return out as T;
+  }
+  return v;
+}
+
+// ───────────────────────── 当前节点原因 ─────────────────────────
+
+export function currentProxyReason(
+  connection: Pick<ConnectionState, "status" | "currentProxy">,
+  nodesError: string | null,
+): string | null {
+  if (connection.currentProxy) return null;
+  if (connection.status !== "connected" && connection.status !== "mock") {
+    return `没有连上软件（status=${connection.status}），读不到当前节点。`;
+  }
+  if (nodesError) return `读节点列表失败，无法判定当前节点：${nodesError}`;
+  return "主选择组指向 DIRECT，或多个策略组指向不同节点、无法唯一判定当前节点。可在 Clash Verge 里切到具体节点后重试。";
+}
+
+// ───────────────────────── 筛选 ─────────────────────────
+
+function splitList(v: string | null): string[] {
+  return (v ?? "")
+    .split(/[,，]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/** --region：等于/包含节点 region，或把查询词按同一规则识别成地区（HK → 中国香港）。 */
+export function regionMatches(nodeRegion: string, query: string): boolean {
+  const q = query.toLowerCase();
+  const r = nodeRegion.toLowerCase();
+  if (r === q || r.includes(q)) return true;
+  const alias = detectRegion(query);
+  return alias !== "其他地区" && alias === nodeRegion;
+}
+
+export function filterNodes<T extends { name: string; region: string }>(
+  nodes: T[],
+  filter: NodeFilter,
+): T[] {
+  const regions = splitList(filter.region);
+  const words = splitList(filter.match).map((w) => w.toLowerCase());
+  let out = nodes.filter(
+    (n) =>
+      (!regions.length || regions.some((q) => regionMatches(n.region, q))) &&
+      (!words.length || words.some((w) => n.name.toLowerCase().includes(w))),
+  );
+  if (filter.limit != null) out = out.slice(0, filter.limit);
+  return out;
+}
+
+export function hasFilter(f: NodeFilter): boolean {
+  return !!(f.region || f.match || f.limit != null);
+}
+
+const EMPTY_FILTER: NodeFilter = { region: null, match: null, limit: null };
+
+// ───────────────────────── 进度（NDJSON → stderr） ─────────────────────────
+
+export type CliProgressStage =
+  | "connect"
+  | "gate"
+  | "precheck"
+  | "switch"
+  | "test"
+  | "restore"
+  | "probe";
+
+/** 一行一个对象，写到 stderr。字段稳定，见 docs/CLI.md「进度事件」。 */
+export type CliProgressEvent = {
+  type: "start" | "stage" | "card" | "node_done" | "done";
+  command: string;
+  ts: string;
+  stage?: CliProgressStage;
+  /** 1-based；预检阶段为已完成数 */
+  index?: number;
+  total?: number;
+  nodeName?: string;
+  text?: string;
+  /** card：卡片 id 与等级 */
+  cardId?: string;
+  level?: string;
+  /** node_done：该节点评分 */
+  stars?: NodeStars;
+  totalScore?: number;
+  /** done */
+  ok?: boolean;
+};
+
+export type CliOsInfo = { os: string; version: string | null; major: number | null };
+
+/** CLI 隐藏窗跑深测所需最低 macOS 主版本（关闭 WebView 后台节流需要 14+）。 */
+export const CLI_MIN_MACOS = 14;
+
+export type ShimInstaller = (dir: string | null) => Promise<unknown>;
 
 export type CliDispatchOptions = {
   /** 中断信号（Ctrl+C / SIGTERM，经 Rust 转来）。check all 会在节点间停止并切回。 */
   shouldAbort?: () => boolean;
+  /** 进度事件（bootCli 写 stderr NDJSON）；不给则不发 */
+  onProgress?: (ev: CliProgressEvent) => void;
+  /** 系统信息（bootCli 从 Rust 取）；macOS < 14 时 check/env 直接 os_unsupported */
+  osInfo?: CliOsInfo | null;
+  /** install-shim 的实现（bootCli 接 Rust）；不给则 shim_unavailable */
+  installShim?: ShimInstaller;
 };
 
+/** 对外入口：调度 + 数字取整 + 进度 start/done。 */
 export async function dispatchCli(
   parsed: ParsedCli,
   opts: CliDispatchOptions = {},
+): Promise<CliEnvelope> {
+  const label = parsed.parseError ? (parsed.commandToken ?? parsed.command) : parsed.command;
+  const emit = progressEmitter(label, opts.onProgress);
+  const long = isLongCommand(parsed);
+  if (long) emit({ type: "start", text: describeCommand(parsed) });
+  const env = await dispatchInner(parsed, opts, emit);
+  if (env.data !== undefined) env.data = roundDeep(env.data);
+  if (long) emit({ type: "done", ok: env.ok });
+  return env;
+}
+
+type Emit = (ev: Omit<CliProgressEvent, "command" | "ts">) => void;
+
+function progressEmitter(command: string, sink?: (ev: CliProgressEvent) => void): Emit {
+  return (ev) => {
+    if (!sink) return;
+    try {
+      sink({ ...ev, command, ts: new Date().toISOString() } as CliProgressEvent);
+    } catch {
+      // 进度只是旁路信息，失败不影响结果
+    }
+  };
+}
+
+/** 会发进度事件的命令：check（任意目标）、env。 */
+export function isLongCommand(parsed: ParsedCli): boolean {
+  return !parsed.parseError && (parsed.command === "check" || parsed.command === "env");
+}
+
+function describeCommand(parsed: ParsedCli): string {
+  if (parsed.command !== "check") return parsed.command;
+  const t = parsed.checkTarget;
+  if (!t || t.kind === "current") return "check current";
+  if (t.kind === "node") return `check node ${t.name}`;
+  return t.names?.length ? `check nodes ${t.names.join(" ")}` : "check all";
+}
+
+/** 把 runner 进度 / 卡片 / 评分转成 CLI 进度事件。 */
+function progressHooks(emit: Emit, bag: ReturnType<typeof collectingHooks>, nodeName?: () => string | undefined): void {
+  const h = bag.hooks;
+  let lastTotal: number | undefined;
+  let lastIndex: number | undefined;
+  let lastNode: string | undefined;
+  h.onProgress = (p) => {
+    if (!p) return;
+    if (p.stage === "test") {
+      lastTotal = p.total;
+      lastIndex = p.current;
+      lastNode = p.testingNode;
+    }
+    emit({
+      type: "stage",
+      stage: p.stage ?? "test",
+      index: p.current,
+      total: p.total,
+      nodeName: p.testingNode,
+      text: p.text,
+    });
+  };
+  const upsertCard = h.onUpsertNodeCard;
+  h.onUpsertNodeCard = (c) => {
+    upsertCard?.(c);
+    if (c.level === "running") return;
+    emit({ type: "card", cardId: c.id, level: c.level, nodeName: lastNode ?? nodeName?.() });
+  };
+  const upsertEnv = h.onUpsertEnvCard;
+  h.onUpsertEnvCard = (c) => {
+    upsertEnv?.(c);
+    if (c.level === "running") return;
+    emit({ type: "card", cardId: c.id, level: c.level });
+  };
+  const upsertScore = h.onUpsertScore;
+  h.onUpsertScore = (sc) => {
+    upsertScore?.(sc);
+    const tested = sc.nodeName === lastNode;
+    emit({
+      type: "node_done",
+      nodeName: sc.nodeName,
+      index: tested ? lastIndex : undefined,
+      total: tested ? lastTotal : undefined,
+      stars: sc.stars,
+      totalScore: round(sc.totalScore, 1),
+    });
+  };
+}
+
+async function dispatchInner(
+  parsed: ParsedCli,
+  opts: CliDispatchOptions,
+  emit: Emit,
 ): Promise<CliEnvelope> {
   const ver = version();
   const cmd = parsed.command;
@@ -386,7 +641,7 @@ export async function dispatchCli(
   }
 
   if (cmd === "help") {
-    return okEnvelope("help", { text: CLI_HELP_TEXT }, ver);
+    return okEnvelope("help", { text: CLI_HELP_TEXT, spec: CLI_SPEC }, ver);
   }
 
   if (cmd === "serve") {
@@ -397,6 +652,56 @@ export async function dispatchCli(
       "serve 是常驻 HTTP 服务，应由 CLI 启动路径接管，不能当一次性命令调度。",
       ver,
     );
+  }
+
+  if (cmd === "install-shim") {
+    if (!opts.installShim) {
+      return errEnvelope(
+        cmd,
+        "shim_unavailable",
+        "install-shim 只能在应用二进制里运行。",
+        ver,
+      );
+    }
+    try {
+      const r = (await opts.installShim(parsed.dir)) as Record<string, unknown>;
+      const onPath = r.onPath === true;
+      const dir = String(r.dir ?? "");
+      return okEnvelope(
+        cmd,
+        {
+          ...r,
+          appBinary: CLI_APP_BINARY,
+          next: onPath
+            ? "现在可以直接运行：egress-checker discover --client verge"
+            : `${dir} 不在 PATH 里：把 export PATH="${dir}:$PATH" 加到 ~/.zshrc 后重开终端；或直接用 ${r.path ?? dir}`,
+          warning:
+            r.targetIsDevBuild === true
+              ? "shim 指向的是开发构建（target/debug|release）。正式使用请从 /Applications 里的应用重新运行 install-shim。"
+              : null,
+        },
+        ver,
+      );
+    } catch (err) {
+      const e = err as { code?: unknown; message?: unknown };
+      const code = typeof e?.code === "string" ? e.code : "shim_failed";
+      const message =
+        typeof e?.message === "string" ? e.message : err instanceof Error ? err.message : String(err);
+      return errEnvelope(cmd, code, message, ver);
+    }
+  }
+
+  // macOS < 14：隐藏窗 WebView 会被挂起，check/env 会永远卡住 → 立即失败。
+  if ((cmd === "check" || cmd === "env") && opts.osInfo?.os === "macos") {
+    const major = opts.osInfo.major;
+    if (major != null && major < CLI_MIN_MACOS) {
+      return errEnvelope(
+        cmd,
+        "os_unsupported",
+        `当前 macOS ${opts.osInfo.version ?? major} 低于 ${CLI_MIN_MACOS}：CLI 隐藏窗里无法关闭 WebView 后台节流，${cmd} 会卡住，已拒绝运行。`,
+        ver,
+      );
+    }
   }
 
   const client = resolveCliClient(parsed);
@@ -416,6 +721,7 @@ export async function dispatchCli(
         status: connection.status,
         message: connection.message,
         currentProxy: connection.currentProxy,
+        currentProxyReason: currentProxyReason(connection, nodesError),
         usingMock: connection.usingMock,
         config: connection.config
           ? {
@@ -439,6 +745,28 @@ export async function dispatchCli(
       return okEnvelope("discover", data, ver);
     }
 
+    if (cmd === "nodes") {
+      const { connection, nodes, nodesError } = await loadConnection(parsed, clientId);
+      const picked = filterNodes(nodes, parsed.filter);
+      const data: NodesData = {
+        clientId,
+        status: connection.status,
+        currentProxy: connection.currentProxy,
+        total: nodes.length,
+        count: picked.length,
+        filter: parsed.filter,
+        nodesError,
+        nodes: picked.map((n) => ({
+          name: n.name,
+          type: n.type,
+          region: n.region,
+          current: n.name === connection.currentProxy,
+          lastDelay: n.lastDelay ?? null,
+        })),
+      };
+      return okEnvelope("nodes", data, ver);
+    }
+
     if (cmd === "gate") {
       const { connection } = await loadConnection(parsed, clientId);
       const gate = await runLightGate(connection);
@@ -451,8 +779,11 @@ export async function dispatchCli(
     }
 
     if (cmd === "env") {
+      emit({ type: "stage", stage: "connect", text: "连接 Clash Verge" });
       const { connection } = await loadConnection(parsed, clientId);
       const bag = collectingHooks();
+      progressHooks(emit, bag);
+      emit({ type: "stage", stage: "probe", text: "环境泄漏检查" });
       await runEnv(
         {
           connection,
@@ -467,14 +798,27 @@ export async function dispatchCli(
 
     if (cmd === "check") {
       const target = parsed.checkTarget ?? { kind: "current" as const };
+      emit({ type: "stage", stage: "connect", text: "连接 Clash Verge、读取节点" });
       const { connection, nodes, nodesError } = await loadConnection(
         parsed,
         clientId,
       );
       const mixedPort = connection.config?.mixedPort ?? null;
       const bag = collectingHooks();
+      const currentName = connection.currentProxy ?? "当前节点";
+      progressHooks(emit, bag, () =>
+        target.kind === "current" ? currentName : undefined,
+      );
 
       if (target.kind === "current") {
+        emit({
+          type: "stage",
+          stage: "test",
+          index: 1,
+          total: 1,
+          nodeName: currentName,
+          text: `正在检测 ${currentName}…`,
+        });
         const report = await runNodeDiagnostics(bag.hooks.onUpsertNodeCard, {
           mixedPort,
           mihomoConfig: connection.config,
@@ -493,6 +837,34 @@ export async function dispatchCli(
       }
 
       // node / all 先过门槛：不过就不切换、不深测。
+      // 筛选在门槛之前做：参数错了不必跑网络。
+      let selected: ProxyNode[] | null = null;
+      if (target.kind === "all" && (target.names?.length || hasFilter(parsed.filter))) {
+        let pool = nodes;
+        if (target.names?.length) {
+          const picked: ProxyNode[] = [];
+          for (const name of target.names) {
+            const found = resolveCliNode(nodes, name, nodesError);
+            if (!found.ok) {
+              return errEnvelope("check", found.error.code, found.error.message, ver);
+            }
+            if (!picked.includes(found.node)) picked.push(found.node);
+          }
+          pool = picked;
+        }
+        selected = filterNodes(pool, parsed.filter);
+        if (!selected.length) {
+          return errEnvelope(
+            "check",
+            nodes.length ? "no_nodes_matched" : "nodes_unavailable",
+            nodes.length
+              ? `筛选后没有节点（共 ${nodes.length} 个；region=${parsed.filter.region ?? "-"} match=${parsed.filter.match ?? "-"}）。`
+              : `没有读到节点列表。${nodesError ? `原因：${nodesError}` : ""}`,
+            ver,
+          );
+        }
+      }
+      emit({ type: "stage", stage: "gate", text: "轻量门槛" });
       const gate = await runLightGate(connection);
       if (!gate.ok) {
         return errEnvelope("check", "gate_failed", gate.message, ver, {
@@ -564,7 +936,7 @@ export async function dispatchCli(
       const finished = await testAll(
         {
           connection,
-          nodes,
+          nodes: selected ?? nodes,
           forceMock: parsed.mock,
           mixedPort,
           ensureGate,
@@ -577,6 +949,13 @@ export async function dispatchCli(
         target: "all",
         clientId,
         count: scores.length,
+        selection: selected
+          ? {
+              filter: target.kind === "all" ? parsed.filter : EMPTY_FILTER,
+              names: target.kind === "all" && target.names?.length ? target.names : null,
+              selected: selected.map((n) => n.name),
+            }
+          : null,
         scores: scores.map((s) => ({ nodeName: s.nodeName, ...cliScore(s) })),
         hint: bag.getHint(),
         restoreError: bag.getRestoreError(),
@@ -641,11 +1020,25 @@ function dataLines(command: string, data: unknown): string[] {
     const d = data as DiscoverData;
     out.push(`  软件：${clientLabel(d.clientId)}`);
     out.push(`  状态：${d.status}（${d.message}）`);
-    out.push(`  当前节点：${d.currentProxy ?? "未知"}`);
+    out.push(`  当前节点：${d.currentProxy ?? `未知（${d.currentProxyReason ?? ""}）`}`);
     out.push(
-      `  节点：${d.nodeCount} 个${d.nodesTruncated ? `（JSON 只列前 ${CLI_NODES_LIMIT} 个）` : ""}`,
+      `  节点：${d.nodeCount} 个${d.nodesTruncated ? `（JSON 只列前 ${CLI_NODES_LIMIT} 个；全部请用 nodes 命令）` : ""}`,
     );
     if (d.nodesError) out.push(`  读节点失败：${d.nodesError}`);
+    return out;
+  }
+  if (command === "nodes" && "total" in data) {
+    const d = data as NodesData;
+    out.push(`  节点：${d.count} / ${d.total} 个；当前：${d.currentProxy ?? "未知"}`);
+    for (const n of d.nodes) out.push(`  ${n.current ? "●" : " "} ${n.name}（${n.region}）`);
+    if (d.nodesError) out.push(`  读节点失败：${d.nodesError}`);
+    return out;
+  }
+  if (command === "install-shim" && "path" in data) {
+    const d = data as { path: string; next?: string; warning?: string | null };
+    out.push(`  已写入：${d.path}`);
+    if (d.next) out.push(`  ${d.next}`);
+    if (d.warning) out.push(`  ⚠ ${d.warning}`);
     return out;
   }
   if (command === "gate" && "gate" in data && !("target" in data)) {
@@ -685,6 +1078,7 @@ function dataLines(command: string, data: unknown): string[] {
     }
     if (data.target === "all") {
       const d = data as CheckAllData;
+      if (d.selection) out.push(`  本次选中：${d.selection.selected.join("、")}`);
       out.push(`  共 ${d.count} 个节点${d.aborted ? "（已中断，结果不完整）" : ""}`);
       d.scores.forEach((s, i) => {
         out.push(
@@ -721,6 +1115,7 @@ export function formatCliHuman(env: CliEnvelope): string {
       `✗ ${headLabel(env)} 失败 [${env.error?.code ?? "?"}] ${env.error?.message ?? ""}`.trimEnd(),
     );
   }
+  if (!env.ok && env.error?.hint) lines.push(`  建议：${env.error.hint}`);
   lines.push(...dataLines(env.command, env.data));
   return lines.join("\n");
 }

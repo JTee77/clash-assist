@@ -115,7 +115,7 @@ export async function testAll(
 
     // 不发 0/N：避免进度区尚未撑开时「连通性预检」被缩成「连…」
     hooks.onProgress({
-      text: "正在预检连通性…",
+      text: "正在预检连通性…", stage: "precheck",
       current: 0,
       total: toCheck.length,
       testingNode: undefined,
@@ -126,7 +126,7 @@ export async function testAll(
         if (shouldAbort()) break;
         const n = toCheck[i]!;
         hooks.onProgress({
-          text: `连通性预检 ${i + 1}/${toCheck.length}`,
+          text: `连通性预检 ${i + 1}/${toCheck.length}`, stage: "precheck",
           current: i + 1,
           total: toCheck.length,
           testingNode: undefined,
@@ -151,7 +151,7 @@ export async function testAll(
         }
         cullDone += 1;
         hooks.onProgress({
-          text: `连通性预检 ${cullDone}/${toCheck.length}`,
+          text: `连通性预检 ${cullDone}/${toCheck.length}`, stage: "precheck",
           current: cullDone,
           total: toCheck.length,
           // 预检并发，不挂节点名（避免进度文案狂跳；阶段语完整显示）
@@ -186,7 +186,7 @@ export async function testAll(
         const n = alive[i]!;
         hooks.onProgress({
           // 节点名交给 UI（testingNode）单独 ellipsis，阶段「检测 N/M」完整显示
-          text: `检测 ${i + 1}/${alive.length}`,
+          text: `检测 ${i + 1}/${alive.length}`, stage: "test",
           current: i + 1,
           total: alive.length,
           testingNode: n.name,
@@ -221,7 +221,7 @@ export async function testAll(
         "连上了VPN软件，但读不到当前选中的节点或策略组，没法安全地临时切换。只检测当前节点。",
       );
       hooks.onProgress({
-        text: "正在检测当前节点（无法安全切换）…",
+        text: "正在检测当前节点（无法安全切换）…", stage: "test",
         testingNode: connection.currentProxy ?? undefined,
       });
       hooks.onNodeCards(asRunning(NODE_PLACEHOLDERS));
@@ -247,7 +247,7 @@ export async function testAll(
         if (shouldAbort()) break;
         const n = alive[i]!;
         hooks.onProgress({
-          text: `检测 ${i + 1}/${alive.length}（演示）`,
+          text: `检测 ${i + 1}/${alive.length}（演示）`, stage: "test",
           current: i + 1,
           total: alive.length,
           testingNode: undefined,
@@ -277,7 +277,7 @@ export async function testAll(
     const plan = planRestore(didSwitch, originalSnap);
     if (plan.kind === "restore" && config) {
       hooks.onProgress({
-        text: `正在切回原先节点：${plan.now}…`,
+        text: `正在切回原先节点：${plan.now}…`, stage: "restore",
         testingNode: undefined,
       });
       const restored = await restoreProxy(config, {

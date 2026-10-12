@@ -45,11 +45,19 @@ cd egress-checker && pnpm install && pnpm tauri dev
 - **测单个（完整）**：`runNodeDiagnostics` — 延迟、带宽、流媒体/商店/AI 等；节点卡「测 / 再测」走这条
 - **测全部（完整深测）**：与测单个相同探针集（延迟淘汰后临时切换深测）；测完或中止会**强制切回**原节点
 - **环境泄漏检查**：DNS / IPv6 / WebRTC / 分流 / 直连旁路（第二入口，不默认每次强跑）
-- **CLI**：`--cli discover|gate|check|env --client verge`（目前仅支持 Clash Verge），stdout 为一行 CliEnvelope JSON（与 GUI 共用 runner），`--no-json` 为人类摘要；错误码与退出码见 [docs/CLI.md](./docs/CLI.md)
+- **CLI**：`--cli discover|nodes|gate|check|env|serve|install-shim --client verge`（目前仅支持 Clash Verge），stdout 为一行 CliEnvelope JSON（与 GUI 共用 runner），`--no-json` 为人类摘要；错误码与退出码见 [docs/CLI.md](./docs/CLI.md)，给 AI 助手的指南见 [docs/AGENTS-CLI.md](./docs/AGENTS-CLI.md)。二进制完整路径：`/Applications/Egress Checker.app/Contents/MacOS/egress-checker`；运行一次 `--cli install-shim` 后可直接用 `egress-checker`
 
 ## 打包（DMG）
 
-Apple Silicon 上跑 `pnpm tauri build`，产物在 `src-tauri/target/release/bundle/dmg/*.dmg`。默认 **未签名 / 未公证**，首次打开可能需 **右键 → 打开**。
+Apple Silicon 上跑 `pnpm tauri build`，产物在 `src-tauri/target/release/bundle/dmg/*.dmg`。安装包带本地签名（ad-hoc，免费的完整性签名），但**未经苹果公证**。
+
+### 首次打开说明
+
+第一次打开时 macOS 会提示「Apple 无法验证…」，按下面三步操作，之后就能正常打开：
+
+1. 弹窗里点 **「完成」**（不要点「移到废纸篓」）。
+2. 打开 **系统设置 › 隐私与安全性**，拉到下方，点 **「仍要打开」**。
+3. 再弹出的确认框里还是点 **「仍要打开」**，按提示完成身份验证。
 
 ## 免责声明
 
