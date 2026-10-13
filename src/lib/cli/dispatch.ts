@@ -41,7 +41,7 @@ import {
 export const CLI_NODES_LIMIT = 50;
 
 /** 安装到 /Applications 后的二进制完整路径（文档 / install-shim 输出用）。 */
-export const CLI_APP_BINARY = "/Applications/Clash Assist.app/Contents/MacOS/egress-checker";
+export const CLI_APP_BINARY = "/Applications/Clash Assist.app/Contents/MacOS/clash-assist";
 
 /** 唯一受支持软件的提示（与 GUI 选择器一致：只有 Clash Verge 可选）。 */
 export const CLI_ONLY_VERGE = "当前仅支持 Clash Verge（--client verge）。";
@@ -673,7 +673,7 @@ async function dispatchInner(
           ...r,
           appBinary: CLI_APP_BINARY,
           next: onPath
-            ? "现在可以直接运行：egress-checker discover --client verge"
+            ? "现在可以直接运行：clash-assist discover --client verge"
             : `${dir} 不在 PATH 里：把 export PATH="${dir}:$PATH" 加到 ~/.zshrc 后重开终端；或直接用 ${r.path ?? dir}`,
           warning:
             r.targetIsDevBuild === true

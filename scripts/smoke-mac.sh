@@ -7,14 +7,14 @@
 #   # or: pnpm smoke:mac
 #
 # Cleanup note: carefully kills only processes matching this app / vite for this
-# repo. Do not run while you need another egress-checker / vite instance.
+# repo. Do not run while you need another clash-assist / vite instance.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-LOG="${SMOKE_LOG:-/tmp/egress-checker-smoke.log}"
+LOG="${SMOKE_LOG:-/tmp/clash-assist-smoke.log}"
 VITE_URL="${SMOKE_VITE_URL:-http://127.0.0.1:1420}"
 WAIT_VITE_SEC="${SMOKE_WAIT_VITE_SEC:-90}"
 ALIVE_SEC="${SMOKE_ALIVE_SEC:-30}"
@@ -23,12 +23,12 @@ POLL_SEC=2
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-echo "== egress-checker smoke-mac =="
+echo "== clash-assist smoke-mac =="
 echo "root=$ROOT"
 echo "log=$LOG"
 
 # 1) Careful cleanup within app context
-echo "-- cleanup prior egress-checker / vite (repo smoke only) --"
+echo "-- cleanup prior clash-assist / vite (repo smoke only) --"
 pkill -f '[e]gress-checker' 2>/dev/null || true
 # Prefer killing vite started for this project path if possible
 pkill -f "vite.*${ROOT}" 2>/dev/null || true
@@ -87,8 +87,8 @@ done
 (( ready == 1 )) || fail "Vite did not respond within ${WAIT_VITE_SEC}s (see $LOG)"
 pass "Vite responding at $VITE_URL"
 
-# 5) Find egress-checker process; poll alive for ALIVE_SEC
-echo "-- find egress-checker process --"
+# 5) Find clash-assist process; poll alive for ALIVE_SEC
+echo "-- find clash-assist process --"
 find_pid() {
   pgrep -f '[e]gress-checker' | head -n 1 || true
 }
@@ -105,21 +105,21 @@ while (( SECONDS < deadline )); do
   fi
   sleep 1
 done
-[[ -n "$app_pid" ]] || fail "egress-checker process not found"
-pass "egress-checker pid=$app_pid"
+[[ -n "$app_pid" ]] || fail "clash-assist process not found"
+pass "clash-assist pid=$app_pid"
 
 echo "-- poll alive ≥${ALIVE_SEC}s (every ${POLL_SEC}s) --"
 end=$((SECONDS + ALIVE_SEC))
 while (( SECONDS < end )); do
   if ! kill -0 "$app_pid" 2>/dev/null; then
-    fail "egress-checker pid $app_pid exited before ${ALIVE_SEC}s (打开即崩?). Log: $LOG"
+    fail "clash-assist pid $app_pid exited before ${ALIVE_SEC}s (打开即崩?). Log: $LOG"
   fi
   # also accept a replacement pid if tauri restarted once
   cur="$(find_pid)"
   if [[ -n "$cur" ]]; then
     app_pid="$cur"
   else
-    fail "egress-checker process disappeared during ${ALIVE_SEC}s window"
+    fail "clash-assist process disappeared during ${ALIVE_SEC}s window"
   fi
   sleep "$POLL_SEC"
 done

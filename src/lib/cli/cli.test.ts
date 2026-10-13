@@ -15,14 +15,14 @@ import libRs from "../../../src-tauri/src/lib.rs?raw";
 
 describe("parseCliArgv", () => {
   it("无参数 → 非 cliMode + help", () => {
-    const p = parseCliArgv(["/app/egress-checker"]);
+    const p = parseCliArgv(["/app/clash-assist"]);
     expect(p.cliMode).toBe(false);
     expect(p.command).toBe("help");
     expect(p.parseError).toBeNull();
   });
 
   it("--cli help", () => {
-    const p = parseCliArgv(["egress-checker", "--cli", "help"]);
+    const p = parseCliArgv(["clash-assist", "--cli", "help"]);
     expect(p.cliMode).toBe(true);
     expect(p.command).toBe("help");
     expect(p.parseError).toBeNull();
@@ -30,7 +30,7 @@ describe("parseCliArgv", () => {
 
   it("discover --client verge --json", () => {
     const p = parseCliArgv([
-      "egress-checker",
+      "clash-assist",
       "--cli",
       "discover",
       "--client",

@@ -41,7 +41,7 @@ const { dispatchCli, CLI_ABORT_MESSAGE } = await import("./dispatch");
 const { parseCliArgv } = await import("./parse");
 
 const run = (argv: string[], opts?: { shouldAbort?: () => boolean }) =>
-  dispatchCli(parseCliArgv(["egress-checker", "--cli", ...argv]), opts);
+  dispatchCli(parseCliArgv(["clash-assist", "--cli", ...argv]), opts);
 
 const node = (name: string): ProxyNode => ({
   name,

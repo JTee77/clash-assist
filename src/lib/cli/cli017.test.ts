@@ -46,7 +46,7 @@ const { dispatchCli } = await import("./dispatch");
 const { parseCliArgv } = await import("./parse");
 
 const run = (argv: string[], opts?: import("./dispatch").CliDispatchOptions) =>
-  dispatchCli(parseCliArgv(["egress-checker", "--cli", ...argv]), opts);
+  dispatchCli(parseCliArgv(["clash-assist", "--cli", ...argv]), opts);
 
 const node = (name: string): ProxyNode => ({
   name,
@@ -320,9 +320,9 @@ describe("install-shim", () => {
   });
   it("成功：透传结果并给出下一步", async () => {
     const installShim = vi.fn().mockResolvedValue({
-      path: "/u/.local/bin/egress-checker",
+      path: "/u/.local/bin/clash-assist",
       dir: "/u/.local/bin",
-      target: "/Applications/Egress Checker.app/Contents/MacOS/egress-checker",
+      target: "/Applications/Clash Assist.app/Contents/MacOS/clash-assist",
       created: true,
       onPath: false,
       targetIsDevBuild: false,

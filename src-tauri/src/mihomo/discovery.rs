@@ -507,7 +507,7 @@ mixed-port: 7897
 
     #[test]
     fn select_working_sock_prefers_existing() {
-        let missing = format!("/tmp/egress-checker-no-sock-{}.sock", std::process::id());
+        let missing = format!("/tmp/clash-assist-no-sock-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&missing);
         // No live Verge required: all missing → None
         let r = select_working_sock(&[missing.clone()], "");
@@ -565,7 +565,7 @@ mixed-port: 7897
 
     #[test]
     fn read_controller_yaml_only_sets_existing_sock_candidates() {
-        let missing = format!("/tmp/egress-checker-no-sock-{}.sock", std::process::id());
+        let missing = format!("/tmp/clash-assist-no-sock-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&missing);
         let r = read_controller_yaml(&[], 9090, 7890, &[missing], "test");
         assert!(r.sock_path.is_none());

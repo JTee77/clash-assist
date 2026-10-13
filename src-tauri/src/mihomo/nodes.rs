@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn smoke_list_nodes_dead_tcp_missing_sock_no_panic() {
-        let missing = "/tmp/egress-checker-no-such-mihomo.sock";
+        let missing = "/tmp/clash-assist-no-such-mihomo.sock";
         let _ = std::fs::remove_file(missing);
         let result = std::panic::catch_unwind(|| {
             tauri::async_runtime::block_on(list_nodes_async(
@@ -783,7 +783,7 @@ mod tests {
         use std::time::Duration;
 
         let sock = format!(
-            "/tmp/egress-checker-list-nodes-smoke-{}.sock",
+            "/tmp/clash-assist-list-nodes-smoke-{}.sock",
             std::process::id()
         );
         let _ = std::fs::remove_file(&sock);
@@ -856,7 +856,7 @@ mod tests {
         use std::time::Duration;
 
         let sock = format!(
-            "/tmp/egress-checker-list-nodes-chunked-{}.sock",
+            "/tmp/clash-assist-list-nodes-chunked-{}.sock",
             std::process::id()
         );
         let _ = std::fs::remove_file(&sock);
@@ -939,7 +939,7 @@ mod tests {
         use std::time::Duration;
 
         let sock = format!(
-            "/tmp/egress-checker-list-nodes-badjson-{}.sock",
+            "/tmp/clash-assist-list-nodes-badjson-{}.sock",
             std::process::id()
         );
         let _ = std::fs::remove_file(&sock);

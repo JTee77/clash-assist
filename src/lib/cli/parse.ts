@@ -185,7 +185,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
       i += n;
       continue;
     } else {
-      fail(err("unknown_option", `未知选项：${t}。可用选项见 egress-checker --cli help`));
+      fail(err("unknown_option", `未知选项：${t}。可用选项见 clash-assist --cli help`));
     }
     i += 1;
   }
@@ -296,9 +296,9 @@ export function parseCliArgv(argv: string[]): ParsedCli {
 export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.0（与 GUI 共用 runner / egress / score）
 
 用法：
-  egress-checker --cli <command> [options]
-  完整路径：/Applications/Clash Assist.app/Contents/MacOS/egress-checker
-  短命令：先运行一次 install-shim，之后直接 egress-checker <command> …
+  clash-assist --cli <command> [options]
+  完整路径：/Applications/Clash Assist.app/Contents/MacOS/clash-assist
+  短命令：先运行一次 install-shim，之后直接 clash-assist <command> …
 
 命令：
   help                         显示本说明（JSON 时 data.spec 为机器可读清单）
@@ -311,7 +311,7 @@ export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.0（与 GUI 共
   check all                    测全部节点（可 --region / --match / --limit 只测一部分）
   env                          环境泄漏检查
   serve                        本机 loopback HTTP（127.0.0.1），常驻直到 Ctrl+C
-  install-shim                 把 egress-checker 短命令装到 PATH（/usr/local/bin 可写时，否则 ~/.local/bin）
+  install-shim                 把 clash-assist 短命令装到 PATH（/usr/local/bin 可写时，否则 ~/.local/bin）
 
 选项：
   --client, -c <id>            目前仅支持 verge（Clash Verge / Clash Verge Rev）
@@ -336,16 +336,16 @@ export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.0（与 GUI 共
 系统：check / env 需要 macOS 14+（更早系统直接报 os_unsupported）。
 
 示例：
-  egress-checker --cli discover --client verge
-  egress-checker --cli nodes --client verge --region 日本
-  egress-checker --cli gate --client verge
-  egress-checker --cli check current --client verge
-  egress-checker --cli check node "香港" --client verge
-  egress-checker --cli check all --client verge --region HK --limit 3
-  egress-checker --cli check nodes "香港 01" "日本 02" --client verge
-  egress-checker --cli env --client verge
-  egress-checker --cli serve --client verge
-  egress-checker --cli install-shim
+  clash-assist --cli discover --client verge
+  clash-assist --cli nodes --client verge --region 日本
+  clash-assist --cli gate --client verge
+  clash-assist --cli check current --client verge
+  clash-assist --cli check node "香港" --client verge
+  clash-assist --cli check all --client verge --region HK --limit 3
+  clash-assist --cli check nodes "香港 01" "日本 02" --client verge
+  clash-assist --cli env --client verge
+  clash-assist --cli serve --client verge
+  clash-assist --cli install-shim
 
 说明：CLI 走隐藏窗 + WebView 调用与 GUI 相同的 Tauri 能力；需在 macOS 上运行本应用二进制（或 pnpm tauri dev -- --cli …）。
 serve 只绑定 127.0.0.1，启动时打印一次性 token；请求需 Authorization: Bearer <token> 或 X-Egress-Token。

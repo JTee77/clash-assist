@@ -37,7 +37,7 @@
 **当前版本：0.2.0**（产品名 Clash伴侣 / Clash Assist；仓库仍为 egress-checker）。
 
 本轮目标：**CLI 补齐（面向 AI 助手）**——不加与 CLI 无关的功能：
-- `install-shim` 短命令（`egress-checker`），文档写明应用内完整路径
+- `install-shim` 短命令（`clash-assist`），文档写明应用内完整路径
 - `check` / `env` 往 stderr 写 NDJSON 进度（`--no-progress` 关闭），stdout 仍是一行 envelope
 - `nodes` 全量节点列表（`--region` / `--match` / `--limit`）；`discover` 行为不变
 - 子集检测：`check all --region/--match/--limit`、`check nodes <名…>`；serve `/v1/check/all`、`/v1/nodes` 接受同样的 body
@@ -79,18 +79,18 @@
 与 GUI **共用** `lib/runner` + `egress` + `score` + `mihomo`。**目前只支持 `--client verge`**（Clash Verge / Clash Verge Rev）；FlClash 即将支持，暂不可用。
 
 ```text
-egress-checker --cli discover --client verge
-egress-checker --cli nodes --client verge [--region 日本] [--match 关键词] [--limit N]
-egress-checker --cli gate --client verge
-egress-checker --cli check current|node <名>|all --client verge
-egress-checker --cli check all --client verge --region HK --limit 3
-egress-checker --cli check nodes "香港 01" "日本 02" --client verge
-egress-checker --cli help --json        # data.spec 机器可读
-egress-checker --cli install-shim       # 之后可直接 egress-checker …
-egress-checker --cli env --client verge
-egress-checker --cli check all --mock --no-json
-egress-checker --cli serve --client verge [--port 17890]
-egress-checker --cli serve --mock
+clash-assist --cli discover --client verge
+clash-assist --cli nodes --client verge [--region 日本] [--match 关键词] [--limit N]
+clash-assist --cli gate --client verge
+clash-assist --cli check current|node <名>|all --client verge
+clash-assist --cli check all --client verge --region HK --limit 3
+clash-assist --cli check nodes "香港 01" "日本 02" --client verge
+clash-assist --cli help --json        # data.spec 机器可读
+clash-assist --cli install-shim       # 之后可直接 clash-assist …
+clash-assist --cli env --client verge
+clash-assist --cli check all --mock --no-json
+clash-assist --cli serve --client verge [--port 17890]
+clash-assist --cli serve --mock
 ```
 
 - 一次性命令：stdout 为一行 **CliEnvelope** JSON（`ok/version/command/ranAt/data|error`）；`--no-json` 输出人类摘要。

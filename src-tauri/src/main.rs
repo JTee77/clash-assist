@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    egress_checker_lib::run()
+    clash_assist_lib::run()
 }

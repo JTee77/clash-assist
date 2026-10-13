@@ -1,20 +1,20 @@
 [
   {
     "argv": [
-      "/Applications/Clash Assist.app/Contents/MacOS/egress-checker"
+      "/Applications/Clash Assist.app/Contents/MacOS/clash-assist"
     ],
     "cliMode": false
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--cli"
     ],
     "cliMode": true
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--cli",
       "help"
     ],
@@ -22,21 +22,21 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--help"
     ],
     "cliMode": true
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "-h"
     ],
     "cliMode": true
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "discover",
       "--client",
       "verge"
@@ -45,7 +45,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--client",
       "verge",
       "discover"
@@ -54,7 +54,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "-c",
       "verge",
       "check",
@@ -64,7 +64,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--client=verge",
       "gate"
     ],
@@ -72,7 +72,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--mock",
       "env"
     ],
@@ -80,7 +80,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--cli",
       "frobnicate"
     ],
@@ -88,7 +88,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "frobnicate",
       "--cli"
     ],
@@ -96,14 +96,14 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "frobnicate"
     ],
     "cliMode": false
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--client",
       "discover"
     ],
@@ -111,7 +111,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--client",
       "--cli"
     ],
@@ -119,7 +119,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--",
       "--cli"
     ],
@@ -127,7 +127,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--",
       "check"
     ],
@@ -135,14 +135,14 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "-psn_0_12345"
     ],
     "cliMode": false
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "-",
       "check"
     ],
@@ -150,7 +150,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "serve",
       "--mock"
     ],
@@ -158,7 +158,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--cli",
       "serve",
       "--port",
@@ -168,7 +168,7 @@
   },
   {
     "argv": [
-      "egress-checker",
+      "clash-assist",
       "--port",
       "17890",
       "serve"

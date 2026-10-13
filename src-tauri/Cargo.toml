@@ -1,5 +1,5 @@
 [package]
-name = "egress-checker"
+name = "clash-assist"
 version = "0.2.0"
 license = "GPL-3.0-or-later"
 description = "Clash Assist (Clash伴侣) — macOS Apple Silicon proxy egress diagnostics"
@@ -7,7 +7,7 @@ authors = ["JTee77"]
 edition = "2021"
 
 [lib]
-name = "egress_checker_lib"
+name = "clash_assist_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
