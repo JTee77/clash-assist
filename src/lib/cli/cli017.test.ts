@@ -387,3 +387,38 @@ describe("文案里的长小数", () => {
     expect(roundText("IP 1.2.3.4 版本 0.1.17 延迟 12.5 ms")).toBe("IP 1.2.3.4 版本 0.1.17 延迟 12.5 ms");
   });
 });
+
+describe("update-check", () => {
+  it("没有实现 → update_check_unavailable", async () => {
+    const env = await run(["update-check"]);
+    expect(env.error?.code).toBe("update_check_unavailable");
+  });
+  it("成功：输出 current / latest / update_available / url，不需要 --client", async () => {
+    const checkUpdate = vi.fn().mockResolvedValue({
+      current: "0.2.0",
+      latest: "0.2.1",
+      update_available: true,
+      url: "https://github.com/JTee77/egress-checker/releases/tag/v0.2.1",
+      fake: false,
+    });
+    const env = await run(["update-check"], { checkUpdate });
+    expect(env.ok).toBe(true);
+    expect(env.command).toBe("update-check");
+    expect(env.data).toEqual({
+      current: "0.2.0",
+      latest: "0.2.1",
+      update_available: true,
+      url: "https://github.com/JTee77/egress-checker/releases/tag/v0.2.1",
+    });
+    noNetworkTouched();
+  });
+  it("网络失败 → update_check_failed + hint", async () => {
+    const checkUpdate = vi.fn().mockRejectedValue("请求 GitHub 失败：timeout");
+    const env = await run(["update-check"], { checkUpdate });
+    expect(env.error).toMatchObject({ code: "update_check_failed", message: "请求 GitHub 失败：timeout" });
+    expect(env.error?.hint).toBeTruthy();
+  });
+  it("多余参数 → unexpected_argument", () => {
+    expect(parseCliArgv(["x", "--cli", "update-check", "now"]).parseError?.code).toBe("unexpected_argument");
+  });
+});

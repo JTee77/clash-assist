@@ -63,7 +63,7 @@ discover  →  gate  →  nodes（选节点） →  check current | check node <
 
 | 命令 | 建议超时 |
 |------|----------|
-| help / install-shim | 15 s |
+| help / install-shim / update-check | 15 s |
 | discover / nodes | 30 s |
 | gate | 45 s |
 | env | 120 s |

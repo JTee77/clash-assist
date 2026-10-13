@@ -268,6 +268,7 @@ export async function bootCli(): Promise<void> {
       onProgress: progress.onProgress,
       osInfo: await osInfo(),
       installShim: (dir) => invoke("cli_install_shim", { dir }),
+      checkUpdate: () => invoke("check_update"),
     });
     if (cliCommandSwitchesNodes(parsed)) {
       // 可能切换过节点：必须等 runner 停下并切回，不能提前退出。

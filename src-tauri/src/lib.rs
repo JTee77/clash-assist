@@ -4,6 +4,7 @@ mod dns;
 mod dns_query;
 mod mihomo;
 mod platform;
+mod update_check;
 
 use dns::DnsResolversResult;
 use mihomo::{
@@ -403,6 +404,7 @@ pub const CLI_VERBS: &[&str] = &[
     "env",
     "serve",
     "install-shim",
+    "update-check",
 ];
 
 /// 是否进入 CLI（隐藏主窗）。规则与 TS `parseCliArgv().cliMode` 逐条对齐：
@@ -564,6 +566,18 @@ fn cli_os_info() -> CliOsInfo {
         version,
         major,
     }
+}
+
+/// 更新检查（GUI 启动时一次 + CLI update-check）。失败返回 Err，由调用方决定是否静默。
+#[tauri::command]
+async fn check_update() -> Result<update_check::UpdateInfo, String> {
+    update_check::check(env!("CARGO_PKG_VERSION")).await
+}
+
+/// 用默认浏览器打开 release 页面（只接受本项目 GitHub releases 下的 URL）。
+#[tauri::command]
+fn open_release_page(url: String) -> Result<(), String> {
+    update_check::open_release_page(&url)
 }
 
 /// `--cli install-shim [--dir D]`
@@ -797,7 +811,9 @@ pub fn run() {
             cli_serve_start,
             cli_serve_poll,
             cli_serve_respond,
-            cli_serve_stop
+            cli_serve_stop,
+            check_update,
+            open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

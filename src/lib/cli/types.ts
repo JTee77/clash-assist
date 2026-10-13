@@ -29,7 +29,8 @@ export type CliCommandName =
   | "check"
   | "env"
   | "serve"
-  | "install-shim";
+  | "install-shim"
+  | "update-check";
 
 export type CheckTarget =
   | { kind: "current" }

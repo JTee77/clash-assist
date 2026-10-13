@@ -23,6 +23,8 @@
         "resizable": true,
         "maximizable": true,
         "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "windowEffects": {
           "effects": [
             "sidebar"

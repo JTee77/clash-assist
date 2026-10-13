@@ -15,6 +15,7 @@ export const CLI_COMMANDS: readonly CliCommandName[] = [
   "env",
   "serve",
   "install-shim",
+  "update-check",
 ] as const;
 
 /** serve 默认端口（与 Rust `cli_serve::DEFAULT_PORT` 一致）。 */
@@ -312,6 +313,7 @@ export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.0（与 GUI 共
   env                          环境泄漏检查
   serve                        本机 loopback HTTP（127.0.0.1），常驻直到 Ctrl+C
   install-shim                 把 clash-assist 短命令装到 PATH（/usr/local/bin 可写时，否则 ~/.local/bin）
+  update-check                 查 GitHub 最新 release：current / latest / update_available / url
 
 选项：
   --client, -c <id>            目前仅支持 verge（Clash Verge / Clash Verge Rev）
@@ -346,6 +348,7 @@ export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.0（与 GUI 共
   clash-assist --cli env --client verge
   clash-assist --cli serve --client verge
   clash-assist --cli install-shim
+  clash-assist --cli update-check
 
 说明：CLI 走隐藏窗 + WebView 调用与 GUI 相同的 Tauri 能力；需在 macOS 上运行本应用二进制（或 pnpm tauri dev -- --cli …）。
 serve 只绑定 127.0.0.1，启动时打印一次性 token；请求需 Authorization: Bearer <token> 或 X-Egress-Token。

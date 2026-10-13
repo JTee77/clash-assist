@@ -174,5 +174,21 @@
       "serve"
     ],
     "cliMode": true
+  },
+  {
+    "argv": [
+      "clash-assist",
+      "update-check"
+    ],
+    "cliMode": true
+  },
+  {
+    "argv": [
+      "clash-assist",
+      "--cli",
+      "update-check",
+      "--no-json"
+    ],
+    "cliMode": true
   }
 ]

@@ -35,6 +35,8 @@ export const CLI_ERROR_HINTS: Record<string, string> = {
   shim_exists: "目标位置已有同名文件且不是本工具生成：用 --dir 换目录，或自行确认后删除该文件再重试。",
   shim_failed: "用 --dir 指定一个可写目录（如 ~/.local/bin），或直接使用应用内完整路径。",
   shim_unavailable: "install-shim 只能在应用二进制里运行（不支持 serve / 纯 Node 环境）。",
+  update_check_failed: "检查网络（或代理）能否访问 api.github.com 后重试；也可直接打开 https://github.com/JTee77/egress-checker/releases 。",
+  update_check_unavailable: "update-check 只能在应用二进制里运行。",
   // serve（Rust 直接返回的 JSON 里也带同一句 hint）
   unauthorized: "token 在 serve 启动时打印（stdout 横幅 data.token），每次启动都会变；请用最新 token。",
   not_found: "检查路径拼写；可用 clash-assist --cli help 查看全部路由。",

@@ -62,6 +62,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `env` | 环境泄漏检查 |
 | `serve` | 本机 **127.0.0.1** HTTP 服务（常驻到 Ctrl+C）。见下方「serve」 |
 | `install-shim` | 安装短命令 `clash-assist`（见上方「找到二进制 / 短命令」） |
+| `update-check` | 查询 GitHub 最新 release（`releases/latest`，超时约 5 s）。`data = { current, latest, update_available, url }`；网络/解析失败 → `update_check_failed`。测试可设 `CLASH_ASSIST_FAKE_LATEST=0.2.1` 跳过网络（此时 `data.fake = true`） |
 
 节点名匹配：先全名精确匹配，再唯一的「包含」匹配；匹配到多个报 `node_ambiguous`，找不到报 `node_not_found`。不会拿不存在的名字去切换。
 
@@ -146,6 +147,8 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `invalid_body` | POST /v1/check/node、/v1/nodes、/v1/check/all 的 JSON 不合法或字段类型不对 | 否 |
 | `shim_exists` | install-shim 目标已有同名文件且不是本工具生成 | 否 |
 | `shim_failed` | install-shim 无法创建目录/写文件，或 `--dir` 不是绝对路径 | 否 |
+| `update_check_failed` | update-check 访问 GitHub 失败（断网 / 超时 / 限流 / 响应异常） | 是 |
+| `update_check_unavailable` | 不在应用二进制里运行 update-check | 否 |
 | `shim_unavailable` | 不在应用二进制里运行 install-shim | 否 |
 | `unauthorized` / `not_found` / `method_not_allowed` / `timeout` / `server_stopping` | serve 的 HTTP 层错误（Rust 直接回，同样带 `hint`） | 否 |
 
