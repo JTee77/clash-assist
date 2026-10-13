@@ -809,11 +809,11 @@ export function HomePage({
         <div className="a-body">
           仓库：
           <a
-            href="https://github.com/JTee77/egress-checker"
+            href="https://github.com/JTee77/clash-assist"
             target="_blank"
             rel="noreferrer"
           >
-            github.com/JTee77/egress-checker
+            github.com/JTee77/clash-assist
           </a>
           <br />
           致谢：Clash Verge / mihomo 社区。

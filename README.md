@@ -1,6 +1,6 @@
 # Clash伴侣 / Clash Assist
 
-**Clash伴侣**（英文名 **Clash Assist**，仓库暂名 egress-checker）——macOS **Apple Silicon (arm64)** 桌面应用：诊断代理**出口质量**——连通性、DNS / IPv6 / WebRTC 泄漏、出口 IP、Gemini / ChatGPT / 流媒体解锁、节点打分与快速测速。
+**Clash伴侣**（英文名 **Clash Assist**）——macOS **Apple Silicon (arm64)** 桌面应用：诊断代理**出口质量**——连通性、DNS / IPv6 / WebRTC 泄漏、出口 IP、Gemini / ChatGPT / 流媒体解锁、节点打分与快速测速。
 
 面向已自备 **Clash Verge / Clash Verge Rev** 的用户。**当前仅支持 Clash Verge**，FlClash 的支持即将上线，会在充分实测之后再正式加入。**不提供任何节点或 VPN 服务**，也不是翻墙工具。仅支持 **Apple Silicon**，不承诺 Intel Mac。
 
@@ -20,8 +20,8 @@
 依赖：Node.js 20+、Rust（stable）、Xcode Command Line Tools、pnpm。
 
 ```bash
-git clone https://github.com/JTee77/egress-checker.git
-cd egress-checker && pnpm install && pnpm tauri dev
+git clone https://github.com/JTee77/clash-assist.git
+cd clash-assist && pnpm install && pnpm tauri dev
 ```
 
 **只用 `pnpm tauri dev`，且只开一个实例。** 别直接跑 `target/debug/clash-assist`（没有前端会白屏）。崩溃 / 白屏 / 进程残留时先 `pkill -f clash-assist && pkill -f vite`，再重开一个 dev。

@@ -34,7 +34,7 @@
 
 ## 当前版本与本轮目标（0.2.0）
 
-**当前版本：0.2.0**（产品名 Clash伴侣 / Clash Assist；仓库仍为 egress-checker）。
+**当前版本：0.2.0**（产品名 Clash伴侣 / Clash Assist）。
 
 本轮目标：**CLI 补齐（面向 AI 助手）**——不加与 CLI 无关的功能：
 - `install-shim` 短命令（`clash-assist`），文档写明应用内完整路径
@@ -44,11 +44,11 @@
 - 规则模式下 `currentProxy` 与 GUI 同一判定（修复 CLI 恒为 null），识别不到时给 `currentProxyReason`
 - 输出数字取整；macOS < 14 跑 `check` / `env` 立即 `os_unsupported`；每个错误码带中文 `hint`
 - `help --json` 的 `data.spec` 机器可读清单；新增 [docs/AGENTS-CLI.md](./docs/AGENTS-CLI.md)
-- 合入 ad-hoc 签名 + DMG 背景（[PR #23](https://github.com/JTee77/egress-checker/pull/23)）
+- 合入 ad-hoc 签名 + DMG 背景（[PR #23](https://github.com/JTee77/clash-assist/pull/23)）
 
 ### 0.1.16
 
-目标：**CLI 收口**（闸门、严格解析、切回、Ctrl+C、文档）+ **最小可用 `serve`**（127.0.0.1 + token 鉴权，映射 discover/gate/env/check）。许可证已改为 **GPL-3.0**（[PR #20](https://github.com/JTee77/egress-checker/pull/20)）。CLI 收口见 [PR #21](https://github.com/JTee77/egress-checker/pull/21)；`serve` 见 [PR #22](https://github.com/JTee77/egress-checker/pull/22)。
+目标：**CLI 收口**（闸门、严格解析、切回、Ctrl+C、文档）+ **最小可用 `serve`**（127.0.0.1 + token 鉴权，映射 discover/gate/env/check）。许可证已改为 **GPL-3.0**（[PR #20](https://github.com/JTee77/clash-assist/pull/20)）。CLI 收口见 [PR #21](https://github.com/JTee77/clash-assist/pull/21)；`serve` 见 [PR #22](https://github.com/JTee77/clash-assist/pull/22)。
 
 0.1.15 已发：窄窗排版、使用中识别、FlClash 即将支持、商店只写通/不通、取消记录过期清理等。
 

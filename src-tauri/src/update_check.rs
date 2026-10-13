@@ -6,8 +6,8 @@
 use serde::Serialize;
 
 pub const LATEST_RELEASE_API: &str =
-    "https://api.github.com/repos/JTee77/egress-checker/releases/latest";
-pub const RELEASES_PAGE: &str = "https://github.com/JTee77/egress-checker/releases";
+    "https://api.github.com/repos/JTee77/clash-assist/releases/latest";
+pub const RELEASES_PAGE: &str = "https://github.com/JTee77/clash-assist/releases";
 pub const FAKE_LATEST_ENV: &str = "CLASH_ASSIST_FAKE_LATEST";
 const TIMEOUT_MS: u64 = 5000;
 

@@ -398,7 +398,7 @@ describe("update-check", () => {
       current: "0.2.0",
       latest: "0.2.1",
       update_available: true,
-      url: "https://github.com/JTee77/egress-checker/releases/tag/v0.2.1",
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.2.1",
       fake: false,
     });
     const env = await run(["update-check"], { checkUpdate });
@@ -408,7 +408,7 @@ describe("update-check", () => {
       current: "0.2.0",
       latest: "0.2.1",
       update_available: true,
-      url: "https://github.com/JTee77/egress-checker/releases/tag/v0.2.1",
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.2.1",
     });
     noNetworkTouched();
   });
