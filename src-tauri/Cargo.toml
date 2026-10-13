@@ -21,6 +21,7 @@ regex = "1"
 dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"] }
 futures-util = "0.3"
+sys-locale = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 # CLI：Ctrl+C / SIGTERM 时先切回原节点再退出（sigaction / write / _exit）。
