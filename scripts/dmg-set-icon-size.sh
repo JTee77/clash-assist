@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tauri 2's DMG bundler has no icon-size option (create-dmg default 128).
 # Post-process the built DMG so Finder shows icons at ICON_SIZE (default 96), matching
-# src-tauri/dmg background layout (window 540x360, app (140,116), Applications (400,116)).
+# src-tauri/dmg background layout (window 540x360, app (140,92), Applications (400,92)).
 # Usage: scripts/dmg-set-icon-size.sh [path/to.dmg] [icon_size]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
