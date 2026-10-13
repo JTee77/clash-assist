@@ -1,6 +1,6 @@
 # 贡献指南
 
-欢迎给 [Egress Checker](https://github.com/JTee77/egress-checker) 提建议和补丁。
+欢迎给 [Clash伴侣 / Clash Assist](https://github.com/JTee77/egress-checker) 提建议和补丁。
 
 ## 怎么参与
 

@@ -92,7 +92,7 @@ async function start() {
     const msg = err instanceof Error ? err.message : String(err);
     rootEl.innerHTML = `<div style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;max-width:520px;margin:64px auto;padding:24px;line-height:1.6;color:#e7ecf3;background:#0f1419">
     <h1 style="font-size:20px;color:#ffb454;margin:0 0 12px">启动失败</h1>
-    <p>请退出所有 Egress Checker，再只开一个终端运行 <code style="background:#1c2430;padding:2px 6px;border-radius:4px">pnpm tauri dev</code>。</p>
+    <p>请退出所有 Clash伴侣，再只开一个终端运行 <code style="background:#1c2430;padding:2px 6px;border-radius:4px">pnpm tauri dev</code>。</p>
     <pre style="white-space:pre-wrap;font-size:12px;opacity:.75;margin-top:16px">${msg.replace(/</g, "&lt;")}</pre>
   </div>`;
   }

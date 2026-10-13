@@ -318,7 +318,7 @@ export function HomePage({
   useEffect(() => {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       void getCurrentWindow()
-        .setTitle(`Egress Checker ${__APP_VERSION__}`)
+        .setTitle(`Clash伴侣 ${__APP_VERSION__}`)
         .catch(() => {});
     }
   }, []);
@@ -805,7 +805,7 @@ export function HomePage({
       </div>
 
       <details className="about-footer">
-        <summary>关于 Egress Checker</summary>
+        <summary>关于 Clash伴侣</summary>
         <div className="a-body">
           仓库：
           <a

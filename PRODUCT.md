@@ -1,7 +1,7 @@
-# Egress Checker — 产品说明（v0.1.17）
+# Clash伴侣 / Clash Assist — 产品说明（v0.2.0）
 
 ## 定位
-**Egress Checker** 是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
+**Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
 
 一句话：**看看你的代理会不会漏 DNS、关心的服务能不能用、实际够不够快。**
 
@@ -32,9 +32,9 @@
 - 对无开放 API 的客户端假装「全节点扫遍」
 - 宣称「翻墙 / 突破防火墙」
 
-## 当前版本与本轮目标（0.1.17）
+## 当前版本与本轮目标（0.2.0）
 
-**当前版本：0.1.17**。
+**当前版本：0.2.0**（产品名 Clash伴侣 / Clash Assist；仓库仍为 egress-checker）。
 
 本轮目标：**CLI 补齐（面向 AI 助手）**——不加与 CLI 无关的功能：
 - `install-shim` 短命令（`egress-checker`），文档写明应用内完整路径

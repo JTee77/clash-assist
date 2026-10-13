@@ -41,7 +41,7 @@ import {
 export const CLI_NODES_LIMIT = 50;
 
 /** 安装到 /Applications 后的二进制完整路径（文档 / install-shim 输出用）。 */
-export const CLI_APP_BINARY = "/Applications/Egress Checker.app/Contents/MacOS/egress-checker";
+export const CLI_APP_BINARY = "/Applications/Clash Assist.app/Contents/MacOS/egress-checker";
 
 /** 唯一受支持软件的提示（与 GUI 选择器一致：只有 Clash Verge 可选）。 */
 export const CLI_ONLY_VERGE = "当前仅支持 Clash Verge（--client verge）。";

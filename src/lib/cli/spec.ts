@@ -32,7 +32,7 @@ const FILTERS = ["nodes", "check all", "check nodes"];
 export const CLI_SPEC = {
   schema: 1,
   invocation: {
-    appBinary: "/Applications/Egress Checker.app/Contents/MacOS/egress-checker",
+    appBinary: "/Applications/Clash Assist.app/Contents/MacOS/egress-checker",
     shim: "egress-checker（运行 install-shim 后可用，等价于 <appBinary> --cli）",
     prefix: "--cli",
   },

@@ -1,8 +1,8 @@
 [package]
 name = "egress-checker"
-version = "0.1.17"
+version = "0.2.0"
 license = "GPL-3.0-or-later"
-description = "Egress Checker — macOS Apple Silicon proxy egress diagnostics"
+description = "Clash Assist (Clash伴侣) — macOS Apple Silicon proxy egress diagnostics"
 authors = ["JTee77"]
 edition = "2021"
 

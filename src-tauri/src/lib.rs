@@ -354,7 +354,7 @@ async fn vite_dev_reachable(url: &str) -> bool {
 /// (that path crashed WKWebView on macOS).
 #[cfg(debug_assertions)]
 fn show_vite_dead_page(win: &tauri::WebviewWindow, reason: &str) {
-    let _ = win.set_title("Egress Checker — Vite 已退出");
+    let _ = win.set_title("Clash伴侣 — Vite 已退出");
     // Build DOM via JS literals; avoid navigating away from the webview origin.
     let js = format!(
         r#"(function(){{
@@ -649,7 +649,7 @@ pub fn run() {
             // 原生标题栏：软件名 + 版本（与 Cargo.toml / package.json 对齐）。
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title(&format!(
-                    "Egress Checker {}",
+                    "Clash伴侣 {}",
                     env!("CARGO_PKG_VERSION")
                 ));
             }

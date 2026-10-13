@@ -293,11 +293,11 @@ export function parseCliArgv(argv: string[]): ParsedCli {
   };
 }
 
-export const CLI_HELP_TEXT = `Egress Checker CLI 0.1.17（与 GUI 共用 runner / egress / score）
+export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.0（与 GUI 共用 runner / egress / score）
 
 用法：
   egress-checker --cli <command> [options]
-  完整路径：/Applications/Egress Checker.app/Contents/MacOS/egress-checker
+  完整路径：/Applications/Clash Assist.app/Contents/MacOS/egress-checker
   短命令：先运行一次 install-shim，之后直接 egress-checker <command> …
 
 命令：

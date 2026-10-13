@@ -1,4 +1,4 @@
-# Egress Checker CLI（0.1.17）
+# Clash Assist / Clash伴侣 CLI（0.2.0）
 
 与图形界面共用 `src/lib/runner`、`egress`、`score`、`mihomo`。通过 **`--cli`** 启动隐藏窗口，在 WebView 内调用同一套 Tauri 能力。一次性命令结束后把 **一行 JSON（CliEnvelope）** 打到 stdout 并退出；**`serve`** 常驻本机 loopback HTTP，直到 Ctrl+C。
 
@@ -11,14 +11,14 @@
 安装到「应用程序」后，二进制完整路径是：
 
 ```bash
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli discover --client verge
+"/Applications/Clash Assist.app/Contents/MacOS/egress-checker" --cli discover --client verge
 ```
 
 想要短命令 `egress-checker`，运行一次：
 
 ```bash
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli install-shim            # 自动选目录
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli install-shim --dir ~/bin
+"/Applications/Clash Assist.app/Contents/MacOS/egress-checker" --cli install-shim            # 自动选目录
+"/Applications/Clash Assist.app/Contents/MacOS/egress-checker" --cli install-shim --dir ~/bin
 egress-checker discover --client verge     # 之后即可（shim 已自动带 --cli）
 ```
 
@@ -92,7 +92,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 ```json
 {
   "ok": true,
-  "version": "0.1.17",
+  "version": "0.2.0",
   "command": "discover",
   "ranAt": "2026-10-06T00:00:00.000Z",
   "data": { }
