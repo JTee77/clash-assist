@@ -18,14 +18,14 @@ if [[ "${EGRESS_CLI_SMOKE:-}" != "1" ]]; then
   exit 0
 fi
 
-BIN="${CLI_BIN:-src-tauri/target/debug/egress-checker}"
+BIN="${CLI_BIN:-src-tauri/target/debug/clash-assist}"
 if [[ ! -x "$BIN" ]]; then
   echo "building debug binary…"
   (cd src-tauri && cargo build)
 fi
 
 # 只结束本仓库编译出的 CLI 进程（不碰 Vite、不碰代理软件）。
-kill_cli() { pkill -f 'target/(debug|release)/egress-checker' 2>/dev/null || true; }
+kill_cli() { pkill -f 'target/(debug|release)/clash-assist' 2>/dev/null || true; }
 
 STARTED_VITE=0
 cleanup() {
@@ -61,7 +61,7 @@ expect_cli() {
   out=$(run_to "$to" "$BIN" --cli "$@")
   code=$?
   set -e
-  echo "\$ egress-checker --cli $* → exit ${code}"
+  echo "\$ clash-assist --cli $* → exit ${code}"
   echo "$out" | head -c 600
   echo
   if [[ "$code" != "$want_code" ]]; then
@@ -75,7 +75,7 @@ expect_cli() {
 }
 
 echo "== help =="
-expect_cli 0 "Egress Checker CLI 0.1.16" 60 help --no-json
+expect_cli 0 "Clash Assist CLI 0.1.16" 60 help --no-json
 
 echo "== 未知命令 / 未知选项 / 非法 client → ok:false + exit 1 =="
 expect_cli 1 '"code":"unknown_command"' 60 frobnicate

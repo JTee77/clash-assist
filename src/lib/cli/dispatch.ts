@@ -41,7 +41,7 @@ import {
 export const CLI_NODES_LIMIT = 50;
 
 /** 安装到 /Applications 后的二进制完整路径（文档 / install-shim 输出用）。 */
-export const CLI_APP_BINARY = "/Applications/Egress Checker.app/Contents/MacOS/egress-checker";
+export const CLI_APP_BINARY = "/Applications/Clash Assist.app/Contents/MacOS/clash-assist";
 
 /** 唯一受支持软件的提示（与 GUI 选择器一致：只有 Clash Verge 可选）。 */
 export const CLI_ONLY_VERGE = "当前仅支持 Clash Verge（--client verge）。";
@@ -526,7 +526,21 @@ export type CliDispatchOptions = {
   osInfo?: CliOsInfo | null;
   /** install-shim 的实现（bootCli 接 Rust）；不给则 shim_unavailable */
   installShim?: ShimInstaller;
+  /** update-check 的实现（bootCli 接 Rust check_update）；不给则 update_check_unavailable */
+  checkUpdate?: UpdateChecker;
 };
+
+/** Rust `update_check::UpdateInfo`（字段名 snake_case，按需求原样输出）。 */
+export type UpdateCheckData = {
+  current: string;
+  latest: string;
+  update_available: boolean;
+  url: string;
+  /** true = 来自 CLASH_ASSIST_FAKE_LATEST（未访问网络） */
+  fake?: boolean;
+};
+
+export type UpdateChecker = () => Promise<UpdateCheckData>;
 
 /** 对外入口：调度 + 数字取整 + 进度 start/done。 */
 export async function dispatchCli(
@@ -673,7 +687,7 @@ async function dispatchInner(
           ...r,
           appBinary: CLI_APP_BINARY,
           next: onPath
-            ? "现在可以直接运行：egress-checker discover --client verge"
+            ? "现在可以直接运行：clash-assist discover --client verge"
             : `${dir} 不在 PATH 里：把 export PATH="${dir}:$PATH" 加到 ~/.zshrc 后重开终端；或直接用 ${r.path ?? dir}`,
           warning:
             r.targetIsDevBuild === true
@@ -688,6 +702,27 @@ async function dispatchInner(
       const message =
         typeof e?.message === "string" ? e.message : err instanceof Error ? err.message : String(err);
       return errEnvelope(cmd, code, message, ver);
+    }
+  }
+
+  if (cmd === "update-check") {
+    if (!opts.checkUpdate) {
+      return errEnvelope(cmd, "update_check_unavailable", "update-check 只能在应用二进制里运行。", ver);
+    }
+    try {
+      const r = await opts.checkUpdate();
+      const data: UpdateCheckData = {
+        current: r.current,
+        latest: r.latest,
+        update_available: r.update_available === true,
+        url: r.url,
+        ...(r.fake ? { fake: true } : {}),
+      };
+      return okEnvelope(cmd, data, ver);
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
+      return errEnvelope(cmd, "update_check_failed", message, ver);
     }
   }
 
@@ -1039,6 +1074,12 @@ function dataLines(command: string, data: unknown): string[] {
     out.push(`  已写入：${d.path}`);
     if (d.next) out.push(`  ${d.next}`);
     if (d.warning) out.push(`  ⚠ ${d.warning}`);
+    return out;
+  }
+  if (command === "update-check" && "latest" in data) {
+    const d = data as UpdateCheckData;
+    out.push(`  当前：${d.current}；最新：${d.latest}`);
+    out.push(d.update_available ? `  有新版本：${d.url}` : "  已是最新版本");
     return out;
   }
   if (command === "gate" && "gate" in data && !("target" in data)) {

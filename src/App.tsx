@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { HomePage } from "./pages/HomePage";
+import { TitleBar } from "./components/TitleBar";
 import { useConnection } from "./hooks/useConnection";
 import "./styles/app.css";
+
+const isTauriApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 function App() {
   // 玻璃地基：仅在 Tauri（透明窗口 + 原生 vibrancy）下启用 .glass，
@@ -28,6 +31,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      {isTauriApp && <TitleBar />}
       <main className="main">
         <HomePage
           connection={state}

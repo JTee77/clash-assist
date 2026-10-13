@@ -13,7 +13,7 @@ export type ClientId =
   | "mihomo_party"
   | "nyanpasu";
 
-export const CLIENT_STORAGE_KEY = "egress-checker.clientId";
+export const CLIENT_STORAGE_KEY = "clash-assist.clientId";
 
 export type ClientOption = {
   id: ClientId;

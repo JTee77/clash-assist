@@ -1,6 +1,6 @@
-# Egress Checker
+# Clash伴侣 / Clash Assist
 
-macOS **Apple Silicon (arm64)** 桌面应用：诊断代理**出口质量**——连通性、DNS / IPv6 / WebRTC 泄漏、出口 IP、Gemini / ChatGPT / 流媒体解锁、节点打分与快速测速。
+**Clash伴侣**（英文名 **Clash Assist**）——macOS **Apple Silicon (arm64)** 桌面应用：诊断代理**出口质量**——连通性、DNS / IPv6 / WebRTC 泄漏、出口 IP、Gemini / ChatGPT / 流媒体解锁、节点打分与快速测速。
 
 面向已自备 **Clash Verge / Clash Verge Rev** 的用户。**当前仅支持 Clash Verge**，FlClash 的支持即将上线，会在充分实测之后再正式加入。**不提供任何节点或 VPN 服务**，也不是翻墙工具。仅支持 **Apple Silicon**，不承诺 Intel Mac。
 
@@ -20,11 +20,11 @@ macOS **Apple Silicon (arm64)** 桌面应用：诊断代理**出口质量**—�
 依赖：Node.js 20+、Rust（stable）、Xcode Command Line Tools、pnpm。
 
 ```bash
-git clone https://github.com/JTee77/egress-checker.git
-cd egress-checker && pnpm install && pnpm tauri dev
+git clone https://github.com/JTee77/clash-assist.git
+cd clash-assist && pnpm install && pnpm tauri dev
 ```
 
-**只用 `pnpm tauri dev`，且只开一个实例。** 别直接跑 `target/debug/egress-checker`（没有前端会白屏）。崩溃 / 白屏 / 进程残留时先 `pkill -f egress-checker && pkill -f vite`，再重开一个 dev。
+**只用 `pnpm tauri dev`，且只开一个实例。** 别直接跑 `target/debug/clash-assist`（没有前端会白屏）。崩溃 / 白屏 / 进程残留时先 `pkill -f clash-assist && pkill -f vite`，再重开一个 dev。
 
 | 命令 | 说明 |
 |------|------|
@@ -45,11 +45,15 @@ cd egress-checker && pnpm install && pnpm tauri dev
 - **测单个（完整）**：`runNodeDiagnostics` — 延迟、带宽、流媒体/商店/AI 等；节点卡「测 / 再测」走这条
 - **测全部（完整深测）**：与测单个相同探针集（延迟淘汰后临时切换深测）；测完或中止会**强制切回**原节点
 - **环境泄漏检查**：DNS / IPv6 / WebRTC / 分流 / 直连旁路（第二入口，不默认每次强跑）
-- **CLI**：`--cli discover|nodes|gate|check|env|serve|install-shim --client verge`（目前仅支持 Clash Verge），stdout 为一行 CliEnvelope JSON（与 GUI 共用 runner），`--no-json` 为人类摘要；错误码与退出码见 [docs/CLI.md](./docs/CLI.md)，给 AI 助手的指南见 [docs/AGENTS-CLI.md](./docs/AGENTS-CLI.md)。二进制完整路径：`/Applications/Egress Checker.app/Contents/MacOS/egress-checker`；运行一次 `--cli install-shim` 后可直接用 `egress-checker`
+- **CLI**：`--cli discover|nodes|gate|check|env|serve|install-shim --client verge`（目前仅支持 Clash Verge），stdout 为一行 CliEnvelope JSON（与 GUI 共用 runner），`--no-json` 为人类摘要；错误码与退出码见 [docs/CLI.md](./docs/CLI.md)，给 AI 助手的指南见 [docs/AGENTS-CLI.md](./docs/AGENTS-CLI.md)。二进制完整路径：`/Applications/Clash Assist.app/Contents/MacOS/clash-assist`；运行一次 `--cli install-shim` 后可直接用 `clash-assist`
 
 ## 打包（DMG）
 
 Apple Silicon 上跑 `pnpm tauri build`，产物在 `src-tauri/target/release/bundle/dmg/*.dmg`。安装包带本地签名（ad-hoc，免费的完整性签名），但**未经苹果公证**。
+
+DMG 窗口 540×360、图标 96。背景源图：`src-tauri/dmg/dmg-background.png`（540×360）与 `dmg-background@2x.png`（1080×720），替换后运行 `scripts/make-dmg-background.sh` 重新生成 `background.tiff`。
+
+0.2.0 起 bundle identifier 改为 `com.clashassist.app`，短命令改为 `clash-assist`；首次启动会把旧 `com.egresschecker.app` 的数据 / WebKit 设置复制过来（旧目录保留），`install-shim` 会删除旧版生成的 `egress-checker` 短命令。
 
 ### 首次打开说明
 

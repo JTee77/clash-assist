@@ -12,11 +12,28 @@ import {
   type ProxyNode,
 } from "../lib/mihomo";
 
-const MOCK_PREF_KEY = "egress-checker.forceMock";
+const MOCK_PREF_KEY = "clash-assist.forceMock";
+
+/** 0.2.0 改名前的 localStorage 键（egress-checker.*）：读新键为空时回退读一次并迁移到新键。 */
+function readPref(key: string): string | null {
+  const v = localStorage.getItem(key);
+  if (v !== null) return v;
+  const legacyKey = key.replace(/^clash-assist\./, "egress-checker.");
+  const old = localStorage.getItem(legacyKey);
+  if (old !== null) {
+    try {
+      localStorage.setItem(key, old);
+      localStorage.removeItem(legacyKey);
+    } catch {
+      /* ignore */
+    }
+  }
+  return old;
+}
 
 function readForceMock(): boolean {
   try {
-    return localStorage.getItem(MOCK_PREF_KEY) === "1";
+    return readPref(MOCK_PREF_KEY) === "1";
   } catch {
     return false;
   }
@@ -26,7 +43,7 @@ export function useConnection() {
   const [forceMock, setForceMockState] = useState<boolean>(readForceMock);
   const [clientId, setClientIdState] = useState<ClientId | null>(() => {
     try {
-      const v = localStorage.getItem(CLIENT_STORAGE_KEY);
+      const v = readPref(CLIENT_STORAGE_KEY);
       const id = normalizeClientId(v);
       if (!id && v) {
         try {

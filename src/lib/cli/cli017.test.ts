@@ -46,7 +46,7 @@ const { dispatchCli } = await import("./dispatch");
 const { parseCliArgv } = await import("./parse");
 
 const run = (argv: string[], opts?: import("./dispatch").CliDispatchOptions) =>
-  dispatchCli(parseCliArgv(["egress-checker", "--cli", ...argv]), opts);
+  dispatchCli(parseCliArgv(["clash-assist", "--cli", ...argv]), opts);
 
 const node = (name: string): ProxyNode => ({
   name,
@@ -320,9 +320,9 @@ describe("install-shim", () => {
   });
   it("成功：透传结果并给出下一步", async () => {
     const installShim = vi.fn().mockResolvedValue({
-      path: "/u/.local/bin/egress-checker",
+      path: "/u/.local/bin/clash-assist",
       dir: "/u/.local/bin",
-      target: "/Applications/Egress Checker.app/Contents/MacOS/egress-checker",
+      target: "/Applications/Clash Assist.app/Contents/MacOS/clash-assist",
       created: true,
       onPath: false,
       targetIsDevBuild: false,
@@ -385,5 +385,40 @@ describe("文案里的长小数", () => {
     const { roundText } = await import("./dispatch");
     expect(roundText("下行约 4.745562254259502 Mbps，偏慢")).toBe("下行约 4.75 Mbps，偏慢");
     expect(roundText("IP 1.2.3.4 版本 0.1.17 延迟 12.5 ms")).toBe("IP 1.2.3.4 版本 0.1.17 延迟 12.5 ms");
+  });
+});
+
+describe("update-check", () => {
+  it("没有实现 → update_check_unavailable", async () => {
+    const env = await run(["update-check"]);
+    expect(env.error?.code).toBe("update_check_unavailable");
+  });
+  it("成功：输出 current / latest / update_available / url，不需要 --client", async () => {
+    const checkUpdate = vi.fn().mockResolvedValue({
+      current: "0.2.0",
+      latest: "0.2.1",
+      update_available: true,
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.2.1",
+      fake: false,
+    });
+    const env = await run(["update-check"], { checkUpdate });
+    expect(env.ok).toBe(true);
+    expect(env.command).toBe("update-check");
+    expect(env.data).toEqual({
+      current: "0.2.0",
+      latest: "0.2.1",
+      update_available: true,
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.2.1",
+    });
+    noNetworkTouched();
+  });
+  it("网络失败 → update_check_failed + hint", async () => {
+    const checkUpdate = vi.fn().mockRejectedValue("请求 GitHub 失败：timeout");
+    const env = await run(["update-check"], { checkUpdate });
+    expect(env.error).toMatchObject({ code: "update_check_failed", message: "请求 GitHub 失败：timeout" });
+    expect(env.error?.hint).toBeTruthy();
+  });
+  it("多余参数 → unexpected_argument", () => {
+    expect(parseCliArgv(["x", "--cli", "update-check", "now"]).parseError?.code).toBe("unexpected_argument");
   });
 });

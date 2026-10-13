@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Egress Checker",
-  "version": "0.1.17",
-  "identifier": "com.egresschecker.app",
+  "productName": "Clash Assist",
+  "version": "0.2.0",
+  "identifier": "com.clashassist.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -15,7 +15,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "Egress Checker",
+        "title": "Clash伴侣",
         "width": 1350,
         "height": 880,
         "minWidth": 400,
@@ -23,8 +23,12 @@
         "resizable": true,
         "maximizable": true,
         "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "windowEffects": {
-          "effects": ["sidebar"],
+          "effects": [
+            "sidebar"
+          ],
           "state": "active"
         }
       }
@@ -44,9 +48,24 @@
       "signingIdentity": "-",
       "dmg": {
         "background": "dmg/background.tiff",
-        "windowSize": { "width": 660, "height": 452 },
-        "appPosition": { "x": 165, "y": 170 },
-        "applicationFolderPosition": { "x": 495, "y": 170 }
+        "windowSize": {
+          "width": 540,
+          "height": 360
+        },
+        "appPosition": {
+          "x": 140,
+          "y": 92
+        },
+        "applicationFolderPosition": {
+          "x": 400,
+          "y": 92
+        }
+      },
+      "files": {
+        "Resources/Assets.car": "icons/Assets.car",
+        "Resources/en.lproj/InfoPlist.strings": "locales/en.lproj/InfoPlist.strings",
+        "Resources/zh-Hans.lproj/InfoPlist.strings": "locales/zh-Hans.lproj/InfoPlist.strings",
+        "Resources/zh-Hant.lproj/InfoPlist.strings": "locales/zh-Hant.lproj/InfoPlist.strings"
       }
     },
     "icon": [

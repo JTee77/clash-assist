@@ -36,3 +36,6 @@ src-tauri/gen
 tmp-e2e/
 tmp-shots/
 design/
+
+# Large Icon Composer preview dumps (kept locally / on agent box; not in git)
+icon-src/logo03/composer-previews/

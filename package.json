@@ -1,7 +1,7 @@
 {
-  "name": "egress-checker",
+  "name": "clash-assist",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.2.0",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "build:mac": "bash scripts/build-dmg-macos.sh",
     "smoke:mac": "bash scripts/smoke-mac.sh",
     "smoke:cli": "bash scripts/cli-smoke.sh"
   },

@@ -12,7 +12,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERGE_CFG="${MIHOMO_VERGE_CFG:-$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/config.yaml}"
-OUT="${MIHOMO_PROXIES_OUT:-/tmp/egress-checker-proxies-smoke.json}"
+OUT="${MIHOMO_PROXIES_OUT:-/tmp/clash-assist-proxies-smoke.json}"
 
 pass() { echo "PASS: $*"; }
 skip() { echo "SKIP: $*"; exit 0; }
@@ -50,7 +50,7 @@ resolve_sock() {
 
 SOCK="$(resolve_sock)"
 
-echo "== egress-checker smoke-mihomo-api =="
+echo "== clash-assist smoke-mihomo-api =="
 echo "sock=${SOCK:-"(none)"}"
 
 if [[ -z "$SOCK" || ! -e "$SOCK" ]]; then

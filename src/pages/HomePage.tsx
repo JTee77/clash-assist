@@ -318,7 +318,7 @@ export function HomePage({
   useEffect(() => {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       void getCurrentWindow()
-        .setTitle(`Egress Checker ${__APP_VERSION__}`)
+        .setTitle(`Clash伴侣 ${__APP_VERSION__}`)
         .catch(() => {});
     }
   }, []);
@@ -805,15 +805,15 @@ export function HomePage({
       </div>
 
       <details className="about-footer">
-        <summary>关于 Egress Checker</summary>
+        <summary>关于 Clash伴侣</summary>
         <div className="a-body">
           仓库：
           <a
-            href="https://github.com/JTee77/egress-checker"
+            href="https://github.com/JTee77/clash-assist"
             target="_blank"
             rel="noreferrer"
           >
-            github.com/JTee77/egress-checker
+            github.com/JTee77/clash-assist
           </a>
           <br />
           致谢：Clash Verge / mihomo 社区。

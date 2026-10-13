@@ -1,9 +1,12 @@
+#[cfg(target_os = "macos")]
+mod app_menu;
 mod cli_shim;
 mod cli_serve;
 mod dns;
 mod dns_query;
 mod mihomo;
 mod platform;
+mod update_check;
 
 use dns::DnsResolversResult;
 use mihomo::{
@@ -311,7 +314,7 @@ async fn egress_dns_whoami(req: DnsWhoamiRequest) -> Result<dns::DnsWhoamiResult
 }
 
 
-/// Append a line to the platform log dir (macOS: ~/Library/Logs/EgressChecker). Best-effort.
+/// Append a line to the platform log dir (macOS: ~/Library/Logs/ClashAssist). Best-effort.
 fn append_app_log(msg: &str) {
     use std::io::Write;
 
@@ -354,7 +357,7 @@ async fn vite_dev_reachable(url: &str) -> bool {
 /// (that path crashed WKWebView on macOS).
 #[cfg(debug_assertions)]
 fn show_vite_dead_page(win: &tauri::WebviewWindow, reason: &str) {
-    let _ = win.set_title("Egress Checker — Vite 已退出");
+    let _ = win.set_title("Clash伴侣 — Vite 已退出");
     // Build DOM via JS literals; avoid navigating away from the webview origin.
     let js = format!(
         r#"(function(){{
@@ -373,7 +376,7 @@ fn show_vite_dead_page(win: &tauri::WebviewWindow, reason: &str) {
       + '<p>开发服务器（127.0.0.1:1420）已停止或无法连接，所以只剩空白窗口。</p>'
       + '<p>请<strong>关掉本窗口</strong>，然后只开一个终端重新运行：</p>'
       + '<p><code style="background:#1c2430;padding:2px 8px;border-radius:4px">pnpm tauri dev</code></p>'
-      + '<p style="opacity:.75;font-size:13px">不要直接打开 target/debug/egress-checker（会留下无前端的空壳）。</p>'
+      + '<p style="opacity:.75;font-size:13px">不要直接打开 target/debug/clash-assist（会留下无前端的空壳）。</p>'
       + '<pre style="white-space:pre-wrap;font-size:12px;opacity:.7;margin-top:16px"></pre>';
     document.body.appendChild(wrap);
     var pre = wrap.querySelector('pre');
@@ -403,6 +406,7 @@ pub const CLI_VERBS: &[&str] = &[
     "env",
     "serve",
     "install-shim",
+    "update-check",
 ];
 
 /// 是否进入 CLI（隐藏主窗）。规则与 TS `parseCliArgv().cliMode` 逐条对齐：
@@ -566,6 +570,18 @@ fn cli_os_info() -> CliOsInfo {
     }
 }
 
+/// 更新检查（GUI 启动时一次 + CLI update-check）。失败返回 Err，由调用方决定是否静默。
+#[tauri::command]
+async fn check_update() -> Result<update_check::UpdateInfo, String> {
+    update_check::check(env!("CARGO_PKG_VERSION")).await
+}
+
+/// 用默认浏览器打开 release 页面（只接受本项目 GitHub releases 下的 URL）。
+#[tauri::command]
+fn open_release_page(url: String) -> Result<(), String> {
+    update_check::open_release_page(&url)
+}
+
 /// `--cli install-shim [--dir D]`
 #[tauri::command]
 fn cli_install_shim(dir: Option<String>) -> Result<cli_shim::ShimResult, cli_shim::ShimError> {
@@ -609,10 +625,73 @@ fn cli_exit(code: i32) -> Result<(), String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 0.2.0 起 bundle identifier 由 com.egresschecker.app 改为 com.clashassist.app。
+/// 首次启动：新目录不存在或为空、而旧目录存在时，把旧目录整体复制过来（不删除旧目录）。
+/// 覆盖 ~/Library/Application Support、~/Library/Caches 下的应用数据，
+/// 以及 ~/Library/WebKit/<id>（前端设置存在 WKWebView 的 localStorage 里）。
+/// 必须在主 webview 创建前调用。Best-effort，失败只记日志。
+const LEGACY_IDENTIFIER: &str = "com.egresschecker.app";
+
+fn dir_is_empty_or_missing(p: &std::path::Path) -> bool {
+    match std::fs::read_dir(p) {
+        Ok(mut it) => it.next().is_none(),
+        Err(_) => true,
+    }
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_identifier_dirs(new_id: &str) {
+    if new_id == LEGACY_IDENTIFIER {
+        return;
+    }
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(d) = dirs::data_dir() {
+        roots.push(d);
+    }
+    if let Some(d) = dirs::config_dir() {
+        roots.push(d);
+    }
+    if let Some(d) = dirs::cache_dir() {
+        roots.push(d);
+    }
+    if let Some(h) = dirs::home_dir() {
+        roots.push(h.join("Library/WebKit"));
+    }
+    roots.dedup();
+    for root in roots {
+        let old = root.join(LEGACY_IDENTIFIER);
+        let new = root.join(new_id);
+        if old.is_dir() && dir_is_empty_or_missing(&new) {
+            match copy_dir_all(&old, &new) {
+                Ok(()) => append_app_log(&format!("migrated {} -> {}", old.display(), new.display())),
+                Err(e) => append_app_log(&format!("migrate {} failed: {e}", old.display())),
+            }
+        }
+    }
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu::build);
+    builder
         .setup(|app| {
             use tauri::Manager;
+            migrate_legacy_identifier_dirs(&app.config().identifier);
             let frontend_url = app
                 .config()
                 .build
@@ -649,7 +728,7 @@ pub fn run() {
             // 原生标题栏：软件名 + 版本（与 Cargo.toml / package.json 对齐）。
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title(&format!(
-                    "Egress Checker {}",
+                    "Clash伴侣 {}",
                     env!("CARGO_PKG_VERSION")
                 ));
             }
@@ -737,7 +816,9 @@ pub fn run() {
             cli_serve_start,
             cli_serve_poll,
             cli_serve_respond,
-            cli_serve_stop
+            cli_serve_stop,
+            check_update,
+            open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -41,7 +41,7 @@ const { dispatchCli, CLI_ABORT_MESSAGE } = await import("./dispatch");
 const { parseCliArgv } = await import("./parse");
 
 const run = (argv: string[], opts?: { shouldAbort?: () => boolean }) =>
-  dispatchCli(parseCliArgv(["egress-checker", "--cli", ...argv]), opts);
+  dispatchCli(parseCliArgv(["clash-assist", "--cli", ...argv]), opts);
 
 const node = (name: string): ProxyNode => ({
   name,
@@ -137,7 +137,7 @@ describe("参数 / 闸门错误：ok:false，且不碰网络", () => {
   it("help 永远 ok", async () => {
     const env = await run(["help"]);
     expect(env.ok).toBe(true);
-    expect((env.data as { text: string }).text).toContain("0.1.17");
+    expect((env.data as { text: string }).text).toContain("0.2.0");
   });
 });
 

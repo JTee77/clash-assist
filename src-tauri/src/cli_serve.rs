@@ -312,7 +312,7 @@ pub fn serve_stop() -> Result<(), String> {
         for (_, tx) in map.drain() {
             let _ = tx.send(HttpReply {
                 status: 503,
-                body: r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭","hint":"serve 正在退出，稍后重新启动 egress-checker --cli serve 再请求。"}}"#.into(),
+                body: r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭","hint":"serve 正在退出，稍后重新启动 clash-assist --cli serve 再请求。"}}"#.into(),
                 content_type: "application/json; charset=utf-8".into(),
             });
         }
@@ -371,7 +371,7 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
             &mut stream,
             503,
             "application/json; charset=utf-8",
-            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭","hint":"serve 正在退出，稍后重新启动 egress-checker --cli serve 再请求。"}}"#,
+            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 正在关闭","hint":"serve 正在退出，稍后重新启动 clash-assist --cli serve 再请求。"}}"#,
         )?;
         return Ok(());
     }
@@ -427,7 +427,7 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
             &mut stream,
             503,
             "application/json; charset=utf-8",
-            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 已关闭","hint":"重新启动 egress-checker --cli serve，并使用新打印的 token。"}}"#,
+            r#"{"ok":false,"error":{"code":"server_stopping","message":"serve 已关闭","hint":"重新启动 clash-assist --cli serve，并使用新打印的 token。"}}"#,
         )?;
         return Ok(());
     }

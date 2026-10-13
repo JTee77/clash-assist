@@ -1,28 +1,28 @@
-# Egress Checker CLI（0.1.17）
+# Clash Assist / Clash伴侣 CLI（0.2.0）
 
 与图形界面共用 `src/lib/runner`、`egress`、`score`、`mihomo`。通过 **`--cli`** 启动隐藏窗口，在 WebView 内调用同一套 Tauri 能力。一次性命令结束后把 **一行 JSON（CliEnvelope）** 打到 stdout 并退出；**`serve`** 常驻本机 loopback HTTP，直到 Ctrl+C。
 
 **目前只支持 Clash Verge / Clash Verge Rev（`--client verge`）。** FlClash 即将支持，暂不可用；其它软件不支持。
 
-> 给 AI 助手 / 自动化脚本的简明指南见 [AGENTS-CLI.md](./AGENTS-CLI.md)；机器可读的命令清单：`egress-checker --cli help --json` 的 `data.spec`。
+> 给 AI 助手 / 自动化脚本的简明指南见 [AGENTS-CLI.md](./AGENTS-CLI.md)；机器可读的命令清单：`clash-assist --cli help --json` 的 `data.spec`。
 
 ## 找到二进制 / 短命令
 
 安装到「应用程序」后，二进制完整路径是：
 
 ```bash
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli discover --client verge
+"/Applications/Clash Assist.app/Contents/MacOS/clash-assist" --cli discover --client verge
 ```
 
-想要短命令 `egress-checker`，运行一次：
+想要短命令 `clash-assist`，运行一次：
 
 ```bash
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli install-shim            # 自动选目录
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli install-shim --dir ~/bin
-egress-checker discover --client verge     # 之后即可（shim 已自动带 --cli）
+"/Applications/Clash Assist.app/Contents/MacOS/clash-assist" --cli install-shim            # 自动选目录
+"/Applications/Clash Assist.app/Contents/MacOS/clash-assist" --cli install-shim --dir ~/bin
+clash-assist discover --client verge     # 之后即可（shim 已自动带 --cli）
 ```
 
-- 写入 **一个** sh 包装脚本 `<dir>/egress-checker`，内容是 `exec '<本二进制完整路径>' --cli "$@"`（不是符号链接：避免 macOS 按链接路径找不到 .app 资源）。
+- 写入 **一个** sh 包装脚本 `<dir>/clash-assist`，内容是 `exec '<本二进制完整路径>' --cli "$@"`（不是符号链接：避免 macOS 按链接路径找不到 .app 资源）。
 - 目录：`--dir`（绝对路径或 `~/…`）优先；否则 `/usr/local/bin`（**存在且当前用户可写**时），否则 `~/.local/bin`（自动创建）。**不会** sudo / 提权。
 - 目标已存在且**不是**本工具生成的 shim → `shim_exists`，不覆盖；是旧 shim 则原地更新（`created:false`）。
 - 返回 `data`: `{ path, dir, target, created, onPath, targetIsDevBuild, appBinary, next, warning }`。`onPath:false` 时 `next` 给出要加进 `~/.zshrc` 的 `export PATH=…`。从开发构建（`target/debug|release`）运行时 `warning` 提醒：shim 会指向开发构建。
@@ -42,8 +42,8 @@ pnpm tauri dev -- --cli env --client verge
 pnpm tauri dev -- --cli serve --mock --port 17890
 
 # 已编译二进制（debug 需要 Vite 在 127.0.0.1:1420；release 自带前端）
-./src-tauri/target/debug/egress-checker --cli discover --mock
-./src-tauri/target/release/egress-checker --cli help --no-json
+./src-tauri/target/debug/clash-assist --cli discover --mock
+./src-tauri/target/release/clash-assist --cli help --no-json
 ```
 
 ### 命令
@@ -61,7 +61,8 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `check nodes <名1> <名2> …` | 只测列出的节点（每个名字按 `check node` 同规则匹配；有一个找不到/有歧义就整体报错、不切换）。输出形状同 `check all`，切回保证相同；也可再叠加 `--region/--match/--limit` |
 | `env` | 环境泄漏检查 |
 | `serve` | 本机 **127.0.0.1** HTTP 服务（常驻到 Ctrl+C）。见下方「serve」 |
-| `install-shim` | 安装短命令 `egress-checker`（见上方「找到二进制 / 短命令」） |
+| `install-shim` | 安装短命令 `clash-assist`（见上方「找到二进制 / 短命令」） |
+| `update-check` | 查询 GitHub 最新 release（`releases/latest`，超时约 5 s）。`data = { current, latest, update_available, url }`；网络/解析失败 → `update_check_failed`。测试可设 `CLASH_ASSIST_FAKE_LATEST=0.2.1` 跳过网络（此时 `data.fake = true`） |
 
 节点名匹配：先全名精确匹配，再唯一的「包含」匹配；匹配到多个报 `node_ambiguous`，找不到报 `node_not_found`。不会拿不存在的名字去切换。
 
@@ -92,7 +93,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 ```json
 {
   "ok": true,
-  "version": "0.1.17",
+  "version": "0.2.0",
   "command": "discover",
   "ranAt": "2026-10-06T00:00:00.000Z",
   "data": { }
@@ -146,6 +147,8 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `invalid_body` | POST /v1/check/node、/v1/nodes、/v1/check/all 的 JSON 不合法或字段类型不对 | 否 |
 | `shim_exists` | install-shim 目标已有同名文件且不是本工具生成 | 否 |
 | `shim_failed` | install-shim 无法创建目录/写文件，或 `--dir` 不是绝对路径 | 否 |
+| `update_check_failed` | update-check 访问 GitHub 失败（断网 / 超时 / 限流 / 响应异常） | 是 |
+| `update_check_unavailable` | 不在应用二进制里运行 update-check | 否 |
 | `shim_unavailable` | 不在应用二进制里运行 install-shim | 否 |
 | `unauthorized` / `not_found` / `method_not_allowed` / `timeout` / `server_stopping` | serve 的 HTTP 层错误（Rust 直接回，同样带 `hint`） | 否 |
 
@@ -334,8 +337,8 @@ EGRESS_CLI_SMOKE=1 bash scripts/cli-smoke.sh      # 再跑真实二进制：help
 ## serve（localhost HTTP）
 
 ```bash
-egress-checker --cli serve --client verge [--port 17890]
-egress-checker --cli serve --mock --port 0          # 临时端口，看就绪横幅
+clash-assist --cli serve --client verge [--port 17890]
+clash-assist --cli serve --mock --port 0          # 临时端口，看就绪横幅
 ```
 
 - **只绑定 `127.0.0.1`**（绝不 `0.0.0.0`）。默认端口 **17890**；`--port 0` 由内核分配，就绪时打印实际端口。
@@ -366,7 +369,7 @@ egress-checker --cli serve --mock --port 0          # 临时端口，看就绪�
 
 ```bash
 # 终端 A
-./egress-checker --cli serve --mock --port 17890
+./clash-assist --cli serve --mock --port 17890
 # 记下 token
 
 # 终端 B

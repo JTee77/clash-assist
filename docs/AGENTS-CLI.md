@@ -1,4 +1,4 @@
-# Egress Checker CLI —— 给 AI 助手的使用指南（0.1.17）
+# Clash Assist / Clash伴侣 CLI —— 给 AI 助手的使用指南（0.2.0）
 
 完整参考见 [CLI.md](./CLI.md)。本页只讲「怎么稳妥地调用」。
 
@@ -6,14 +6,14 @@
 
 按顺序尝试：
 
-1. `command -v egress-checker`（用户运行过 `install-shim` 后存在；shim 自带 `--cli`，再加一次 `--cli` 也没关系）
-2. `"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli …`
-3. 开发仓库里：`src-tauri/target/release/egress-checker --cli …`（debug 构建需要 Vite 在 127.0.0.1:1420）
+1. `command -v clash-assist`（用户运行过 `install-shim` 后存在；shim 自带 `--cli`，再加一次 `--cli` 也没关系）
+2. `"/Applications/Clash Assist.app/Contents/MacOS/clash-assist" --cli …`
+3. 开发仓库里：`src-tauri/target/release/clash-assist --cli …`（debug 构建需要 Vite 在 127.0.0.1:1420）
 
 没有 shim 时可以建议用户运行一次（会写文件到 PATH 目录，先征得同意）：
 
 ```bash
-"/Applications/Egress Checker.app/Contents/MacOS/egress-checker" --cli install-shim
+"/Applications/Clash Assist.app/Contents/MacOS/clash-assist" --cli install-shim
 ```
 
 只支持 macOS、只支持 Clash Verge（`--client verge`）。`check` / `env` 需要 **macOS 14+**，更早系统返回 `os_unsupported`。
@@ -21,7 +21,7 @@
 ## 2. 先读机器可读清单
 
 ```bash
-egress-checker --cli help --json   # data.spec：commands / options / errorCodes(+hint) / 建议超时
+clash-assist --cli help --json   # data.spec：commands / options / errorCodes(+hint) / 建议超时
 ```
 
 ## 3. 推荐调用顺序
@@ -63,7 +63,7 @@ discover  →  gate  →  nodes（选节点） →  check current | check node <
 
 | 命令 | 建议超时 |
 |------|----------|
-| help / install-shim | 15 s |
+| help / install-shim / update-check | 15 s |
 | discover / nodes | 30 s |
 | gate | 45 s |
 | env | 120 s |

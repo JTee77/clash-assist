@@ -119,12 +119,12 @@ pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> V
 
 #[cfg(target_os = "macos")]
 pub fn app_log_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("Library/Logs/EgressChecker"))
+    dirs::home_dir().map(|h| h.join("Library/Logs/ClashAssist"))
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn app_log_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("logs").join("EgressChecker"))
+    dirs::data_dir().map(|d| d.join("logs").join("ClashAssist"))
 }
 
 /// Per-client controller discovery inputs. `yaml_paths` may use `~` and may be
