@@ -21,7 +21,10 @@ command -v pnpm >/dev/null || { echo "pnpm required"; exit 1; }
 command -v rustc >/dev/null || { echo "rustc/cargo required"; exit 1; }
 
 pnpm install
+scripts/build-assets-car.sh  # refresh icons/Assets.car from AppIcon.icon (Tauri's own actool run is broken on Xcode 27)
 pnpm tauri build
+RES="src-tauri/target/release/bundle/macos/Clash Assist.app/Contents/Resources"
+[[ -s "$RES/Assets.car" ]] || { echo "error: Assets.car missing from app bundle" >&2; exit 1; }
 scripts/dmg-set-icon-size.sh   # Tauri 无 icon-size 配置：把 DMG 图标改为 96
 
 echo
