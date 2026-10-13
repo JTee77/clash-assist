@@ -5,5 +5,18 @@
 	<!-- Liquid Glass icon from precompiled icons/Assets.car (see scripts/build-assets-car.sh) -->
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<!-- OS-level localized display name: Resources/<lang>.lproj/InfoPlist.strings (src-tauri/locales) -->
+	<key>CFBundleDisplayName</key>
+	<string>Clash Assist</string>
+	<key>LSHasLocalizedDisplayName</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+		<string>zh-Hant</string>
+	</array>
 </dict>
 </plist>

@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod app_menu;
 mod cli_shim;
 mod cli_serve;
 mod dns;
@@ -683,7 +685,10 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu::build);
+    builder
         .setup(|app| {
             use tauri::Manager;
             migrate_legacy_identifier_dirs(&app.config().identifier);

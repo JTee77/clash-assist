@@ -2,6 +2,7 @@
 # Tauri 2's DMG bundler has no icon-size option (create-dmg default 128).
 # Post-process the built DMG so Finder shows icons at ICON_SIZE (default 96), matching
 # src-tauri/dmg background layout (window 540x360, app (140,92), Applications (400,92)).
+# Also renames the volume to DMG_VOLUME_NAME (default 「Clash伴侣」).
 # Usage: scripts/dmg-set-icon-size.sh [path/to.dmg] [icon_size]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,6 +13,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 hdiutil convert "$DMG" -format UDRW -o "$TMP/rw.dmg" -quiet
 MNT="$(hdiutil attach "$TMP/rw.dmg" -readwrite -noverify -noautoopen | awk -F'\t' '/Apple_HFS/{print $NF}')"
+VOL_NAME="${DMG_VOLUME_NAME:-Clash伴侣}"  # 挂载后的卷名（文件名保持 ASCII）
+if [[ "$(basename "$MNT")" != "$VOL_NAME" ]]; then
+  diskutil rename "$MNT" "$VOL_NAME" >/dev/null
+  MNT="$(dirname "$MNT")/$VOL_NAME"
+fi
 VOL="$(basename "$MNT")"
 osascript <<OSA
 tell application "Finder"
