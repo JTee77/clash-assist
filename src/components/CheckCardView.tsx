@@ -1,9 +1,12 @@
+import { useI18n } from "../i18n";
 import { useState } from "react";
 import type { CheckCard } from "../lib/egress/types";
 import { StatusBadge } from "./StatusBadge";
 
 export function CheckCardView({ card }: { card: CheckCard }) {
-  const conclusion = card.conclusion ?? card.summary ?? "尚未检测";
+  const { t, td } = useI18n();
+  const conclusionRaw = card.conclusion ?? card.summary ?? "尚未检测";
+  const conclusion = td(conclusionRaw);
   const process = card.process ?? card.detail;
   const suggestion = card.suggestion ?? card.tip;
   const [processOpen, setProcessOpen] = useState(false);
@@ -12,11 +15,11 @@ export function CheckCardView({ card }: { card: CheckCard }) {
   return (
     <article className="card card-dense">
       <div className="card-top">
-        <h3>{card.title}</h3>
-        <StatusBadge level={card.level} conclusion={conclusion} />
+        <h3>{td(card.title)}</h3>
+        <StatusBadge level={card.level} conclusion={conclusionRaw} />
       </div>
       <div className="card-conclusion">{conclusion}</div>
-      {suggestion ? <div className="card-suggestion">{suggestion}</div> : null}
+      {suggestion ? <div className="card-suggestion">{td(suggestion)}</div> : null}
       {hasProcess ? (
         <>
           <button
@@ -25,9 +28,9 @@ export function CheckCardView({ card }: { card: CheckCard }) {
             aria-expanded={processOpen}
             onClick={() => setProcessOpen((v) => !v)}
           >
-            {processOpen ? "收起过程" : "查看过程"}
+            {processOpen ? t("card.hideProcess") : t("card.showProcess")}
           </button>
-          {processOpen ? <div className="card-process">{process}</div> : null}
+          {processOpen ? <div className="card-process">{td(process)}</div> : null}
         </>
       ) : null}
     </article>

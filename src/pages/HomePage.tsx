@@ -6,6 +6,8 @@ import {
 } from "react";
 import { CheckCardView } from "../components/CheckCardView";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { LanguageToggle } from "../components/LanguageToggle";
+import { useI18n } from "../i18n";
 import { NodeCard } from "../components/NodeCard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { CheckCard, EgressReport } from "../lib/egress";
@@ -43,18 +45,26 @@ function colCountFor(vw: number): number {
   return Math.min(8, Math.max(1, Math.floor((vw - 72) / 307)));
 }
 
-/** 进度文案拆成「阶段」+「节点名」。全部检测时节点名在 CSS 里定宽截断（title 给全名）。 */
-function splitProgressDisplay(p: RunnerProgress | null): {
+/** 进度文案拆成「阶段」+「节点名」。节点名统一交由 CSS 在超长时做省略号截断（title 保留全名）。 */
+export function splitProgressDisplay(p: RunnerProgress | null): {
   phase: string;
   node?: string;
 } | null {
   if (!p?.text) return null;
-  const embedded = /^(.*?)（(.+?)）$/.exec(p.text);
+  const embedded = /^(.*?)（(.+?)）$/u.exec(p.text);
   if (embedded) {
     return { phase: embedded[1]!.trimEnd(), node: embedded[2] };
   }
-  if (p.testingNode && !p.text.includes(p.testingNode)) {
-    return { phase: p.text, node: p.testingNode };
+  const prefixed =
+    /^(正在切换到|正在检测|正在切回原先节点)[：:\s]+(.+?)(?:…|\.{3})?$/u.exec(
+      p.text,
+    );
+  if (prefixed) {
+    return { phase: prefixed[1]!, node: prefixed[2]!.trim() };
+  }
+  const cleanPhase = p.text.replace(/(?:…|\.{3})$/u, "").trimEnd();
+  if (p.testingNode && !cleanPhase.includes(p.testingNode)) {
+    return { phase: cleanPhase, node: p.testingNode };
   }
   return { phase: p.text };
 }
@@ -86,6 +96,7 @@ export function HomePage({
   onForceMockChange: (v: boolean) => void;
   onRefreshAdvanced: (override?: Partial<ControllerConfig>) => Promise<unknown>;
 }) {
+  const { t, td } = useI18n();
   const [nodeCards, setNodeCards] = useState<CheckCard[]>(NODE_PLACEHOLDERS);
   const [envCards, setEnvCards] = useState<CheckCard[]>(ENV_PLACEHOLDERS);
   const [report, setReport] = useState<EgressReport | null>(null);
@@ -318,10 +329,10 @@ export function HomePage({
   useEffect(() => {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       void getCurrentWindow()
-        .setTitle(`Clash伴侣 ${__APP_VERSION__}`)
+        .setTitle(`${t("appName")} ${__APP_VERSION__}`)
         .catch(() => {});
     }
-  }, []);
+  }, [t]);
 
   // 步骤③完成判定：三种检测路径（环境检查/测全部/测单节点）任一产出过结果
   const envDone =
@@ -387,6 +398,7 @@ export function HomePage({
   // NodeCard「再测」由 Ellie 接 onTest；此处保持接口稳定。
   const testOneNode = async (node: ProxyNode) => {
     if (running) return;
+    setMode("current");
     setNodeTestOk(false);
     setRestoreError(null);
     setRunning(true);
@@ -416,31 +428,34 @@ export function HomePage({
   return (
     <div className="home-page">
       <div className="flow-row">
-        <div className="flow-hint" aria-label="使用步骤">
+        <div className="flow-hint" aria-label={t("home.stepsAria")}>
           <span className={`fh-step ${gate?.ok ? "done" : "cur"}`}>
-            <i>{gate?.ok ? "✓" : "1"}</i>打开你的VPN软件并连上一个可用节点
+            <i>{gate?.ok ? "✓" : "1"}</i>{t("home.step1")}
             <span className="fh-arrow" aria-hidden="true">→</span>
           </span>
           <span className="fh-rest">
             <span className={`fh-step ${gate?.ok ? "done" : "todo"}`}>
-              <i>{gate?.ok ? "✓" : "2"}</i>在下方选择你使用的VPN软件 · 获取节点
+              <i>{gate?.ok ? "✓" : "2"}</i>{t("home.step2")}
               <span className="fh-arrow" aria-hidden="true">→</span>
             </span>
             <span
               className={`fh-step ${!gate?.ok ? "todo" : detectionDone ? "done" : "cur"}`}
             >
-              <i>{!gate?.ok ? "3" : detectionDone ? "✓" : "3"}</i>进行检测
+              <i>{!gate?.ok ? "3" : detectionDone ? "✓" : "3"}</i>{t("home.step3")}
             </span>
           </span>
         </div>
-        <ThemeToggle />
+        <div className="flow-toggles">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
       </div>
 
       <div className="app-header">
         <div className="home-ops-controls">
           <div className="picker-group">
             <label className="client-picker-label home-block-title" htmlFor="home-client-select">
-              你在用哪款软件？
+              {t("home.whichApp")}
             </label>
             <select
               id="home-client-select"
@@ -449,42 +464,42 @@ export function HomePage({
               onChange={(e) => onSelectClient(e.target.value)}
               title={
                 clientUnset
-                  ? "先选软件，再点「获取节点」"
-                  : CLIENT_OPTIONS.find((o) => o.id === clientId)?.hint
+                  ? t("home.pickFirstTitle")
+                  : td(CLIENT_OPTIONS.find((o) => o.id === clientId)?.hint)
               }
             >
               <option value="" disabled>
-                请选择…
+                {t("home.pleaseSelect")}
               </option>
               {CLIENT_OPTIONS.map((o) => (
                 <option key={o.id} value={o.id} disabled={o.disabled}>
-                  {o.label}
+                  {td(o.label)}
                 </option>
               ))}
             </select>
           </div>
           <div className="action-with-ok">
             <button
-              className="btn btn-primary btn-sm home-ops-refresh action-btn"
+              className="btn btn-primary action-btn"
               type="button"
               disabled={!!busy || refreshing || running || clientUnset}
-              title={clientUnset ? "请先选择软件" : undefined}
+              title={clientUnset ? t("home.pickAppFirst") : undefined}
               onClick={() => void refreshAndGate()}
             >
-              {busy || refreshing ? "获取中…" : "获取节点"}
+              {busy || refreshing ? t("home.fetching") : t("home.getNodes")}
             </button>
             {!refreshing &&
             (connection.status === "connected" && gate?.ok ? (
-              <span className="fetch-ok" title={connection.message}>
-                <span className="status-ok-mark">✓</span>成功
+              <span className="fetch-ok" title={td(connection.message)}>
+                <span className="status-ok-mark">✓</span>{t("home.success")}
               </span>
             ) : gate && !gate.ok ? (
               <>
                 <span className="fetch-fail">
-                  <span className="status-fail-mark">✗</span>失败
+                  <span className="status-fail-mark">✗</span>{t("home.failed")}
                 </span>
                 <span className="fetch-fail-msg" role="status">
-                  {gate.message}
+                  {td(gate.message)}
                 </span>
               </>
             ) : null)}
@@ -497,21 +512,21 @@ export function HomePage({
           <div className="env-section home-tray">
             <div className="env-head">
               <div className="t">
-                <span className="home-block-title">环境泄漏检查</span>
-                <span className="s">对当前出口体检 · 不需先测节点</span>
+                <span className="home-block-title">{t("home.envTitle")}</span>
+                <span className="s">{t("home.envSub")}</span>
               </div>
               <div className="env-head-actions">
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm action-btn"
+                  className="btn btn-primary action-btn"
                   disabled={envRunning || running}
                   onClick={() => void runEnvCheck()}
                 >
-                  {envRunning ? "检查中…" : envOpen ? "重新检查环境" : "开始环境检查"}
+                  {envRunning ? t("home.envChecking") : envOpen ? t("home.envRecheck") : t("home.envStart")}
                 </button>
                 {!envRunning && envCheckOk ? (
                   <span className="fetch-ok" role="status">
-                    <span className="status-ok-mark">✓</span>成功
+                    <span className="status-ok-mark">✓</span>{t("home.success")}
                   </span>
                 ) : null}
               </div>
@@ -520,7 +535,7 @@ export function HomePage({
               <>
                 {mixedPortNum == null || mixedPortNum <= 0 ? (
                   <div className="note note-compact env-tray-note">
-                    当前未检测到代理，境外探测点不可达，结论不代表 VPN 表现。
+                    {t("home.noProxyNote")}
                   </div>
                 ) : null}
                 <div className="card-grid card-grid-home env-tray-grid">
@@ -534,12 +549,12 @@ export function HomePage({
 
           <div className="node-section home-tray">
             <div className="ws-ops">
-              <span className="t home-block-title">节点检测</span>
+              <span className="t home-block-title">{t("home.nodeTitle")}</span>
               <div className="ws-ops-right">
                 <div className="action-with-ok">
                   <button
                     type="button"
-                    className="btn btn-primary btn-sm action-btn"
+                    className="btn btn-primary action-btn"
                     disabled={running || clientUnset}
                     onClick={() => {
                       setMode("all");
@@ -547,16 +562,16 @@ export function HomePage({
                       setAllConfirmOpen(true);
                     }}
                   >
-                    {running && mode === "all" ? "测全部中…" : "测全部节点"}
+                    {running && mode === "all" ? t("home.testingAll") : t("home.testAll")}
                   </button>
                   {!running && nodeTestOk ? (
                     <span className="fetch-ok" role="status">
-                      <span className="status-ok-mark">✓</span>成功
+                      <span className="status-ok-mark">✓</span>{t("home.success")}
                     </span>
                   ) : null}
                   {restoreError ? (
                     <span className="ws-restore-error" role="alert">
-                      {restoreError}
+                      {td(restoreError)}
                     </span>
                   ) : null}
                 </div>
@@ -571,7 +586,7 @@ export function HomePage({
                         {progressDisplay ? (
                           <>
                             <span className="ws-progress-phase">
-                              {progressDisplay.phase}
+                              {td(progressDisplay.phase)}
                             </span>
                             {progressDisplay.node ? (
                               <span className="ws-progress-node">
@@ -580,7 +595,7 @@ export function HomePage({
                                   className="ws-progress-node-name"
                                   title={progressDisplay.node}
                                 >
-                                  {progressDisplay.node}
+                                  {td(progressDisplay.node)}
                                 </span>
                                 ）
                               </span>
@@ -606,43 +621,52 @@ export function HomePage({
                       className="btn btn-sm ws-abort-btn"
                       onClick={onAbortAll}
                     >
-                      停止并切回
+                      {t("home.stopRestore")}
                     </button>
                   </div>
                 ) : running && testingNode ? (
                   <div className="ws-progress" role="status" aria-live="polite">
                     <span className="ws-progress-text">
-                      {progressDisplay ? (
-                        <>
-                          <span className="ws-progress-phase">
-                            {progressDisplay.phase}
+                      <span className="ws-progress-phase">
+                        {progressDisplay
+                          ? td(progressDisplay.phase)
+                          : t("home.testingNode")}
+                      </span>
+                      {(progressDisplay ? progressDisplay.node : testingNode) ? (
+                        <span className="ws-progress-node">
+                          （
+                          <span
+                            className="ws-progress-node-name"
+                            title={
+                              (progressDisplay
+                                ? progressDisplay.node
+                                : testingNode) ?? undefined
+                            }
+                          >
+                            {td(
+                              (progressDisplay
+                                ? progressDisplay.node
+                                : testingNode) ?? "",
+                            )}
                           </span>
-                          {progressDisplay.node ? (
-                            <span className="ws-progress-node">
-                              （{progressDisplay.node}）
-                            </span>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span className="ws-progress-phase">
-                          正在检测 {testingNode}…
+                          ）
                         </span>
-                      )}
+                      ) : null}
                     </span>
                   </div>
                 ) : null}
                 {switchHint && !restoreError ? (
                   <span className="ws-error" role="alert">
-                    {switchHint}
+                    {td(switchHint)}
                   </span>
                 ) : null}
                 <button
                   type="button"
                   className="ws-expand-link"
                   onClick={toggleExpandAll}
-                  title={allExpanded ? "收起全部节点详情" : "展开全部节点详情"}
+                  title={allExpanded ? t("home.collapseAllTitle") : t("home.expandAllTitle")}
                 >
-                  {allExpanded ? "收起全部详情" : "展开全部详情"}
+                  {allExpanded ? t("home.collapseAll") : t("home.expandAll")}
                 </button>
               </div>
             </div>
@@ -677,10 +701,10 @@ export function HomePage({
             className="confirm-panel card"
             role="dialog"
             aria-modal="true"
-            aria-label="确认测全部"
+            aria-label={t("home.confirmAllAria")}
           >
             <p className="confirm-body">
-              点击「确定」后，将逐个检测所有节点（约几分钟），期间会切换出口节点并消耗流量，建议暂时不要进行支付、登录等重要操作。测完会自动切回原节点。
+              {t("home.confirmAllBody")}
             </p>
             <div className="toolbar" style={{ marginBottom: 0 }}>
               <button
@@ -689,20 +713,19 @@ export function HomePage({
                 disabled={clientUnset}
                 onClick={onConfirmAll}
               >
-                确定
+                {t("home.ok")}
               </button>
               <button
                 className="btn"
                 type="button"
                 onClick={() => setAllConfirmOpen(false)}
               >
-                取消
+                {t("home.cancel")}
               </button>
             </div>
           </div>
         </div>
       ) : null}
-
 
       <div className="fold-panel card">
         <button
@@ -711,15 +734,15 @@ export function HomePage({
           aria-expanded={advancedOpen}
           onClick={() => setAdvancedOpen((v) => !v)}
         >
-          {advancedOpen ? "收起高级" : "高级（一般不用）"}
+          {advancedOpen ? t("home.advancedHide") : t("home.advancedShow")}
         </button>
         {advancedOpen ? (
           <div className="fold-body">
             <p className="muted fold-hint">
-              当前软件：<strong>{clientLabel(clientId)}</strong>
+              {t("home.currentApp")}<strong>{td(clientLabel(clientId))}</strong>
               {clientId
-                ? " — 连接参数会按该软件自动发现，一般不用改。"
-                : " — 请先选择你正在用的软件。"}
+                ? t("home.currentAppAuto")
+                : t("home.currentAppPick")}
             </p>
             <div className="form-grid" style={{ marginBottom: 12 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -729,14 +752,14 @@ export function HomePage({
                   onChange={(e) => onForceMockChange(e.target.checked)}
                 />
                 <span>
-                  <strong>Mock 演示模式</strong>
-                  <span className="muted"> — 用假数据预览界面，不连真实软件</span>
+                  <strong>{t("home.mockTitle")}</strong>
+                  <span className="muted">{t("home.mockDesc")}</span>
                 </span>
               </label>
             </div>
             <div className="form-grid">
               <p className="muted fold-hint">
-                以下字段仅在自动连接失败、或你清楚自己改过控制口时使用。
+                {t("home.manualHint")}
               </p>
               <div className="field">
                 <label>Host</label>
@@ -747,7 +770,7 @@ export function HomePage({
                 />
               </div>
               <div className="field">
-                <label>Port（external-controller）</label>
+                <label>{t("home.portLabel")}</label>
                 <input
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
@@ -755,31 +778,31 @@ export function HomePage({
                 />
               </div>
               <div className="field">
-                <label>Secret（不会写入日志 / 仓库）</label>
+                <label>{t("home.secretLabel")}</label>
                 <input
                   type="password"
                   value={secret}
                   onChange={(e) => setSecret(e.target.value)}
-                  autoComplete="off"
+                  placeholder="set-your-secret"
                   disabled={forceMock}
                 />
               </div>
               <div className="field">
-                <label>mixed-port（经代理探针）</label>
+                <label>{t("home.mixedLabel")}</label>
                 <input
                   value={mixedPort}
                   onChange={(e) => setMixedPort(e.target.value)}
                   disabled={forceMock}
                 />
               </div>
-              <div className="toolbar" style={{ marginBottom: 0 }}>
+              <div className="toolbar">
                 <button
                   className="btn btn-primary"
                   type="button"
                   disabled={!!busy || forceMock}
                   onClick={() => void applyAdvanced()}
                 >
-                  保存并测试连接
+                  {t("home.save")}
                 </button>
                 <button
                   className="btn"
@@ -787,17 +810,17 @@ export function HomePage({
                   disabled={!!busy || forceMock}
                   onClick={() => void autoDetect()}
                 >
-                  重新自动发现
+                  {t("home.rediscover")}
                 </button>
               </div>
               <p className="muted fold-hint">
-                来源：{cfg?.source ?? "—"}
+                {t("home.source")}{cfg?.source ?? "—"}
                 <br />
-                Unix 套接字：{cfg?.sockPath ?? "（无）"}
+                {t("home.unixSock")}{cfg?.sockPath ?? t("home.none")}
                 <br />
-                mixed-port：{cfg?.mixedPort ?? "—"}
+                {t("home.mixedPort")}{cfg?.mixedPort ?? "—"}
                 <br />
-                当前节点：{connection.currentProxy ?? "—"}
+                {t("home.currentNode")}{connection.currentProxy ?? "—"}
               </p>
             </div>
           </div>
@@ -805,9 +828,9 @@ export function HomePage({
       </div>
 
       <details className="about-footer">
-        <summary>关于 Clash伴侣</summary>
+        <summary>{t("home.about")}</summary>
         <div className="a-body">
-          仓库：
+          {t("home.repo")}
           <a
             href="https://github.com/JTee77/clash-assist"
             target="_blank"
@@ -816,9 +839,9 @@ export function HomePage({
             github.com/JTee77/clash-assist
           </a>
           <br />
-          致谢：Clash Verge / mihomo 社区。
+          {t("home.thanks")}
           <br />
-          请我喝杯咖啡 ☕（占位：链接或二维码待定）
+          {t("home.coffee")}
         </div>
       </details>
     </div>

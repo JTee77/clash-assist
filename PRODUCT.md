@@ -1,4 +1,4 @@
-# Clash伴侣 / Clash Assist — 产品说明（v0.2.0）
+# Clash伴侣 / Clash Assist — 产品说明（v0.2.1）
 
 ## 定位
 **Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
@@ -34,7 +34,7 @@
 
 ## 当前版本与本轮目标（0.2.0）
 
-**当前版本：0.2.0**（产品名 Clash伴侣 / Clash Assist）。
+**当前版本：0.2.1**（产品名 Clash伴侣 / Clash Assist）。
 
 本轮目标：**CLI 补齐（面向 AI 助手）**——不加与 CLI 无关的功能：
 - `install-shim` 短命令（`clash-assist`），文档写明应用内完整路径
