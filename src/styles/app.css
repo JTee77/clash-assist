@@ -110,39 +110,114 @@ select {
   overflow: hidden;
 }
 
-/* 主题切换：落在 .flow-row 右侧（与步进同排）；无托盘 */
-.theme-toggle {
-  position: static;
+/* 0.2.1：语言 + 主题两个图标下拉（收起仅显示「图标 ▾」，展开菜单显示完整选项） */
+.flow-toggles {
   display: inline-flex;
-  flex: none;
-  margin-left: auto; /* 挤到下一行时仍靠右 */
+  align-items: center;
   gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow);
+  justify-content: flex-end;
 }
-.theme-toggle-btn {
-  border: none;
+.pref-dd {
+  position: relative;
+}
+.pref-dd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  min-width: 24px;
+  min-height: 24px;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
-  border-radius: 7px;
-  padding: 4px 8px;
-  font-size: 11px;
-  font-weight: 600;
+  border-radius: 6px;
+  padding: 3px 5px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
   white-space: nowrap;
 }
-.theme-toggle-btn:hover {
+.pref-dd-btn:hover,
+.pref-dd-btn.open {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.pref-dd-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pref-dd-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+.pref-dd-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.pref-dd-glyph.is-latin {
+  font-size: 9.5px;
+  letter-spacing: -0.04em;
+}
+.pref-dd-caret {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.85;
+  transform: translateY(-0.5px);
+}
+.pref-dd-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  min-width: 112px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow), 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+.pref-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
   color: var(--text);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 5px;
+  padding: 5px 8px 5px 6px;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
 }
-.theme-toggle-btn.active {
+.pref-dd-item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.pref-dd-item.active {
   color: var(--accent);
-  background: var(--accent-soft);
+  font-weight: 600;
 }
-
+.pref-dd-check {
+  display: inline-block;
+  width: 12px;
+  font-size: 11px;
+}
 
 .main {
   flex: 1;
@@ -168,23 +243,23 @@ select {
 .home-ops-controls {
   display: flex;
   align-items: center;
-  /* dropdown → 14 → 获取节点。放得下就同一行；放不下时按钮和成功/失败整组换到下一行 */
+  /* dropdown → 14 → 获取节点。宽屏同行；与环境/节点主按钮共用 ≤720 整组换行 */
   gap: 14px;
   flex: 1 1 auto;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   overflow: visible;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .home-ops-controls > * {
   box-sizing: border-box;
 }
 .client-picker-label {
-  /* 排版由 .home-block-title 统一；此处只保留与下拉同高对齐 */
+  /* 排版由 .home-block-title 统一；与 .action-btn / 下拉同高垂直居中 */
   flex-shrink: 0;
-  line-height: 29px;
-  height: 29px;
+  line-height: var(--control-h);
+  height: var(--control-h);
   margin: 0;
   display: inline-flex;
   align-items: center;
@@ -204,10 +279,10 @@ select {
   flex: 0 1 240px;
   max-width: 100%;
   min-width: 160px;
-  height: 29px;
+  height: var(--control-h);
   margin: 0;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   font-size: 12px;
@@ -233,6 +308,7 @@ select {
   flex: none;
   white-space: nowrap;
   margin-left: 0;
+  min-height: var(--control-h);
   font-size: 12px;
   font-weight: 600;
   color: var(--pass);
@@ -258,6 +334,7 @@ select {
   flex: none;
   white-space: nowrap;
   margin-left: 0; /* 与 .fetch-ok 一样，间距由所在行 gap:8 承担 */
+  min-height: var(--control-h);
   font-size: 12px;
   font-weight: 600;
   color: var(--fail);
@@ -287,25 +364,27 @@ select {
   overflow-wrap: anywhere;
 }
 
-.btn-sm {
-  padding: 5px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.btn-primary.btn-sm {
-  padding: 5px 12px;
-}
-
+/* 共用按钮壳：高 / 圆角 / 内边距统一走 --control-* token */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--control-h);
+  min-height: var(--control-h);
+  margin: 0;
+  padding: 0 var(--control-pad-x);
   border: 1px solid var(--border);
+  border-radius: var(--control-radius);
   background: var(--bg-elevated);
-  border-radius: 10px;
-  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
@@ -319,11 +398,16 @@ select {
   border-color: transparent;
   color: var(--on-accent);
   font-weight: 600;
-  padding: 8px 14px;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
+  border-color: transparent;
   filter: brightness(1.05);
+}
+
+/* 次要小按钮（如「停止并切回」）：与主控同高同圆角，仅收窄水平内边距 */
+.btn-sm {
+  padding: 0 10px;
 }
 
 .card-grid {
@@ -602,43 +686,24 @@ select {
   color: var(--text);
   letter-spacing: 0;
   line-height: 1.3;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* --- responsive: window fill / narrow / short --- */
-/* 软件行的换行不锁宽度：放得下就跟下拉同一行，放不下由 .home-ops-controls 把按钮组整组换走。 */
-
-@media (max-width: 720px) {
-  .main{
-    padding: 8px 12px 12px;
-  }
-  .home-ops-refresh{
-    width: auto;
-  }
-  .card-grid-home{
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  }
-}
-
-@media (max-width: 480px) {
-  .card-grid-home{
-    grid-template-columns: 1fr;
-  }
-}
 
 @media (min-width: 1400px) {
-  .main{
+  .main {
     padding-left: 24px;
     padding-right: 24px;
   }
 }
 
 @media (max-height: 640px) {
-  .main{
+  .main {
     padding-top: 6px;
     padding-bottom: 8px;
   }
-  
-  
 }
 
 .star-rating {
@@ -691,6 +756,11 @@ select {
   --nc-exp-h: calc(var(--nc-h) * 2 + var(--nc-gap));
   /* 软件行「获取节点」左缘（content-inset + picker + gap）；近标题，非行最右 */
   --action-x: 376px;
+  /* 主控尺寸与圆角 token：三大主按钮 / 软件下拉 / 旁路成功失败芯片共用 */
+  --control-h: 30px;
+  --action-btn-w: 112px;
+  --control-radius: 8px;
+  --control-pad-x: 12px;
 
   /* MJ hierarchy：page → tray（环境/节点同 token）→ card；软件行是顶栏非厚托盘 */
   --tray-bg: #eceef2;
@@ -709,7 +779,7 @@ select {
 }
 
 @media (prefers-color-scheme: dark) {
-  [data-theme="system"]{
+  [data-theme="system"] {
     --tray-bg: #151820;
     --soft-row-divider: color-mix(in srgb, #fff 7%, var(--bg));
   }
@@ -750,7 +820,7 @@ select {
   flex: 0 1 240px;
 }
 
-/* 环境托盘头：主按钮左缘锁 --action-x；副标题 INLINE 贴标题右侧 */
+/* 环境托盘头：主按钮左缘锁 --action-x；副标题贴标题右侧，窄列内可自然折行 */
 .env-head {
   display: grid;
   /* tray pad-x → 首列宽 action-x - pad，第 2 列起点 = --action-x */
@@ -765,10 +835,12 @@ select {
   grid-column: 1;
   grid-row: 1;
   min-width: 0;
+  padding-right: 12px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 30px; /* 与 .action-btn 同高，基线对齐 */
+  gap: 4px 10px;
+  min-height: var(--control-h);
   flex-wrap: wrap;
 }
 .env-head-actions {
@@ -778,18 +850,14 @@ select {
   align-items: center;
   align-self: center;
   flex: none;
-  gap: 8px; /* 按钮 → 成功，与另外两个主按钮一致 */
-}
-.env-head .action-btn {
-  /* 左缘仍落在 --action-x（父 .env-head-actions 占第 2 列） */
-  flex: none;
+  gap: 8px;
 }
 .env-head .s {
   font-size: 11px;
   font-weight: 400;
   color: var(--text-muted);
   line-height: 1.35;
-  white-space: nowrap;
+  white-space: normal;
 }
 .env-tray-note {
   margin-top: 10px;
@@ -798,27 +866,36 @@ select {
   margin-top: 10px;
 }
 
-/* 节点托盘头：与 .env-head / 获取节点 共用 --action-x；
-   测全部锁动作列；进度条后紧跟停止；展开弱链 margin-left:auto 行最右 */
+/* 节点托盘头：与 .env-head 完全同构的 Grid 两列布局，首列宽 calc(var(--action-x) - var(--tray-pad-x))，
+   确保宽屏下三颗主按钮（获取节点 / 环境检查 / 测全部）严格左缘对齐在 --action-x；
+   窗口收窄至 ≤1100px 时三颗主按钮同步换到各自标题下方靠左，释放全行宽度以完整展示正在检测的节点名称 */
 .ws-ops {
   display: grid;
   grid-template-columns: calc(var(--action-x) - var(--tray-pad-x)) 1fr;
+  grid-template-rows: auto;
+  column-gap: 0;
+  row-gap: 0;
   align-items: center;
   justify-items: start;
   margin: 0 0 12px;
   padding: 0;
 }
 .ws-ops .t {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
+  padding-right: 12px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  min-height: 30px;
+  min-height: var(--control-h);
 }
 .ws-ops-right {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   align-items: center;
-  /* 测全部 →（进度+停止）→ … → 展开(行最右) */
-  gap: 14px;
+  gap: 8px 14px;
   width: 100%;
   min-width: 0;
   flex-wrap: wrap;
@@ -827,13 +904,13 @@ select {
 .action-with-ok {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   gap: 8px;
   max-width: 100%;
   min-width: 0;
 }
-/* 「展开/收起全部详情」：弱化三级链，推到节点检测行最右 */
+/* 「展开/收起全部详情」：弱化三级链，推到节点检测首行最右 */
 .ws-expand-link {
   appearance: none;
   -webkit-appearance: none;
@@ -856,12 +933,13 @@ select {
   color: var(--text);
   opacity: 0.9;
 }
-/* 动作条上的错误通报：只在出错时出现（成功/过程状态不落字条，进度消失即反馈） */
+/* 动作条上的错误通报：紧跟按钮右侧，空间不足时自然折行 */
 .ws-error {
+  flex: 0 0 auto;
   font-size: 12px;
   color: var(--fail);
   line-height: 1.4;
-  min-width: 0;
+  max-width: 100%;
 }
 /* 切回失败：一句红字跟在「测全部」后面；整句换行，不拆开 */
 .ws-restore-error {
@@ -875,43 +953,16 @@ select {
   white-space: nowrap;
 }
 
-/* 文字 | 条 | 停止 同级横排：文字按自身宽度，条固定 72，停止不叠条上。
-   文字↔条 8px，条↔停止 10px。多出来的空白只在「停止并切回」和「展开全部详情」之间。 */
-.ws-progress-group {
+/* 进度紧跟「测全部」按钮同行右侧；内部各项锁 flex: 0 0 auto 禁止相互挤压遮盖，节点名称完整显示不截断 */
+.ws-progress-group,
+.ws-progress {
   display: inline-flex;
   align-items: center;
   flex-wrap: nowrap;
-  /* 不许被压扁：放不下时由 .ws-ops-right 整簇换到按钮下一行 */
   flex: 0 0 auto;
   gap: 8px 10px;
-  width: max-content;
-  max-width: none;
-  min-width: max-content;
-  overflow: visible;
-}
-/* 全部检测：进度文字定宽（节点名省略号截断），整组宽度固定，
-   换不换行只取决于窗口宽度，检测中不跳。 */
-.ws-progress-group .ws-progress-text {
-  display: inline-flex;
-  align-items: baseline;
-  width: 260px;
-  min-width: 260px;
-  max-width: 260px;
-  overflow: hidden;
-}
-.ws-progress-group .ws-progress-phase {
-  flex: 0 0 auto;
-}
-.ws-progress-group .ws-progress-node {
-  display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 0;
-}
-.ws-progress-group .ws-progress-node-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .ws-progress-main {
   display: inline-flex;
@@ -920,31 +971,28 @@ select {
   gap: 8px;
   max-width: 100%;
 }
-.ws-progress {
+.ws-progress-text {
   display: inline-flex;
-  align-items: center;
-  flex-wrap: nowrap;
+  align-items: baseline;
   flex: 0 0 auto;
-  gap: 8px;
-  width: max-content;
-  max-width: none;
-  min-width: max-content;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ws-progress-phase {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.ws-progress-node {
+  display: inline-flex;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.ws-progress-node-name {
+  white-space: nowrap;
 }
 .ws-abort-btn {
   flex: 0 0 auto;
-  white-space: nowrap;
-  margin-left: 0;
-}
-.ws-progress-text {
-  font-size: 12px;
-  font-weight: 600;
-  flex: 0 0 auto;
-  width: max-content;
-  min-width: max-content;
-  white-space: nowrap;
-}
-.ws-progress-phase,
-.ws-progress-node {
   white-space: nowrap;
 }
 .ws-progress-bar {
@@ -965,21 +1013,11 @@ select {
   transition: width 0.18s ease-out;
 }
 
-/* 三大主按钮：同高同圆角同蓝；左缘同锁 --action-x（近标题非行最右）
-   （获取节点 / 重新检查环境 / 测全部节点） */
+/* 三大主按钮（获取节点 / 环境检查 / 测全部节点）：高与圆角继承 .btn，此处仅锁等宽 */
 .action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 112px;
-  min-width: 112px;
-  height: 30px;
-  line-height: 1;
-  padding: 0 12px;
-  box-sizing: border-box;
+  width: var(--action-btn-w);
+  min-width: var(--action-btn-w);
   flex: none;
-  white-space: nowrap;
-  border-radius: 8px;
 }
 
 /* 节点瀑布流：JS 定列（列数随容器宽度自适应），展开只向下推。
@@ -1001,15 +1039,16 @@ select {
   gap: var(--nc-gap);
 }
 
-/* 三个主按钮共用一个换行点（约 1200）：一起到标题下面，不是各自看自己那一行。
-   更宽时三个都留在标题旁边。窄时左对齐，成功或失败不裁切。 */
-@media (max-width: 1200px) {
+/* 共用换行点 ≤1100px：当窗口收窄到节点检测行右侧不足以容纳完整节点名与进度组时，
+   三颗主按钮（获取节点 / 环境检查 / 测全部）在同一时刻一起换到各自标题下方并靠左，
+   从而释放整行宽度让正在测的节点名称完整显示 */
+@media (max-width: 1100px) {
+  .home-ops-controls {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
   .home-ops-controls .picker-group {
     flex: 1 1 100%;
-    max-width: 100%;
-  }
-  .home-ops-controls .action-with-ok {
-    flex: 0 1 auto;
     max-width: 100%;
   }
   .env-head,
@@ -1017,91 +1056,70 @@ select {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    grid-template-columns: none;
+    gap: 8px;
     width: 100%;
-    max-width: 100%;
     min-width: 0;
   }
   .env-head .t,
   .ws-ops .t {
+    flex: none;
     width: 100%;
-    max-width: 100%;
-  }
-  .env-head .s {
-    white-space: normal;
+    padding-right: 0;
   }
   .env-head-actions {
     width: 100%;
-    max-width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
-    margin-top: 8px;
+  }
+  .ws-ops-right {
+    width: 100%;
+  }
+}
+
+/* ≤760px：当全行宽度不足以将「测全部 + 完整节点名进度组 + 展开全部详情」排在同一行时，
+   「展开全部详情」固定在「测全部」同一行最右，不单独掉行；进度组整组落到下一行占满全宽靠左 */
+@media (max-width: 760px) {
+  .main {
+    padding: 8px 12px 12px;
+  }
+  .card-grid-home {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
   .ws-ops-right {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
     column-gap: 12px;
     row-gap: 8px;
-    margin-top: 8px;
   }
   .ws-ops-right .action-with-ok {
     grid-column: 1;
     grid-row: 1;
     justify-self: start;
-    max-width: 100%;
   }
   .ws-expand-link {
     grid-column: 2;
     grid-row: 1;
     justify-self: end;
     margin-left: 0;
-    white-space: nowrap;
   }
   .ws-progress-group,
   .ws-progress,
   .ws-error {
     grid-column: 1 / -1;
     justify-self: start;
-  }
-  /* 文字定宽，整组宽度固定；窄到放不下才让停止按钮（小按钮、靠左）换到下一行 */
-  .ws-progress-group {
     width: 100%;
-    max-width: 100%;
-    min-width: 0;
     flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-  .ws-progress {
-    width: max-content;
-    max-width: 100%;
-    min-width: max-content;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-  }
-  .ws-progress-text {
-    flex: 0 0 auto;
-    width: max-content;
-    min-width: max-content;
-    white-space: nowrap;
-  }
-  .ws-progress-phase,
-  .ws-progress-node {
-    white-space: nowrap;
-  }
-  .ws-abort-btn {
-    flex: 0 0 auto;
-    margin-left: 0;
   }
 }
 
-
-@media (min-width: 1201px) {
-  .home-ops-controls {
-    flex-wrap: nowrap;
+/* 窄窗（≤560px）：环境泄漏检查卡片单列排布；极窄下允许进度主区自然折行，节点名依然完整显示不截断 */
+@media (max-width: 560px) {
+  .card-grid-home {
+    grid-template-columns: 1fr;
+  }
+  .ws-progress-main {
+    flex-wrap: wrap;
   }
 }
 
@@ -1569,7 +1587,7 @@ html.glass .nc-detail {
   container-type: inline-size;
   container-name: flowrow;
 }
-.flow-row > .theme-toggle {
+.flow-row > .flow-toggles {
   grid-column: 2;
   grid-row: 1;
   justify-self: end;
@@ -1659,7 +1677,7 @@ html.glass .nc-detail {
   }
 }
 @container flowrow (max-width: 450px) {
-  .flow-row > .theme-toggle {
+  .flow-row > .flow-toggles {
     grid-column: 1 / -1;
     grid-row: 1;
     justify-self: end;

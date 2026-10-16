@@ -1,4 +1,4 @@
-# Clash Assist / Clash伴侣 CLI（0.2.0）
+# Clash Assist / Clash伴侣 CLI（0.2.1）
 
 与图形界面共用 `src/lib/runner`、`egress`、`score`、`mihomo`。通过 **`--cli`** 启动隐藏窗口，在 WebView 内调用同一套 Tauri 能力。一次性命令结束后把 **一行 JSON（CliEnvelope）** 打到 stdout 并退出；**`serve`** 常驻本机 loopback HTTP，直到 Ctrl+C。
 
@@ -93,7 +93,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 ```json
 {
   "ok": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "command": "discover",
   "ranAt": "2026-10-06T00:00:00.000Z",
   "data": { }

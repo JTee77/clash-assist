@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n";
 import { useEffect, useState } from "react";
 import { checkUpdateOnce, openReleasePage, type UpdateInfo } from "../lib/update";
 
@@ -9,6 +10,7 @@ import { checkUpdateOnce, openReleasePage, type UpdateInfo } from "../lib/update
 export function TitleBar() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const { t } = useI18n();
 
   useEffect(() => {
     let alive = true;
@@ -23,24 +25,24 @@ export function TitleBar() {
   return (
     <div className="titlebar" data-tauri-drag-region>
       <span className="titlebar-title" data-tauri-drag-region>
-        Clash伴侣 {__APP_VERSION__}
+        {t("appName")} {__APP_VERSION__}
       </span>
       {update && !dismissed && (
         <span className="update-pill" role="status">
           <i className="update-pill-dot" aria-hidden="true" />
-          <span className="update-pill-text">发现新版本 {update.latest}</span>
+          <span className="update-pill-text">{t("update.found", { v: update.latest })}</span>
           <button
             type="button"
             className="update-pill-go"
             onClick={() => void openReleasePage(update.url)}
           >
-            去下载
+            {t("update.go")}
           </button>
           <button
             type="button"
             className="update-pill-close"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t("close")}
+            title={t("close")}
             onClick={() => setDismissed(true)}
           >
             ×

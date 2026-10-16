@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n";
 import type { CheckLevel } from "../lib/egress/types";
 
 const LABELS: Record<CheckLevel, string> = {
@@ -33,5 +34,6 @@ export function StatusBadge({
   level: CheckLevel;
   conclusion?: string | null;
 }) {
-  return <span className={`badge ${level}`}>{badgeLabel(level, conclusion)}</span>;
+  const { td } = useI18n();
+  return <span className={`badge ${level}`}>{td(badgeLabel(level, conclusion))}</span>;
 }

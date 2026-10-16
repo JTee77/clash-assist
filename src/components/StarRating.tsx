@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n";
 import { useId } from "react";
 import type { NodeStars } from "../lib/score/types";
 
@@ -26,14 +27,15 @@ export function StarRating({
   size?: number;
 }) {
   const clipId = useId().replace(/:/g, "");
+  const { t } = useI18n();
   if (stars === "unavailable") {
     return (
-      <span className="star-rating star-rating-na" title="不可用">
-        不可用
+      <span className="star-rating star-rating-na" title={t("star.unavailable")}>
+        {t("star.unavailable")}
       </span>
     );
   }
-  const title = `${stars} 星`;
+  const title = t("star.count", { n: stars });
   return (
     <span
       className="star-rating"

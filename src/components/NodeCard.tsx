@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import type { CheckCard } from "../lib/egress/types";
 import { formatCardBrief } from "../lib/egress/cardBrief";
@@ -50,6 +51,7 @@ export function NodeCard({
   onToggle: () => void;
   onTest: () => void;
 }) {
+  const { t, td } = useI18n();
   const chips = nodeCapabilityChips(node);
   // 判定"测过"看有没有评分结果（含"不可用"），而非有没有明细卡：
   // scoreDeadNode 返回 stars=不可用 但 cards=[]，旧逻辑会把它误显示为"未测"。
@@ -95,7 +97,7 @@ export function NodeCard({
           onToggle();
         }}
       >
-        {expanded ? "收起 ▴" : "详情 ▾"}
+        {expanded ? t("node.collapse") : t("node.details")}
       </button>
       <button
         type="button"
@@ -106,7 +108,7 @@ export function NodeCard({
           onTest();
         }}
       >
-        {testing ? "检测中…" : "再测"}
+        {testing ? t("node.testingEllipsis") : t("node.retest")}
       </button>
     </div>
   ) : (
@@ -119,7 +121,7 @@ export function NodeCard({
         onTest();
       }}
     >
-      {testing ? "检测中…" : "测"}
+      {testing ? t("node.testingEllipsis") : t("node.test")}
     </button>
   );
 
@@ -136,7 +138,7 @@ export function NodeCard({
             {hasResult ? (
               <StarRating stars={score!.stars} size={13} />
             ) : (
-              <span className="nc-untested">{testing ? "检测中" : "未测"}</span>
+              <span className="nc-untested">{testing ? t("node.testing") : t("node.untested")}</span>
             )}
           </div>
           <div className="nc-row nc-row-bot">
@@ -147,7 +149,7 @@ export function NodeCard({
                   {c}
                 </span>
               ))}
-              {isCurrent ? <span className="nc-badge">使用中</span> : null}
+              {isCurrent ? <span className="nc-badge">{t("node.inUse")}</span> : null}
             </div>
             <div className="nc-side">{action}</div>
           </div>
@@ -165,7 +167,7 @@ export function NodeCard({
                       key={c.id}
                       type="button"
                       className={`nc-cell${on ? " on" : ""}`}
-                      title={brief}
+                      title={td(brief)}
                       onClick={(e) => {
                         e.stopPropagation();
                         setDetailId((prev) => (prev === c.id ? null : c.id));
@@ -173,18 +175,18 @@ export function NodeCard({
                     >
                       <div className="nc-cl">
                         <span className={`nc-dot-mini ${levelClass(c.level)}`} />
-                        <span className="nc-t">{c.title}</span>
+                        <span className="nc-t">{td(c.title)}</span>
                       </div>
-                      <div className={`nc-cv ${levelClass(c.level)}`}>{brief}</div>
+                      <div className={`nc-cv ${levelClass(c.level)}`}>{td(brief)}</div>
                     </button>
                   );
                 })}
               </div>
             ) : score ? (
-              <div className="nc-dead">{score.blurb}</div>
+              <div className="nc-dead">{td(score.blurb)}</div>
             ) : (
               <div className="nc-dead">
-                {testing ? "检测中…" : "尚未检测"}
+                {testing ? t("node.testingEllipsis") : t("card.notTested")}
               </div>
             )}
           </div>
@@ -195,12 +197,12 @@ export function NodeCard({
         <aside
           className="nc-detail"
           role="dialog"
-          aria-label={`${detailCard.title} 详情`}
+          aria-label={t("node.detailAria", { title: td(detailCard.title) })}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="nc-detail-top">
             <div className="nc-detail-head">
-              <span className="nc-detail-title">{detailCard.title}</span>
+              <span className="nc-detail-title">{td(detailCard.title)}</span>
               <StatusBadge
                 level={detailCard.level}
                 conclusion={detailBadgeConclusion}
@@ -209,7 +211,7 @@ export function NodeCard({
             <button
               type="button"
               className="nc-detail-close"
-              aria-label="关闭详情"
+              aria-label={t("node.closeDetail")}
               onClick={(e) => {
                 e.stopPropagation();
                 setDetailId(null);
@@ -219,11 +221,11 @@ export function NodeCard({
             </button>
           </div>
           <div className="nc-detail-conclusion">
-            {detailCard.conclusion ?? detailCard.summary ?? "—"}
+            {td(detailCard.conclusion ?? detailCard.summary ?? "—")}
           </div>
           {detailCard.suggestion ?? detailCard.tip ? (
             <div className="nc-detail-suggestion">
-              {detailCard.suggestion ?? detailCard.tip}
+              {td(detailCard.suggestion ?? detailCard.tip)}
             </div>
           ) : null}
           {hasProcess ? (
@@ -237,10 +239,10 @@ export function NodeCard({
                   setProcessOpen((v) => !v);
                 }}
               >
-                {processOpen ? "收起过程" : "查看过程"}
+                {processOpen ? t("card.hideProcess") : t("card.showProcess")}
               </button>
               {processOpen ? (
-                <pre className="nc-detail-process">{detailProcess}</pre>
+                <pre className="nc-detail-process">{td(detailProcess)}</pre>
               ) : null}
             </>
           ) : null}
