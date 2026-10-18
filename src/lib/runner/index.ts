@@ -16,3 +16,15 @@ export {
   restoreFailedMessage,
   type RestorePlan,
 } from "./restore";
+export {
+  RESULT_CACHE_PREFIX,
+  RESULT_CACHE_TTL_MS,
+  cacheScopeFor,
+  loadCachedResults,
+  saveCachedScores,
+  saveCachedEnvCards,
+  mergeScoreList,
+  sortNodeScores,
+  formatCachedTime,
+  type CachedResultEntry,
+} from "./resultCache";

@@ -19,6 +19,9 @@ import {
   probeGeminiUnlock,
   sampleBandwidth,
   sampleLatency,
+  timeoutCard,
+  unlockCard,
+  withCardDeadline,
   withFailRetryUnlock,
 } from "./diagnostics";
 import type { CheckCard, EgressReport, UnlockResult } from "./types";
@@ -42,79 +45,6 @@ export const NODE_CARD_IDS = [
   "google-play",
 ] as const;
 
-function unlockCard(
-  id: string,
-  title: string,
-  result: UnlockResult,
-): CheckCard {
-  let level: CheckCard["level"] = "fail";
-  if (result.supported) {
-    level = result.level === "full" ? "pass" : "warn";
-  } else if (result.level === "unknown") {
-    level = "unknown";
-  }
-  const processParts = [
-    result.lines?.length ? `结果对照：${result.lines.join("；")}` : "",
-    result.probed?.length ? `测了什么：${result.probed.join("；")}` : "",
-    result.notProbed?.length ? `没测什么：${result.notProbed.join("；")}` : "",
-    result.region ? `出口提示地区：${result.region}` : "",
-  ].filter(Boolean);
-  return {
-    id,
-    title,
-    level,
-    conclusion: result.status,
-    process: processParts.join("\n"),
-    metrics: {
-      unlockSupported: result.supported,
-      unlockLevel: result.level ?? null,
-      unlockRegion: result.region,
-    },
-  };
-}
-
-function timeoutCard(id: string, title: string): CheckCard {
-  return {
-    id,
-    title,
-    level: "unknown",
-    conclusion: "超时未响应",
-    process: "探测超时或卡住，已按截止时间结束本项。",
-  };
-}
-
-async function withDeadline(
-  title: string,
-  id: string,
-  work: (signal: AbortSignal) => Promise<CheckCard>,
-  deadlineMs: number,
-): Promise<CheckCard> {
-  const ac = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work(ac.signal),
-      new Promise<CheckCard>((resolve) => {
-        timer = setTimeout(() => {
-          ac.abort();
-          resolve(timeoutCard(id, title));
-        }, deadlineMs);
-      }),
-    ]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      id,
-      title,
-      level: "unknown",
-      conclusion: "未能判定",
-      process: msg,
-    };
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 export type NodeRunOptions = {
   mixedPort?: number | null;
   mihomoConfig?: ControllerConfig | null;
@@ -137,7 +67,7 @@ export async function runNodeDiagnostics(
   };
 
   const reach = push(
-    await withDeadline(
+    await withCardDeadline(
       "连通性",
       "reachability",
       (signal) => checkReachability(mixedPort, { signal }),
@@ -151,21 +81,21 @@ export async function runNodeDiagnostics(
   try {
     exit = await Promise.race([
       fetchExitIp(mixedPort, exitAc.signal),
-    new Promise<Awaited<ReturnType<typeof fetchExitIp>>>((resolve) => {
-      exitTimer = setTimeout(() => {
-        exitAc.abort();
-        resolve({
-          ip: null,
-          country: null,
-          countryCode: null,
-          org: null,
-          isp: null,
-          hosting: null,
-          ipTypeLabel: "--",
-        });
-      }, 5000);
-    }),
-  ]);
+      new Promise<Awaited<ReturnType<typeof fetchExitIp>>>((resolve) => {
+        exitTimer = setTimeout(() => {
+          exitAc.abort();
+          resolve({
+            ip: null,
+            country: null,
+            countryCode: null,
+            org: null,
+            isp: null,
+            hosting: null,
+            ipTypeLabel: "--",
+          });
+        }, 5000);
+      }),
+    ]);
   } finally {
     if (exitTimer) clearTimeout(exitTimer);
   }
@@ -278,7 +208,7 @@ export async function runNodeDiagnostics(
   ];
 
   const settled = await mapPool(jobs, 3, async (job) => {
-    const c = await withDeadline(job.title, job.id, job.run, job.deadlineMs);
+    const c = await withCardDeadline(job.title, job.id, job.run, job.deadlineMs);
     return push(c);
   });
 

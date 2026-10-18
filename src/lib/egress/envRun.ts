@@ -14,6 +14,7 @@ import {
   fetchIpCountry,
   probeDirectV4,
   probeV4Via,
+  withCardDeadline,
 } from "./diagnostics";
 import { localeCountry } from "./leakMatrix";
 import type { CheckCard, ExitIpInfo } from "./types";
@@ -25,48 +26,6 @@ export const ENV_CARD_IDS = [
   "webrtc",
   "split-routing",
 ] as const;
-
-function timeoutCard(id: string, title: string): CheckCard {
-  return {
-    id,
-    title,
-    level: "unknown",
-    conclusion: "超时未响应",
-    process: "探测超时或卡住，已按截止时间结束本项。",
-  };
-}
-
-async function withDeadline(
-  title: string,
-  id: string,
-  work: (signal: AbortSignal) => Promise<CheckCard>,
-  deadlineMs: number,
-): Promise<CheckCard> {
-  const ac = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work(ac.signal),
-      new Promise<CheckCard>((resolve) => {
-        timer = setTimeout(() => {
-          ac.abort();
-          resolve(timeoutCard(id, title));
-        }, deadlineMs);
-      }),
-    ]);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      id,
-      title,
-      level: "unknown",
-      conclusion: "未能判定",
-      process: msg,
-    };
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 export type EnvRunOptions = {
   mixedPort?: number | null;
@@ -181,7 +140,7 @@ export async function runEnvDiagnostics(
 
   const cards: CheckCard[] = [];
   for (const job of jobs) {
-    const c = await withDeadline(job.title, job.id, job.run, job.deadlineMs);
+    const c = await withCardDeadline(job.title, job.id, job.run, job.deadlineMs);
     cards.push(push(c));
   }
   return cards;

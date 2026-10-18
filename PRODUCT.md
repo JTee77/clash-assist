@@ -1,4 +1,4 @@
-# Clash伴侣 / Clash Assist — 产品说明（v0.2.1）
+# Clash伴侣 / Clash Assist — 产品说明（v0.2.2）
 
 ## 定位
 **Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
@@ -31,30 +31,16 @@
 - 账号体系、云同步、可识别用户的遥测
 - 对无开放 API 的客户端假装「全节点扫遍」
 - 宣称「翻墙 / 突破防火墙」
+- **在软件内直接切换/选用日常节点**：本软件严格定位为「只做检测（只读观察者）」，深测临时切换后必原样切回，绝不永久修改用户的代理策略组选择（避免破坏 Rule 分流 / URL-Test 自动选择，保持零副作用心智与极简卡片）
+- **Claude 解锁检测**：Claude 封号受多重风控因素影响（共享 IP 池密度、IP 跳变、指纹、账号/支付等），匿名探针仅能看网页可达性，无法判断账号安全；为避免给出虚假的「可用」安全感导致用户被封号并归咎软件，坚决不测
 
-## 当前版本与本轮目标（0.2.0）
+## 近期版本更新
 
-**当前版本：0.2.1**（产品名 Clash伴侣 / Clash Assist）。
+**当前版本：0.2.2**（产品名 Clash伴侣 / Clash Assist）
 
-本轮目标：**CLI 补齐（面向 AI 助手）**——不加与 CLI 无关的功能：
-- `install-shim` 短命令（`clash-assist`），文档写明应用内完整路径
-- `check` / `env` 往 stderr 写 NDJSON 进度（`--no-progress` 关闭），stdout 仍是一行 envelope
-- `nodes` 全量节点列表（`--region` / `--match` / `--limit`）；`discover` 行为不变
-- 子集检测：`check all --region/--match/--limit`、`check nodes <名…>`；serve `/v1/check/all`、`/v1/nodes` 接受同样的 body
-- 规则模式下 `currentProxy` 与 GUI 同一判定（修复 CLI 恒为 null），识别不到时给 `currentProxyReason`
-- 输出数字取整；macOS < 14 跑 `check` / `env` 立即 `os_unsupported`；每个错误码带中文 `hint`
-- `help --json` 的 `data.spec` 机器可读清单；新增 [docs/AGENTS-CLI.md](./docs/AGENTS-CLI.md)
-- 合入 ad-hoc 签名 + DMG 背景（[PR #23](https://github.com/JTee77/clash-assist/pull/23)）
-
-### 0.1.16
-
-目标：**CLI 收口**（闸门、严格解析、切回、Ctrl+C、文档）+ **最小可用 `serve`**（127.0.0.1 + token 鉴权，映射 discover/gate/env/check）。许可证已改为 **GPL-3.0**（[PR #20](https://github.com/JTee77/clash-assist/pull/20)）。CLI 收口见 [PR #21](https://github.com/JTee77/clash-assist/pull/21)；`serve` 见 [PR #22](https://github.com/JTee77/clash-assist/pull/22)。
-
-0.1.15 已发：窄窗排版、使用中识别、FlClash 即将支持、商店只写通/不通、取消记录过期清理等。
-
-图标本版不动。
-
-「明确不做」见上文，本版不变。
+- **0.2.2**：新增节点按地区与关键词筛选、支持仅测筛选出的节点；新增检测结果本地自动保存（重开应用自动回填上次结果）；优化 Gemini 解锁检测准确性。
+- **0.2.1**：新增简体中文 / 繁體中文 / English 多语言支持（可跟随系统或手动切换）；优化不同窗口宽度下的按钮与布局自适应表现。
+- **0.2.0**：正式更名为 **Clash伴侣 / Clash Assist**，更换全新应用图标与安装包界面，新增启动更新提示。
 
 ## 当前产品形态（0.1.12 基线 → 0.1.17）
 

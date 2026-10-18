@@ -3,8 +3,12 @@ import { langFromTag } from "./lang";
 import { zhHans } from "./locales/zh-Hans";
 import { zhHant } from "./locales/zh-Hant";
 import { en } from "./locales/en";
+import { EN_RULES } from "./enRules";
 import { loadHant, toEnglish, toHant } from "./dynamic";
 import { splitProgressDisplay } from "../pages/HomePage";
+import { REGION_RULES, shortRegionName } from "../lib/mihomo/regions";
+import { ENV_PLACEHOLDERS, NODE_PLACEHOLDERS } from "../lib/runner/placeholders";
+import { scoreDeadNode, scoreNodeFromCards } from "../lib/score";
 
 describe("splitProgressDisplay", () => {
   it("splits embedded parenthesized node name", () => {
@@ -97,6 +101,44 @@ describe("dynamic English", () => {
 
   it("leaves non-Chinese text untouched", () => {
     expect(toEnglish("HK-1 · 42 ms")).toBe("HK-1 · 42 ms");
+  });
+
+  it("translates all region names and short region names without residual CJK", () => {
+    const allRegions = [...REGION_RULES.map(([r]) => r), "其他地区"];
+    for (const reg of allRegions) {
+      const fullEn = toEnglish(reg);
+      const shortEn = toEnglish(shortRegionName(reg));
+      expect(fullEn, `region ${reg}`).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(shortEn, `shortRegion ${reg}`).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+  });
+
+  it("translates all EN_RULES templates, placeholders, and score blurbs with zero CJK leak", () => {
+    for (const [zhPattern, enTarget] of EN_RULES) {
+      expect(enTarget, `EN_RULES target for: ${zhPattern}`).not.toMatch(/[\u4e00-\u9fff]/);
+      const sample = zhPattern.replace(/\{(\d+)\}/g, (_, i) => `ARG${i}`);
+      const out = toEnglish(sample);
+      expect(out, `toEnglish(${sample})`).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+
+    for (const c of [...NODE_PLACEHOLDERS, ...ENV_PLACEHOLDERS]) {
+      expect(toEnglish(c.title)).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(toEnglish(c.conclusion)).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+
+    const dead = scoreDeadNode("HK 01", "延迟探测失败，按不可用处理。");
+    expect(toEnglish(dead.blurb)).not.toMatch(/[\u4e00-\u9fff]/);
+    for (const b of dead.breakdown) {
+      expect(toEnglish(b.label)).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(toEnglish(b.note)).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+
+    const scored = scoreNodeFromCards("US 01", NODE_PLACEHOLDERS);
+    expect(toEnglish(scored.blurb)).not.toMatch(/[\u4e00-\u9fff]/);
+    for (const b of scored.breakdown) {
+      expect(toEnglish(b.label)).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(toEnglish(b.note)).not.toMatch(/[\u4e00-\u9fff]/);
+    }
   });
 });
 
