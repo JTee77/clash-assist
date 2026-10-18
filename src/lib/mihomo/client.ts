@@ -16,7 +16,7 @@ import {
   type ProxyInfo,
   type ProxyNode,
 } from "./types";
-import { detectRegion } from "./regions";
+import { detectRegion, detectRegions } from "./regions";
 import { resolveCurrentProxy } from "./currentProxy";
 import { mockProxiesRaw } from "./mock";
 import {
@@ -210,11 +210,11 @@ function isJunkName(name: string): boolean {
   return JUNK_NAME_KEYWORDS.some((k) => name.includes(k));
 }
 
-function toNode(name: string, p: ProxyInfo): ProxyNode {
+function toNode(name: string, p: ProxyInfo, region?: string): ProxyNode {
   return {
     name,
     type: p.type,
-    region: detectRegion(name),
+    region: region ?? detectRegion(name),
     udp: p.udp,
     xudp: p.xudp,
     uot: p.uot,
@@ -236,12 +236,13 @@ export function filterNodes(
   proxies: Record<string, ProxyInfo>,
 ): { nodes: ProxyNode[]; currentProxy: string | null } {
   const currentProxy = resolveCurrentProxy(proxies);
-  const nodes: ProxyNode[] = [];
-  for (const [name, p] of Object.entries(proxies)) {
-    if (IGNORE_PROXY_TYPES.has(p.type)) continue;
-    if (isJunkName(name)) continue;
-    nodes.push(toNode(name, p));
-  }
+  const entries = Object.entries(proxies).filter(
+    ([name, p]) => !IGNORE_PROXY_TYPES.has(p.type) && !isJunkName(name),
+  );
+  const regions = detectRegions(entries.map(([name]) => name));
+  const nodes: ProxyNode[] = entries.map(([name, p], i) =>
+    toNode(name, p, regions[i]),
+  );
   return { nodes, currentProxy };
 }
 
