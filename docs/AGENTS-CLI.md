@@ -35,7 +35,7 @@ discover  →  gate  →  nodes（选节点） →  check current | check node <
 | `discover --client verge` | 是否连上、当前节点 | `data.status == "connected"`；`data.currentProxy`（null 时看 `currentProxyReason`） |
 | `gate --client verge` | 是否真的走代理 | `data.gate.ok`；为 false 就停下，把 `data.gate.message` 告诉用户 |
 | `nodes --client verge [--region 日本] [--match 关键词]` | 拿准确节点名 | `data.nodes[].name`（不截断）；`current:true` 是在用节点 |
-| `check …` | 深测 | `data.score` / `data.scores`、`data.cards`；**务必检查 `data.restoreError`** |
+| `check … [--cached]` | 深测（加 `--cached` 秒读上次缓存，与 GUI 互通） | `data.score` / `data.scores`、`data.cards`；**务必检查 `data.restoreError`** |
 
 注意 `discover` 连不上、`gate` 不过时仍是 `ok:true`（它们是「报告状态」的命令）。
 

@@ -76,6 +76,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `--region <地区[,地区]>` | **仅 `nodes` / `check all` / `check nodes`**。按地区筛选：等于或包含节点 `region`（如 `日本`、`中国香港`），或别名（`JP`、`HK`、`香港`、`🇸🇬` …，与 GUI 分组同一规则 `detectRegion`）。逗号分隔表示「任一」 |
 | `--match <词[,词]>` | 同上范围。节点名包含任一关键词（不区分大小写） |
 | `--limit, -n <N>` | 同上范围。筛选后按列表顺序取前 N 个（正整数，否则 `invalid_limit`） |
+| `--cached` | **仅 `check` / `env`**：直接读取本地缓存的最近一次检测结果（与 GUI 互通，不发网络探针、不切换节点；返回值额外带 `cached: true` 与 `cachedAt`） |
 | `--no-progress` / `--quiet` / `-q` | 不往 stderr 写 NDJSON 进度（见「进度事件」） |
 | `--dir <路径>` | **仅 `install-shim`**：安装目录 |
 | `--json` | 输出一行 CliEnvelope JSON（默认） |
@@ -128,6 +129,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `option_not_applicable` | 选项配错命令（如 `discover --limit 2`、`check node X --region JP`、非 install-shim 带 `--dir`） | 否 |
 | `invalid_limit` | `--limit` 不是正整数 | 否 |
 | `nodes_unavailable` | `check node` / `check nodes` / 筛选时读不到节点列表 | 否 |
+| `cache_empty` | `check --cached` / `env --cached` 时本地没有对应缓存结果（或已过期） | 否 |
 | `no_nodes_matched` | `check all` 的筛选条件一个节点都没匹配到（不切换、不测） | 否 |
 | `os_unsupported` | macOS 低于 14 时运行 `check` / `env`（隐藏窗会被系统挂起导致卡死，故直接拒绝） | 否 |
 | `node_not_found` | `check node` 找不到该名字 | 否 |

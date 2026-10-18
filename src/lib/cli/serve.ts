@@ -16,7 +16,7 @@ import {
 export function parseFilterBody(
   body: string,
   allowNames: boolean,
-): { ok: true; filter: NodeFilter; names: string[] } | { ok: false; message: string } {
+): { ok: true; filter: NodeFilter; names: string[]; cached?: boolean } | { ok: false; message: string } {
   const filter: NodeFilter = { region: null, match: null, limit: null };
   if (!body.trim()) return { ok: true, filter, names: [] };
   let raw: unknown;
@@ -29,7 +29,7 @@ export function parseFilterBody(
     return { ok: false, message: "body 必须是 JSON 对象。" };
   }
   const o = raw as Record<string, unknown>;
-  const allowed = ["region", "match", "limit", ...(allowNames ? ["names"] : [])];
+  const allowed = ["region", "match", "limit", ...(allowNames ? ["names", "cached"] : [])];
   const extra = Object.keys(o).filter((k) => !allowed.includes(k));
   if (extra.length) {
     return { ok: false, message: `不认识的字段：${extra.join(", ")}（可用：${allowed.join(", ")}）` };
@@ -56,7 +56,14 @@ export function parseFilterBody(
     }
     names = (o.names as string[]).map((x) => x.trim()).filter(Boolean);
   }
-  return { ok: true, filter, names };
+  let cached: boolean | undefined;
+  if (o.cached !== undefined && o.cached !== null) {
+    if (typeof o.cached !== "boolean") {
+      return { ok: false, message: "cached 必须是布尔值。" };
+    }
+    cached = o.cached;
+  }
+  return { ok: true, filter, names, ...(cached !== undefined ? { cached } : {}) };
 }
 
 export { CLI_SERVE_DEFAULT_PORT };
@@ -128,6 +135,7 @@ export function parsedFromServeJob(
             parsed: {
               ...withFilter,
               command: "check",
+              ...(r.cached ? { cached: true } : {}),
               checkTarget: r.names.length ? { kind: "all", names: r.names } : { kind: "all" },
             },
           }

@@ -77,6 +77,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
   let limit: number | null = null;
   let dir: string | null = null;
   let progress = true;
+  let cached = false;
   const given = new Set<string>();
   let parseError: CliError | null = null;
   const fail = (e: CliError) => {
@@ -134,6 +135,9 @@ export function parseCliArgv(argv: string[]): ParsedCli {
       json = true;
     } else if (t === "--no-json") {
       json = false;
+    } else if (t === "--cached") {
+      given.add("--cached");
+      cached = true;
     } else if (t === "--no-progress" || t === "--quiet" || t === "-q") {
       progress = false;
     } else if (t === "--help" || t === "-h") {
@@ -264,6 +268,9 @@ export function parseCliArgv(argv: string[]): ParsedCli {
     if (given.has("--dir") && command !== "install-shim") {
       fail(err("option_not_applicable", "--dir 只能用于 install-shim"));
     }
+    if (given.has("--cached") && command !== "check" && command !== "env") {
+      fail(err("option_not_applicable", "--cached 只能用于 check、env"));
+    }
   }
 
   if (portGiven && command !== "serve" && !parseError) {
@@ -289,6 +296,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
     filter: { region, match, limit },
     dir,
     progress,
+    cached,
     parseError,
     raw,
   };
@@ -322,6 +330,7 @@ export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.2（与 GUI 共
   --region <地区[,地区]>       nodes / check all / check nodes：按地区筛选（日本、JP、HK、🇸🇬…）
   --match <词[,词]>            同上：节点名包含任一关键词（不区分大小写）
   --limit, -n <N>              同上：筛选后最多取前 N 个
+  --cached                     仅 check / env：直接读取本地缓存的上次结果（与 GUI 互通，不发探针）
   --no-progress, --quiet, -q   不往 stderr 写进度（默认 check / env 每行一个 JSON 事件）
   --port, -p <N>               仅 serve：监听端口（默认 17890；0 = 临时端口，就绪时打印）
   --dir <路径>                 仅 install-shim：安装目录

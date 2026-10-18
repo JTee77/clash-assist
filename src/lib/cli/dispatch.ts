@@ -19,7 +19,16 @@ import {
   type ConnectionState,
   type ProxyNode,
 } from "../mihomo";
-import { runEnv, testAll, testOne, type RunnerHooks } from "../runner";
+import {
+  cacheScopeFor,
+  loadCachedResults,
+  runEnv,
+  saveCachedEnvCards,
+  saveCachedScores,
+  testAll,
+  testOne,
+  type RunnerHooks,
+} from "../runner";
 import {
   runLightGate,
   scoreNodeFromCards,
@@ -117,6 +126,8 @@ export type GateData = {
 export type EnvData = {
   clientId: ClientId;
   cards: CheckCard[];
+  cached?: boolean;
+  cachedAt?: string | null;
 };
 
 export type CheckCurrentData = {
@@ -126,6 +137,8 @@ export type CheckCurrentData = {
   score: CliScore;
   cards: CheckCard[];
   note: string;
+  cached?: boolean;
+  cachedAt?: string | null;
 };
 
 export type CheckNodeData = {
@@ -140,6 +153,8 @@ export type CheckNodeData = {
   restoreError: string | null;
   aborted: boolean;
   gate: GateResult;
+  cached?: boolean;
+  cachedAt?: string | null;
 };
 
 export type CheckAllData = {
@@ -155,6 +170,8 @@ export type CheckAllData = {
   /** 已连上但读节点列表失败时的原因；否则 null */
   nodesError: string | null;
   gate: GateResult;
+  cached?: boolean;
+  cachedAt?: string | null;
 };
 
 export type CheckData = CheckCurrentData | CheckNodeData | CheckAllData;
@@ -257,7 +274,7 @@ export function resolveCliNode(
 
 /** 该命令是否可能切换节点（需要「中断后先切回」而不能立即退出）。 */
 export function cliCommandSwitchesNodes(parsed: ParsedCli): boolean {
-  if (parsed.parseError || parsed.command !== "check") return false;
+  if (parsed.parseError || parsed.command !== "check" || parsed.cached) return false;
   const k = parsed.checkTarget?.kind ?? "current";
   return k === "all" || k === "node";
 }
@@ -321,7 +338,7 @@ async function loadConnection(
   return { connection, nodes, nodesError };
 }
 
-function collectingHooks(): {
+function collectingHooks(cacheScope: string | null = null): {
   hooks: RunnerHooks;
   getScores: () => NodeScoreResult[];
   getCards: () => CheckCard[];
@@ -357,6 +374,7 @@ function collectingHooks(): {
       const i = scores.findIndex((x) => x.nodeName === s.nodeName);
       if (i >= 0) scores[i] = s;
       else scores.push(s);
+      saveCachedScores(cacheScope, [s]);
     },
     onScores: (list) => {
       scores = list;
@@ -572,7 +590,7 @@ function progressEmitter(command: string, sink?: (ev: CliProgressEvent) => void)
 
 /** 会发进度事件的命令：check（任意目标）、env。 */
 export function isLongCommand(parsed: ParsedCli): boolean {
-  return !parsed.parseError && (parsed.command === "check" || parsed.command === "env");
+  return !parsed.parseError && !parsed.cached && (parsed.command === "check" || parsed.command === "env");
 }
 
 function describeCommand(parsed: ParsedCli): string {
@@ -726,8 +744,8 @@ async function dispatchInner(
     }
   }
 
-  // macOS < 14：隐藏窗 WebView 会被挂起，check/env 会永远卡住 → 立即失败。
-  if ((cmd === "check" || cmd === "env") && opts.osInfo?.os === "macos") {
+  // macOS < 14：隐藏窗 WebView 会被挂起，check/env 会永远卡住 → 立即失败（--cached 不发探针除外）。
+  if ((cmd === "check" || cmd === "env") && !parsed.cached && opts.osInfo?.os === "macos") {
     const major = opts.osInfo.major;
     if (major != null && major < CLI_MIN_MACOS) {
       return errEnvelope(
@@ -744,6 +762,7 @@ async function dispatchInner(
     return errEnvelope(cmd, client.error.code, client.error.message, ver);
   }
   const clientId = client.clientId;
+  const cacheScope = cacheScopeFor(clientId, parsed.mock);
 
   try {
     if (cmd === "discover") {
@@ -814,9 +833,27 @@ async function dispatchInner(
     }
 
     if (cmd === "env") {
+      if (parsed.cached) {
+        const cached = loadCachedResults(cacheScope);
+        if (!cached || !cached.envCards.length) {
+          return errEnvelope(
+            "env",
+            "cache_empty",
+            "本地还没有环境泄漏检查的缓存结果（或已过期）。",
+            ver,
+          );
+        }
+        const data: EnvData = {
+          clientId,
+          cards: cached.envCards,
+          cached: true,
+          cachedAt: cached.envUpdatedAt,
+        };
+        return okEnvelope("env", data, ver);
+      }
       emit({ type: "stage", stage: "connect", text: "连接 Clash Verge" });
       const { connection } = await loadConnection(parsed, clientId);
-      const bag = collectingHooks();
+      const bag = collectingHooks(cacheScope);
       progressHooks(emit, bag);
       emit({ type: "stage", stage: "probe", text: "环境泄漏检查" });
       await runEnv(
@@ -827,19 +864,161 @@ async function dispatchInner(
         },
         bag.hooks,
       );
-      const data: EnvData = { clientId, cards: bag.getEnvCards() };
+      const cards = bag.getEnvCards();
+      saveCachedEnvCards(cacheScope, cards);
+      const data: EnvData = { clientId, cards };
       return okEnvelope("env", data, ver);
     }
 
     if (cmd === "check") {
       const target = parsed.checkTarget ?? { kind: "current" as const };
+      if (parsed.cached) {
+        const cached = loadCachedResults(cacheScope);
+        if (!cached || !cached.scores.length) {
+          return errEnvelope(
+            "check",
+            "cache_empty",
+            "本地还没有节点检测的缓存结果（或已过期）。",
+            ver,
+          );
+        }
+        const cachedNodes: ProxyNode[] = cached.scores.map((s) => ({
+          name: s.nodeName,
+          type: "Unknown",
+          region: detectRegion(s.nodeName),
+          raw: { name: s.nodeName, type: "Unknown" },
+        }));
+        const scoreByName = new Map(cached.scores.map((s) => [s.nodeName, s]));
+        const cacheGate: GateResult = {
+          ok: true,
+          message: "读取本地缓存（跳过轻量门槛）。",
+        };
+
+        if (target.kind === "current") {
+          const { connection } = await loadConnection(parsed, clientId);
+          const wanted = connection.currentProxy;
+          const hit = wanted
+            ? scoreByName.get(wanted)
+            : cached.scores[0];
+          if (!hit) {
+            return errEnvelope(
+              "check",
+              "cache_empty",
+              wanted
+                ? `缓存里没有当前节点「${wanted}」的检测结果。`
+                : "本地还没有节点检测的缓存结果。",
+              ver,
+            );
+          }
+          const data: CheckCurrentData = {
+            target: "current",
+            clientId,
+            nodeName: hit.nodeName,
+            score: cliScore(hit),
+            cards: hit.cards,
+            note: "来自本地缓存（未重新发探针）。",
+            cached: true,
+            cachedAt: cached.scoresUpdatedAt,
+          };
+          return okEnvelope("check", data, ver);
+        }
+
+        if (target.kind === "node") {
+          const found = resolveCliNode(cachedNodes, target.name);
+          if (!found.ok) {
+            const code =
+              found.error.code === "node_not_found"
+                ? "cache_empty"
+                : found.error.code;
+            const msg =
+              found.error.code === "node_not_found"
+                ? `缓存里没有节点「${target.name}」的检测结果（缓存共 ${cached.scores.length} 个节点）。`
+                : found.error.message;
+            return errEnvelope("check", code, msg, ver);
+          }
+          const hit = scoreByName.get(found.node.name)!;
+          const data: CheckNodeData = {
+            target: "node",
+            clientId,
+            nodeName: hit.nodeName,
+            score: cliScore(hit),
+            cards: hit.cards,
+            hint: null,
+            restoreError: null,
+            aborted: false,
+            gate: cacheGate,
+            cached: true,
+            cachedAt: cached.scoresUpdatedAt,
+          };
+          return okEnvelope("check", data, ver);
+        }
+
+        // target.kind === "all"
+        let pool = cachedNodes;
+        if (target.names?.length) {
+          const picked: ProxyNode[] = [];
+          for (const name of target.names) {
+            const found = resolveCliNode(cachedNodes, name);
+            if (!found.ok) {
+              const code =
+                found.error.code === "node_not_found"
+                  ? "cache_empty"
+                  : found.error.code;
+              const msg =
+                found.error.code === "node_not_found"
+                  ? `缓存里没有节点「${name}」的检测结果（缓存共 ${cached.scores.length} 个节点）。`
+                  : found.error.message;
+              return errEnvelope("check", code, msg, ver);
+            }
+            if (!picked.includes(found.node)) picked.push(found.node);
+          }
+          pool = picked;
+        }
+        const hasSel = !!(target.names?.length || hasFilter(parsed.filter));
+        const selectedNodes = hasSel ? filterNodes(pool, parsed.filter) : pool;
+        if (!selectedNodes.length) {
+          return errEnvelope(
+            "check",
+            "no_nodes_matched",
+            `缓存中没有匹配筛选条件的节点（缓存共 ${cachedNodes.length} 个；region=${parsed.filter.region ?? "-"} match=${parsed.filter.match ?? "-"}）。`,
+            ver,
+          );
+        }
+        const matchedScores = selectedNodes
+          .map((n) => scoreByName.get(n.name))
+          .filter((s): s is NodeScoreResult => !!s);
+        const data: CheckAllData = {
+          target: "all",
+          clientId,
+          count: matchedScores.length,
+          selection: hasSel
+            ? {
+                filter: parsed.filter,
+                names: target.names?.length ? target.names : null,
+                selected: selectedNodes.map((n) => n.name),
+              }
+            : null,
+          scores: matchedScores.map((s) => ({
+            nodeName: s.nodeName,
+            ...cliScore(s),
+          })),
+          hint: null,
+          restoreError: null,
+          aborted: false,
+          nodesError: null,
+          gate: cacheGate,
+          cached: true,
+          cachedAt: cached.scoresUpdatedAt,
+        };
+        return okEnvelope("check", data, ver);
+      }
       emit({ type: "stage", stage: "connect", text: "连接 Clash Verge、读取节点" });
       const { connection, nodes, nodesError } = await loadConnection(
         parsed,
         clientId,
       );
       const mixedPort = connection.config?.mixedPort ?? null;
-      const bag = collectingHooks();
+      const bag = collectingHooks(cacheScope);
       const currentName = connection.currentProxy ?? "当前节点";
       progressHooks(emit, bag, () =>
         target.kind === "current" ? currentName : undefined,
@@ -860,6 +1039,7 @@ async function dispatchInner(
         });
         const name = connection.currentProxy ?? "当前节点";
         const score = scoreNodeFromCards(name, report.cards, report.ranAt);
+        saveCachedScores(cacheScope, [score], report.ranAt);
         const data: CheckCurrentData = {
           target: "current",
           clientId,
@@ -937,6 +1117,7 @@ async function dispatchInner(
         );
         const score =
           bag.getScores().find((s) => s.nodeName === node.name) ?? null;
+        if (score) saveCachedScores(cacheScope, [score]);
         const data: CheckNodeData = {
           target: "node",
           clientId,
@@ -980,6 +1161,7 @@ async function dispatchInner(
         bag.hooks,
       );
       const scores = bag.getScores();
+      if (scores.length > 0) saveCachedScores(cacheScope, scores);
       const data: CheckAllData = {
         target: "all",
         clientId,

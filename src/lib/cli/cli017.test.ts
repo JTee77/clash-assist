@@ -422,3 +422,92 @@ describe("update-check", () => {
     expect(parseCliArgv(["x", "--cli", "update-check", "now"]).parseError?.code).toBe("unexpected_argument");
   });
 });
+
+describe("CLI ↔ GUI 缓存互通（--cached）", () => {
+  function makeStorage(): Storage {
+    const map = new Map<string, string>();
+    return {
+      get length() {
+        return map.size;
+      },
+      clear() {
+        map.clear();
+      },
+      getItem(k: string) {
+        return map.has(k) ? map.get(k)! : null;
+      },
+      key(i: number) {
+        return [...map.keys()][i] ?? null;
+      },
+      removeItem(k: string) {
+        map.delete(k);
+      },
+      setItem(k: string, v: string) {
+        map.set(k, String(v));
+      },
+    };
+  }
+
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).__TEST_STORAGE__ = true;
+    Object.defineProperty(globalThis, "localStorage", {
+      value: makeStorage(),
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("无缓存时 check --cached / env --cached → cache_empty", async () => {
+    const r1 = await run(["check", "all", "-c", "verge", "--cached"]);
+    expect(r1.ok).toBe(false);
+    expect(r1.error?.code).toBe("cache_empty");
+    expect(r1.error?.hint).toBeTruthy();
+
+    const r2 = await run(["env", "-c", "verge", "--cached"]);
+    expect(r2.ok).toBe(false);
+    expect(r2.error?.code).toBe("cache_empty");
+    noNetworkTouched();
+  });
+
+  it("check all 写入缓存后，check all/node/current --cached 直接读取且不再跑探针", async () => {
+    const live = await run(["check", "all", "-c", "verge"]);
+    expect(live.ok).toBe(true);
+    expect(h.runNodeDiagnostics).toHaveBeenCalledTimes(2);
+
+    vi.clearAllMocks();
+    const cachedAll = await run(["check", "all", "-c", "verge", "--cached"]);
+    expect(cachedAll.ok).toBe(true);
+    expect((cachedAll.data as CheckAllData).cached).toBe(true);
+    expect((cachedAll.data as CheckAllData).count).toBe(2);
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(h.switchProxy).not.toHaveBeenCalled();
+
+    const cachedNode = await run(["check", "node", "B", "-c", "verge", "--cached"]);
+    expect(cachedNode.ok).toBe(true);
+    expect((cachedNode.data as { nodeName: string; cached?: boolean }).nodeName).toBe("B");
+    expect((cachedNode.data as { cached?: boolean }).cached).toBe(true);
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+
+    const cachedCur = await run(["check", "current", "-c", "verge", "--cached"]);
+    expect(cachedCur.ok).toBe(true);
+    expect((cachedCur.data as { nodeName: string; cached?: boolean }).nodeName).toBe("A");
+    expect((cachedCur.data as { cached?: boolean }).cached).toBe(true);
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it("--cached 只允许用于 check / env；serve body 支持 cached:true", () => {
+    expect(parseCliArgv(["x", "--cli", "discover", "--cached"]).parseError?.code).toBe(
+      "option_not_applicable",
+    );
+    expect(parseCliArgv(["x", "--cli", "nodes", "--cached"]).parseError?.code).toBe(
+      "option_not_applicable",
+    );
+    const base = parseCliArgv(["x", "--cli", "serve", "--mock"]);
+    const s = parsedFromServeJob(base, {
+      route: "check/all",
+      body: '{"region":"JP","cached":true}',
+    });
+    expect(s.parsed.cached).toBe(true);
+    expect(s.parsed.filter.region).toBe("JP");
+  });
+});
