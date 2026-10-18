@@ -3,6 +3,66 @@ import { fetchTextViaProxy } from "../fetchVia";
 import { UA } from "./probe";
 import type { CheckCard, CheckLevel, UnlockResult } from "../types";
 
+const ISO3_TO_ISO2: Record<string, string> = {
+  USA: "US",
+  GBR: "GB",
+  JPN: "JP",
+  SGP: "SG",
+  TWN: "TW",
+  KOR: "KR",
+  DEU: "DE",
+  FRA: "FR",
+  NLD: "NL",
+  AUS: "AU",
+  CAN: "CA",
+  EST: "EE",
+  IND: "IN",
+  MYS: "MY",
+  THA: "TH",
+  PHL: "PH",
+  TUR: "TR",
+  ARG: "AR",
+  BRA: "BR",
+  CHE: "CH",
+  SWE: "SE",
+  CHN: "CN",
+  HKG: "HK",
+  MAC: "MO",
+  RUS: "RU",
+  BLR: "BY",
+};
+
+const GEMINI_BLOCKED_REGIONS = new Set([
+  "CN",
+  "CHN",
+  "HK",
+  "HKG",
+  "MO",
+  "MAC",
+  "RU",
+  "RUS",
+  "BY",
+  "BLR",
+  "KP",
+  "IR",
+  "SY",
+  "CU",
+]);
+
+export function extractGeminiRegion(out: string): string | null {
+  const idx = out.indexOf('"vXmutd"');
+  if (idx !== -1) {
+    const chunk = out.slice(idx, idx + 80);
+    const m = chunk.match(/\\?"([A-Z]{2})\\?"/);
+    if (m && m[1] !== "ZZ") return m[1];
+  }
+  const m3 = out.match(/,2,1,200,"([A-Z]{3})"/);
+  if (m3?.[1] && m3[1] !== "ZZZ") {
+    return ISO3_TO_ISO2[m3[1]] ?? m3[1];
+  }
+  return null;
+}
+
 export async function probeGeminiUnlock(
   mixedPort?: number | null,
   signal?: AbortSignal,
@@ -14,31 +74,34 @@ export async function probeGeminiUnlock(
     signal,
   });
   const out = r.text;
-  const blocked = [
+  const lower = out.toLowerCase();
+
+  const blockedByText = [
     "isn't currently supported in your country",
     "not supported in your country",
     "is not supported in this region",
+    "unavailable in your country",
+    "gemini isn't available",
     "不支持你所在的地区",
-  ].some((kw) => out.includes(kw));
+    "不支援你所在的地區",
+    "目前不支援你所在的國家",
+  ].some((kw) => lower.includes(kw.toLowerCase()));
 
-  let detectedCountry: string | null = null;
-  const idx = out.indexOf('"vXmutd"');
-  if (idx !== -1) {
-    const chunk = out.slice(idx, idx + 60);
-    const m = chunk.match(/\\"([A-Z]{2})\\"/);
-    if (m && m[1] !== "ZZ") detectedCountry = m[1];
-  }
-  if (!detectedCountry) {
-    const m3 = out.match(/,2,1,200,"([A-Z]{3})"/);
-    if (m3 && !["CHN", "HKG"].includes(m3[1])) detectedCountry = m3[1];
-  }
+  const redirectedToFaq =
+    /rel=["']canonical["'][^>]+gemini\.google\.com\/faq/i.test(out) ||
+    /property=["']og:url["'][^>]+gemini\.google\.com\/faq/i.test(out) ||
+    lower.includes("support.google.com/gemini/answer/13575153");
+
+  const detectedCountry = extractGeminiRegion(out);
+  const blockedByRegion =
+    detectedCountry != null && GEMINI_BLOCKED_REGIONS.has(detectedCountry);
 
   const probed = [
     "gemini.google.com/app（看是否地区拦截、内容是否正常返回）",
   ];
   const notProbed: string[] = [];
 
-  if (blocked) {
+  if (blockedByText || redirectedToFaq || blockedByRegion) {
     return {
       supported: false,
       level: "blocked",
@@ -49,7 +112,15 @@ export async function probeGeminiUnlock(
       notProbed,
     };
   }
-  if (out.length > 50000) {
+
+  const hasAppShell =
+    out.length > 50000 ||
+    ((r.ok || r.status === 200) &&
+      out.length > 10000 &&
+      (/WIZ_global_data|SNlM0e|bard-web|cfb2h/i.test(out) ||
+        /<title>[^<]*Gemini/i.test(out)));
+
+  if (hasAppShell) {
     return {
       supported: true,
       level: "full",
@@ -81,7 +152,6 @@ export async function probeGeminiUnlock(
     notProbed,
   };
 }
-
 
 export async function probeChatgptUnlock(
   mixedPort?: number | null,

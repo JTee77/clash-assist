@@ -13,8 +13,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { CheckCard, EgressReport } from "../lib/egress";
 import {
   CLIENT_OPTIONS,
+  classifyByRegion,
   clientLabel,
   normalizeClientId,
+  shortRegionName,
   type ClientId,
   type ConnectionState,
   type ControllerConfig,
@@ -29,7 +31,14 @@ import {
 import {
   ENV_PLACEHOLDERS,
   NODE_PLACEHOLDERS,
+  cacheScopeFor,
+  formatCachedTime,
+  loadCachedResults,
+  mergeScoreList,
   runEnv,
+  saveCachedEnvCards,
+  saveCachedScores,
+  sortNodeScores,
   testAll as runTestAll,
   testOne,
   type RunnerHooks,
@@ -37,6 +46,9 @@ import {
 } from "../lib/runner";
 
 type TestMode = "current" | "all";
+
+/** 宽屏筛选栏最多直接平铺几个地区胶囊；超出部分收进紧凑「更多地区」下拉，确保单行不折行。 */
+const MAX_INLINE_REGIONS = 6;
 
 /** 瀑布流列数：单卡固定 298px + 9px 列距，1–8 列封顶。
  * 余量 ≈ main 左右 padding + tray 左右 pad。
@@ -112,6 +124,12 @@ export function HomePage({
   const [envCheckOk, setEnvCheckOk] = useState(false);
   /** 测全部 / 单节点完成后在「测全部节点」旁显示 ✓成功；下次开测时清除 */
   const [nodeTestOk, setNodeTestOk] = useState(false);
+  /** 从本地缓存恢复的上次检测时间（本轮尚未跑新检测时显示） */
+  const [cachedNodesAt, setCachedNodesAt] = useState<string | null>(null);
+  const [cachedEnvAt, setCachedEnvAt] = useState<string | null>(null);
+  /** 节点筛选：地区（null = 全部）与搜索词 */
+  const [regionFilter, setRegionFilter] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [allConfirmOpen, setAllConfirmOpen] = useState(false);
   const [switchHint, setSwitchHint] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
@@ -132,6 +150,46 @@ export function HomePage({
   );
 
   const clientUnset = !clientId;
+  const cacheScope = cacheScopeFor(
+    clientId,
+    forceMock || connection.usingMock,
+  );
+  const prevScopeRef = useRef<string | null>(cacheScope);
+
+  // 切换客户端或 Mock 模式时重置当轮状态，以便干净回填对应缓存
+  useEffect(() => {
+    if (prevScopeRef.current === cacheScope) return;
+    prevScopeRef.current = cacheScope;
+    setNodeScores([]);
+    setEnvCards(ENV_PLACEHOLDERS);
+    setEnvOpen(false);
+    setNodeTestOk(false);
+    setEnvCheckOk(false);
+    setCachedNodesAt(null);
+    setCachedEnvAt(null);
+    setRegionFilter(null);
+    setSearchQuery("");
+    setExpanded(new Set());
+  }, [cacheScope]);
+
+  // 获取到节点列表后，若本轮尚未跑过实时检测，自动回填最近一次缓存结果
+  useEffect(() => {
+    if (!cacheScope || nodes.length === 0) return;
+    const cached = loadCachedResults(
+      cacheScope,
+      nodes.map((n) => n.name),
+    );
+    if (!cached) return;
+    if (!running && !nodeTestOk && nodeScores.length === 0 && cached.scores.length > 0) {
+      setNodeScores(cached.scores);
+      setCachedNodesAt(cached.scoresUpdatedAt);
+    }
+    if (!envRunning && !envCheckOk && cached.envCards.length > 0) {
+      setEnvCards(cached.envCards);
+      setEnvOpen(true);
+      setCachedEnvAt(cached.envUpdatedAt);
+    }
+  }, [cacheScope, nodes, running, nodeTestOk, nodeScores.length, envRunning, envCheckOk]);
 
   const scoreByName = useMemo(() => {
     const m = new Map<string, (typeof nodeScores)[number]>();
@@ -174,6 +232,58 @@ export function HomePage({
     }
     return ordered;
   }, [nodes, connection.currentProxy, nodeScores, scoreByName]);
+
+  const regionGroups = useMemo(() => classifyByRegion(nodes), [nodes]);
+
+  // 订阅更新后若原选中的地区已不存在，自动回到「全部」
+  useEffect(() => {
+    if (
+      regionFilter !== null &&
+      !regionGroups.some(([reg]) => reg === regionFilter)
+    ) {
+      setRegionFilter(null);
+    }
+  }, [regionFilter, regionGroups]);
+
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const isFiltered = regionFilter !== null || trimmedQuery.length > 0;
+
+  const filteredNodes = useMemo(() => {
+    if (!isFiltered) return orderedNodes;
+    return orderedNodes.filter((n) => {
+      if (regionFilter !== null && n.region !== regionFilter) return false;
+      if (trimmedQuery.length > 0) {
+        const hay = `${n.name} ${n.type} ${n.region} ${shortRegionName(n.region)}`.toLowerCase();
+        if (!hay.includes(trimmedQuery)) return false;
+      }
+      return true;
+    });
+  }, [orderedNodes, isFiltered, regionFilter, trimmedQuery]);
+
+  const inlineRegions = useMemo(
+    () =>
+      regionGroups.length <= MAX_INLINE_REGIONS
+        ? regionGroups
+        : regionGroups.slice(0, MAX_INLINE_REGIONS - 1),
+    [regionGroups],
+  );
+  const overflowRegions = useMemo(
+    () =>
+      regionGroups.length <= MAX_INLINE_REGIONS
+        ? []
+        : regionGroups.slice(MAX_INLINE_REGIONS - 1),
+    [regionGroups],
+  );
+  const overflowNodeCount = useMemo(
+    () => overflowRegions.reduce((sum, [, list]) => sum + list.length, 0),
+    [overflowRegions],
+  );
+  const overflowActive = useMemo(
+    () =>
+      regionFilter !== null &&
+      overflowRegions.some(([reg]) => reg === regionFilter),
+    [regionFilter, overflowRegions],
+  );
 
   const mixedPortNum = connection.config?.mixedPort ?? null;
 
@@ -249,45 +359,58 @@ export function HomePage({
     return g;
   };
 
-  const buildHooks = (): RunnerHooks => ({
+  const buildHooks = (resetSubset?: ReadonlySet<string>): RunnerHooks => ({
     onProgress: setProgress,
     onNodeCards: setNodeCards,
     onUpsertNodeCard: upsertNodeCard,
     onReport: setReport,
     onUpsertScore: (score) => {
+      setCachedNodesAt(null);
+      saveCachedScores(cacheScope, [score]);
       setNodeScores((prev) => {
         const next = prev.filter((x) => x.nodeName !== score.nodeName);
         next.push(score);
-        return [...next].sort((a, b) => {
-          const byStar = starRank(b.stars) - starRank(a.stars);
-          if (byStar !== 0) return byStar;
-          return b.totalScore - a.totalScore;
-        });
+        return sortNodeScores(next);
       });
     },
-    onScores: setNodeScores,
+    onScores: (list) => {
+      if (list.length > 0) {
+        setCachedNodesAt(null);
+        saveCachedScores(cacheScope, list);
+      }
+      setNodeScores((prev) => mergeScoreList(prev, list, resetSubset));
+    },
     onHint: setSwitchHint,
     onRestoreError: setRestoreError,
     onGate: setGate,
-    onEnvCards: setEnvCards,
+    onEnvCards: (cards) => {
+      setEnvCards(cards);
+      saveCachedEnvCards(cacheScope, cards);
+    },
     onUpsertEnvCard: upsertEnvCard,
   });
 
   const testAll = async () => {
+    const targetNodes = filteredNodes;
+    if (targetNodes.length === 0) return;
+    const subsetNames = isFiltered
+      ? new Set(targetNodes.map((n) => n.name))
+      : undefined;
     abortAllRef.current = false;
     setNodeTestOk(false);
+    setCachedNodesAt(null);
     setRunning(true);
     try {
       const ok = await runTestAll(
         {
           connection,
-          nodes,
+          nodes: targetNodes,
           forceMock,
           mixedPort: mixedPortNum,
           ensureGate,
           shouldAbort: () => abortAllRef.current,
         },
-        buildHooks(),
+        buildHooks(subsetNames),
       );
       if (ok) setNodeTestOk(true);
     } finally {
@@ -298,6 +421,7 @@ export function HomePage({
 
   const runEnvCheck = async () => {
     setEnvCheckOk(false);
+    setCachedEnvAt(null);
     setEnvRunning(true);
     setEnvOpen(true);
     try {
@@ -362,10 +486,10 @@ export function HomePage({
   const nodeColumns: ProxyNode[][] = useMemo(
     () => {
       const cols: ProxyNode[][] = Array.from({ length: colCount }, () => []);
-      orderedNodes.forEach((n, i) => cols[i % colCount].push(n));
+      filteredNodes.forEach((n, i) => cols[i % colCount].push(n));
       return cols;
     },
-    [orderedNodes, colCount],
+    [filteredNodes, colCount],
   );
 
   // 测全部的行内进度（0–100；无比例时 null）
@@ -387,19 +511,26 @@ export function HomePage({
   const barPct = progressPct ?? lastPctRef.current;
 
   const allExpanded =
-    orderedNodes.length > 0 && orderedNodes.every((n) => expanded.has(n.name));
+    filteredNodes.length > 0 &&
+    filteredNodes.every((n) => expanded.has(n.name));
 
   const toggleExpandAll = () =>
-    setExpanded(
-      allExpanded ? new Set() : new Set(orderedNodes.map((n) => n.name)),
-    );
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (allExpanded) {
+        for (const n of filteredNodes) next.delete(n.name);
+      } else {
+        for (const n of filteredNodes) next.add(n.name);
+      }
+      return next;
+    });
 
   // 单独测某个节点：完整深测（runNodeDiagnostics）；非当前节点临时切换后切回。
-  // NodeCard「再测」由 Ellie 接 onTest；此处保持接口稳定。
   const testOneNode = async (node: ProxyNode) => {
     if (running) return;
     setMode("current");
     setNodeTestOk(false);
+    setCachedNodesAt(null);
     setRestoreError(null);
     setRunning(true);
     setTestingNode(node.name);
@@ -424,6 +555,9 @@ export function HomePage({
       setProgress(null);
     }
   };
+
+  const cachedEnvTimeText = formatCachedTime(cachedEnvAt);
+  const cachedNodesTimeText = formatCachedTime(cachedNodesAt);
 
   return (
     <div className="home-page">
@@ -528,6 +662,10 @@ export function HomePage({
                   <span className="fetch-ok" role="status">
                     <span className="status-ok-mark">✓</span>{t("home.success")}
                   </span>
+                ) : !envRunning && cachedEnvTimeText ? (
+                  <span className="cache-tag" role="status">
+                    {t("home.cachedAt", { time: cachedEnvTimeText })}
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -555,18 +693,28 @@ export function HomePage({
                   <button
                     type="button"
                     className="btn btn-primary action-btn"
-                    disabled={running || clientUnset}
+                    disabled={running || clientUnset || filteredNodes.length === 0}
                     onClick={() => {
                       setMode("all");
                       setRestoreError(null);
                       setAllConfirmOpen(true);
                     }}
                   >
-                    {running && mode === "all" ? t("home.testingAll") : t("home.testAll")}
+                    {running && mode === "all"
+                      ? isFiltered
+                        ? t("home.testingFiltered")
+                        : t("home.testingAll")
+                      : isFiltered
+                        ? t("home.testFiltered")
+                        : t("home.testAll")}
                   </button>
                   {!running && nodeTestOk ? (
                     <span className="fetch-ok" role="status">
                       <span className="status-ok-mark">✓</span>{t("home.success")}
+                    </span>
+                  ) : !running && cachedNodesTimeText ? (
+                    <span className="cache-tag" role="status">
+                      {t("home.cachedAt", { time: cachedNodesTimeText })}
                     </span>
                   ) : null}
                   {restoreError ? (
@@ -663,6 +811,7 @@ export function HomePage({
                 <button
                   type="button"
                   className="ws-expand-link"
+                  disabled={filteredNodes.length === 0}
                   onClick={toggleExpandAll}
                   title={allExpanded ? t("home.collapseAllTitle") : t("home.expandAllTitle")}
                 >
@@ -671,26 +820,138 @@ export function HomePage({
               </div>
             </div>
 
-            <div className="node-flow">
-              {nodeColumns.map((col, ci) => (
-                <div className="flow-col" key={ci}>
-                  {col.map((n) => (
-                    <NodeCard
-                      key={n.name}
-                      node={n}
-                      score={scoreByName.get(n.name)}
-                      liveCards={testingNode === n.name ? nodeCards : undefined}
-                      isCurrent={n.name === connection.currentProxy}
-                      expanded={expanded.has(n.name)}
-                      testing={testingNode === n.name}
-                      retestLocked={running}
-                      onToggle={() => toggleExpand(n.name)}
-                      onTest={() => void testOneNode(n)}
-                    />
-                  ))}
-                </div>
-              ))}
+            <div className="node-filter-bar" role="region" aria-label={t("home.filterRegionAria")}>
+              <div className="nf-pills">
+                <button
+                  type="button"
+                  className={`nf-pill${regionFilter === null ? " active" : ""}`}
+                  onClick={() => setRegionFilter(null)}
+                >
+                  <span>{t("home.filterAll")}</span>
+                  <span className="nf-count">{orderedNodes.length}</span>
+                </button>
+                {inlineRegions.map(([reg, list]) => {
+                  const active = regionFilter === reg;
+                  return (
+                    <button
+                      key={reg}
+                      type="button"
+                      className={`nf-pill${active ? " active" : ""}`}
+                      onClick={() => setRegionFilter(active ? null : reg)}
+                    >
+                      <span>{td(shortRegionName(reg))}</span>
+                      <span className="nf-count">{list.length}</span>
+                    </button>
+                  );
+                })}
+                {overflowRegions.length > 0 ? (
+                  <select
+                    className={`nf-more-select${overflowActive ? " active" : ""}`}
+                    aria-label={t("home.filterRegionAria")}
+                    value={overflowActive ? (regionFilter ?? "") : ""}
+                    onChange={(e) => setRegionFilter(e.target.value || null)}
+                  >
+                    <option value="">
+                      {t("home.filterMoreRegions", { n: overflowNodeCount })}
+                    </option>
+                    {overflowRegions.map(([reg, list]) => (
+                      <option key={reg} value={reg}>
+                        {td(shortRegionName(reg))} ({list.length})
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+              </div>
+
+              <select
+                className={`nf-region-select${regionFilter !== null ? " active" : ""}`}
+                aria-label={t("home.filterRegionAria")}
+                value={regionFilter ?? ""}
+                onChange={(e) => setRegionFilter(e.target.value || null)}
+              >
+                <option value="">
+                  {t("home.filterAllRegions", { n: orderedNodes.length })}
+                </option>
+                {regionGroups.map(([reg, list]) => (
+                  <option key={reg} value={reg}>
+                    {td(shortRegionName(reg))} ({list.length})
+                  </option>
+                ))}
+              </select>
+
+              <div className="nf-search-wrap">
+                <svg
+                  className="nf-search-icon"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <circle cx="7" cy="7" r="4.8" stroke="currentColor" strokeWidth="1.5" />
+                  <path
+                    d="M10.6 10.6L14 14"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <input
+                  type="text"
+                  className="nf-search-input"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t("home.filterSearchPlaceholder")}
+                  aria-label={t("home.filterSearchPlaceholder")}
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    className="nf-search-clear"
+                    aria-label={t("home.filterClearSearch")}
+                    title={t("home.filterClearSearch")}
+                    onClick={() => setSearchQuery("")}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
             </div>
+
+            {filteredNodes.length > 0 ? (
+              <div className="node-flow">
+                {nodeColumns.map((col, ci) => (
+                  <div className="flow-col" key={ci}>
+                    {col.map((n) => (
+                      <NodeCard
+                        key={n.name}
+                        node={n}
+                        score={scoreByName.get(n.name)}
+                        liveCards={testingNode === n.name ? nodeCards : undefined}
+                        isCurrent={n.name === connection.currentProxy}
+                        expanded={expanded.has(n.name)}
+                        testing={testingNode === n.name}
+                        retestLocked={running}
+                        onToggle={() => toggleExpand(n.name)}
+                        onTest={() => void testOneNode(n)}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="node-empty" role="status">
+                <span>{t("home.filterEmpty", { total: orderedNodes.length })}</span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setRegionFilter(null);
+                    setSearchQuery("");
+                  }}
+                >
+                  {t("home.filterReset")}
+                </button>
+              </div>
+            )}
           </div>
         </>
       ) : null}
@@ -704,13 +965,15 @@ export function HomePage({
             aria-label={t("home.confirmAllAria")}
           >
             <p className="confirm-body">
-              {t("home.confirmAllBody")}
+              {isFiltered
+                ? t("home.confirmFilteredBody", { n: filteredNodes.length })
+                : t("home.confirmAllBody")}
             </p>
             <div className="toolbar" style={{ marginBottom: 0 }}>
               <button
                 className="btn btn-primary"
                 type="button"
-                disabled={clientUnset}
+                disabled={clientUnset || filteredNodes.length === 0}
                 onClick={onConfirmAll}
               >
                 {t("home.ok")}
@@ -837,7 +1100,7 @@ export function HomePage({
             rel="noreferrer"
           >
             github.com/JTee77/clash-assist
-          </a>
+           </a>
           <br />
           {t("home.thanks")}
           <br />

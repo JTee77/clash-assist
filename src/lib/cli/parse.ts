@@ -294,7 +294,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
   };
 }
 
-export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.1（与 GUI 共用 runner / egress / score）
+export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.2（与 GUI 共用 runner / egress / score）
 
 用法：
   clash-assist --cli <command> [options]

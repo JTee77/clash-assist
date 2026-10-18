@@ -51,6 +51,18 @@ export const REGION_RULES: RegionRule[] = [
   ["瑞典", ["瑞典", "SE", "SWE", "Sweden", "斯德哥尔摩", "🇸🇪"]],
 ];
 
+const SHORT_REGION_NAMES: Record<string, string> = {
+  中国香港: "香港",
+  中国台湾: "台湾",
+  澳大利亚: "澳洲",
+  其他地区: "其他",
+};
+
+/** 紧凑地区标签（供筛选胶囊/下拉展示，内部 region 值保持不变）。 */
+export function shortRegionName(region: string): string {
+  return SHORT_REGION_NAMES[region] ?? region;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
