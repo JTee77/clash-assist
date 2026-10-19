@@ -72,6 +72,8 @@ export type ParsedCli = {
   dir: string | null;
   /** NDJSON 进度事件写 stderr（默认开；--no-progress / --quiet 关闭） */
   progress: boolean;
+  /** check / env：只读本地缓存（与 GUI 互通），不发探针、不切节点 */
+  cached?: boolean;
   /** 未知命令 / 未知选项 / 缺值 / 多余参数；非空时 dispatch 返回 ok:false */
   parseError: CliError | null;
   /** 原始 argv（诊断用） */

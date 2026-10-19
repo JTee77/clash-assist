@@ -59,6 +59,7 @@ export const CLI_SPEC = {
     { name: "--region", value: "地区[,地区]", appliesTo: FILTERS, description: "按地区筛选：中文名或别名（HK、JP、🇯🇵…）" },
     { name: "--match", value: "关键词[,关键词]", appliesTo: FILTERS, description: "节点名包含任一关键词（不区分大小写）" },
     { name: "--limit", alias: "-n", value: "N", appliesTo: FILTERS, description: "筛选后最多取前 N 个" },
+    { name: "--cached", appliesTo: ["check", "env"], description: "读取本地缓存的最近一次检测结果（与 GUI 互通，不发探针、不切节点）" },
     { name: "--no-progress", alias: "--quiet / -q", appliesTo: "all", description: "不写 stderr NDJSON 进度" },
     { name: "--port", alias: "-p", value: "N", appliesTo: ["serve"], description: "监听端口（默认 17890；0 = 临时）" },
     { name: "--dir", value: "绝对路径", appliesTo: ["install-shim"], description: "shim 安装目录" },

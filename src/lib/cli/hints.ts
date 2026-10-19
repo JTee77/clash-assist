@@ -16,6 +16,7 @@ export const CLI_ERROR_HINTS: Record<string, string> = {
   nodes_unavailable: "确认 Clash Verge 已打开且已加载订阅，再运行 discover 看 status / nodesError。",
   node_not_found: "运行 nodes（可加 --match 关键词）查看准确节点名后重试。",
   node_ambiguous: "写出完整节点名（nodes 命令可列出全部名称），或用 --match 配合 check all --limit。",
+  cache_empty: "本地还没有对应的缓存检测结果（或已过期）；请去掉 --cached 先跑一次实际检测。",
   no_nodes_matched: "放宽 --region / --match，或先运行 nodes 带同样筛选条件确认能匹配到节点。",
   gate_failed: "先确认 Clash Verge 已开启系统代理/TUN 且能访问海外网站，再运行 gate 复查。",
   check_failed: "看 data.hint 定位原因；确认策略组可手动切换（Selector），必要时先 check current。",

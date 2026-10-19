@@ -53,6 +53,7 @@ function makeScore(
 
 describe("resultCache", () => {
   beforeEach(() => {
+    (globalThis as Record<string, unknown>).__TEST_STORAGE__ = true;
     Object.defineProperty(globalThis, "localStorage", {
       value: makeStorage(),
       configurable: true,

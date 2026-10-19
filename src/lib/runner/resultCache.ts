@@ -66,10 +66,22 @@ export function mergeScoreList(
   return sortNodeScores([...byName.values()]);
 }
 
-function readRawEntry(scope: string): CachedResultEntry | null {
-  if (typeof localStorage === "undefined") return null;
+function getStorage(): Storage | null {
+  if (typeof window === "undefined" && !("__TEST_STORAGE__" in globalThis)) {
+    return null;
+  }
   try {
-    const raw = localStorage.getItem(keyFor(scope));
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function readRawEntry(scope: string): CachedResultEntry | null {
+  const ls = getStorage();
+  if (!ls) return null;
+  try {
+    const raw = ls.getItem(keyFor(scope));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<CachedResultEntry>;
     if (!parsed || parsed.version !== 1) return null;
@@ -88,9 +100,10 @@ function readRawEntry(scope: string): CachedResultEntry | null {
 }
 
 function writeRawEntry(scope: string, entry: CachedResultEntry): void {
-  if (typeof localStorage === "undefined") return;
+  const ls = getStorage();
+  if (!ls) return;
   try {
-    localStorage.setItem(keyFor(scope), JSON.stringify(entry));
+    ls.setItem(keyFor(scope), JSON.stringify(entry));
   } catch {
     /* ignore quota / storage errors */
   }
