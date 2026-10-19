@@ -302,7 +302,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
   };
 }
 
-export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.2（与 GUI 共用 runner / egress / score）
+export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.3（与 GUI 共用 runner / egress / score）
 
 用法：
   clash-assist --cli <command> [options]
@@ -324,8 +324,7 @@ export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.2（与 GUI 共
   update-check                 查 GitHub 最新 release：current / latest / update_available / url
 
 选项：
-  --client, -c <id>            目前仅支持 verge（Clash Verge / Clash Verge Rev）
-                               FlClash 即将支持，暂不可用
+  --client, -c <id>            支持 verge（Clash Verge / Clash Verge Rev）或 flclash（FlClash）
   --mock                       不连真实软件，用演示节点跑通管线（--client 可省略，默认 verge）
   --region <地区[,地区]>       nodes / check all / check nodes：按地区筛选（日本、JP、HK、🇸🇬…）
   --match <词[,词]>            同上：节点名包含任一关键词（不区分大小写）

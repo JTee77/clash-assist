@@ -400,9 +400,197 @@ pub fn read_controller_yaml(
 /// Client-scoped discovery. Verge goes through `discover_controller`; other
 /// clients read the per-OS path table in `crate::platform` (macOS keeps the
 /// historical hardcoded paths; non-Verge clients never get Verge's sock).
+/// Parse FlClash controller fields from a decoded JSON object (`flutter.config`,
+/// `flutter.clash_config`, or top-level `shared_preferences.json`).
+pub fn parse_flclash_json_str(raw_json: &str) -> Option<ParsedControllerYaml> {
+    let val: serde_json::Value = serde_json::from_str(raw_json).ok()?;
+    let obj = val.as_object()?;
+
+    // Could be a top-level shared_preferences.json containing `"flutter.config": "{...}"`
+    if let Some(nested_str) = obj
+        .get("flutter.config")
+        .or_else(|| obj.get("config"))
+        .and_then(|v| v.as_str())
+    {
+        if let Some(parsed) = parse_flclash_json_str(nested_str) {
+            return Some(parsed);
+        }
+    }
+    if let Some(nested_str) = obj
+        .get("flutter.clash_config")
+        .or_else(|| obj.get("clash_config"))
+        .and_then(|v| v.as_str())
+    {
+        if let Some(parsed) = parse_flclash_json_str(nested_str) {
+            return Some(parsed);
+        }
+    }
+
+    // Or the decoded Config / PatchClashConfig object itself
+    let patch = obj
+        .get("patchClashConfig")
+        .and_then(|v| v.as_object())
+        .unwrap_or(obj);
+
+    let has_any_flclash_key = patch.contains_key("external-controller")
+        || patch.contains_key("externalController")
+        || patch.contains_key("mixed-port")
+        || patch.contains_key("mixedPort")
+        || patch.contains_key("secret");
+    if !has_any_flclash_key {
+        return None;
+    }
+
+    let mut out = ParsedControllerYaml::default();
+
+    if let Some(ec_val) = patch
+        .get("external-controller")
+        .or_else(|| patch.get("externalController"))
+    {
+        if let Some(ec_str) = ec_val.as_str() {
+            let trimmed = ec_str.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("close") {
+                out.tcp_ec_blank = true;
+            } else if trimmed.eq_ignore_ascii_case("open") {
+                out.port = Some(9090);
+            } else if let Some((_, port_str)) = trimmed.rsplit_once(':') {
+                if let Ok(p) = port_str.trim().parse::<u16>() {
+                    out.port = Some(p);
+                }
+            }
+        } else if let Some(b) = ec_val.as_bool() {
+            if b {
+                out.port = Some(9090);
+            } else {
+                out.tcp_ec_blank = true;
+            }
+        }
+    }
+
+    if let Some(sec) = patch.get("secret").and_then(|v| v.as_str()) {
+        out.secret = sec.trim().to_string();
+    }
+
+    if let Some(mp) = patch
+        .get("mixed-port")
+        .or_else(|| patch.get("mixedPort"))
+        .and_then(|v| v.as_u64())
+    {
+        if let Ok(p) = u16::try_from(mp) {
+            if p > 0 {
+                out.mixed_port = Some(p);
+            }
+        }
+    }
+
+    Some(out)
+}
+
+/// Read a FlClash preference file (`.plist` via `plutil -convert json -o -` on macOS,
+/// or direct `.json`) and extract `ParsedControllerYaml`.
+fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
+    if !path.exists() || !path.is_file() {
+        return None;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    #[cfg(target_os = "macos")]
+    if ext == "plist" {
+        let output = std::process::Command::new("/usr/bin/plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(path)
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if let Some(p) = parse_flclash_json_str(&text) {
+                return Some(p);
+            }
+        }
+    }
+
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_flclash_json_str(&content)
+}
+
+/// Discover FlClash controller from preferences (`.plist` / `shared_preferences.json`)
+/// and runtime `config.yaml` files.
+pub fn discover_flclash_with_paths(
+    pref_paths: &[String],
+    yaml_paths: &[String],
+    default_port: u16,
+    default_mixed: u16,
+) -> DiscoverResult {
+    let mut parsed = ParsedControllerYaml::default();
+    let mut sources: Vec<String> = Vec::new();
+
+    for raw in pref_paths {
+        let path = expand_path_str(raw);
+        if let Some(p) = read_flclash_pref_file(&path) {
+            sources.push(path.display().to_string());
+            merge_parsed(&mut parsed, p);
+        }
+    }
+
+    for raw in yaml_paths {
+        let path = expand_path_str(raw);
+        if path.is_file() {
+            if let Some(p) = read_and_parse(&path) {
+                sources.push(path.display().to_string());
+                merge_parsed(&mut parsed, p);
+            }
+        } else if path.is_dir() {
+            let cfg_yaml = path.join("config.yaml");
+            if cfg_yaml.is_file() {
+                let disp = cfg_yaml.display().to_string();
+                if !sources.contains(&disp) {
+                    if let Some(p) = read_and_parse(&cfg_yaml) {
+                        sources.push(disp);
+                        merge_parsed(&mut parsed, p);
+                    }
+                }
+            }
+        }
+    }
+
+    let port = parsed.port.unwrap_or(default_port);
+    let mixed = parsed.mixed_port.unwrap_or(default_mixed);
+    let secret = parsed.secret;
+
+    let source = if sources.is_empty() {
+        "flclash:defaults".to_string()
+    } else if parsed.tcp_ec_blank && parsed.port.is_none() {
+        format!("flclash-ec-disabled:{}", sources.join(","))
+    } else {
+        format!("flclash:{}", sources.join(","))
+    };
+
+    DiscoverResult {
+        host: "127.0.0.1".into(),
+        port,
+        secret,
+        mixed_port: mixed,
+        source,
+        sock_path: None,
+    }
+}
+
 pub fn discover_for_client(client_id: &str) -> DiscoverResult {
     if client_id == "verge" {
         return discover_controller();
+    }
+    if client_id == "flclash" {
+        let spec = platform::client_discovery("flclash");
+        let (yaml_paths, default_port, default_mixed) = match spec {
+            Some(s) => (s.yaml_paths, s.default_port, s.default_mixed),
+            None => (vec![], 9090, 7890),
+        };
+        let pref_paths = platform::flclash_preference_paths();
+        return discover_flclash_with_paths(&pref_paths, &yaml_paths, default_port, default_mixed);
     }
     if let Some(spec) = platform::client_discovery(client_id) {
         return read_controller_yaml(
@@ -635,5 +823,100 @@ mixed-port: 7897
             "source should reflect unix: {}",
             d.source
         );
+    }
+
+    #[test]
+    fn parse_flclash_json_extracts_open_and_closed_ec() {
+        // 1) shared_preferences / plist style where flutter.config is a stringified JSON
+        let plist_json = r#"{
+            "flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7892,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"fl-secret-32chars\"}}"
+        }"#;
+        let parsed = parse_flclash_json_str(plist_json).expect("should parse");
+        assert_eq!(parsed.port, Some(9090));
+        assert!(!parsed.tcp_ec_blank);
+        assert_eq!(parsed.secret, "fl-secret-32chars");
+        assert_eq!(parsed.mixed_port, Some(7892));
+
+        // 2) EC closed (default in FlClash)
+        let closed_json = r#"{
+            "flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7890,\"external-controller\":\"\",\"secret\":\"\"}}"
+        }"#;
+        let closed = parse_flclash_json_str(closed_json).expect("should parse closed");
+        assert_eq!(closed.port, None);
+        assert!(closed.tcp_ec_blank);
+        assert_eq!(closed.mixed_port, Some(7890));
+    }
+
+    #[test]
+    fn discover_flclash_merges_prefs_and_yaml_and_flags_ec_disabled() {
+        let tmp = PathBuf::from(format!("/tmp/clash-assist-flclash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+
+        let pref_file = tmp.join("shared_preferences.json");
+        let yaml_file = tmp.join("config.yaml");
+
+        // Case A: EC disabled in prefs
+        std::fs::write(
+            &pref_file,
+            r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7895,\"external-controller\":\"\",\"secret\":\"\"}}"}"#,
+        ).expect("write pref");
+
+        let res_disabled = discover_flclash_with_paths(
+            &[pref_file.display().to_string()],
+            &[yaml_file.display().to_string()],
+            9090,
+            7890,
+        );
+        assert_eq!(res_disabled.port, 9090);
+        assert_eq!(res_disabled.mixed_port, 7895);
+        assert!(
+            res_disabled.source.starts_with("flclash-ec-disabled:"),
+            "unexpected source: {}",
+            res_disabled.source
+        );
+
+        // Case A2: macOS binary plist via plutil
+        #[cfg(target_os = "macos")]
+        {
+            let plist_file = tmp.join("com.follow.clash.plist");
+            std::fs::write(&plist_file, &std::fs::read(&pref_file).unwrap()).expect("copy json");
+            let status = std::process::Command::new("/usr/bin/plutil")
+                .args(["-convert", "binary1"])
+                .arg(&plist_file)
+                .status()
+                .expect("plutil binary1");
+            assert!(status.success());
+            let res_plist = discover_flclash_with_paths(
+                &[plist_file.display().to_string()],
+                &[],
+                9090,
+                7890,
+            );
+            assert_eq!(res_plist.mixed_port, 7895);
+            assert!(res_plist.source.starts_with("flclash-ec-disabled:"));
+        }
+
+        // Case B: EC enabled in prefs with 32-char secret
+        std::fs::write(
+            &pref_file,
+            r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7896,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"my-flclash-secret\"}}"}"#,
+        ).expect("write pref 2");
+        let res_enabled = discover_flclash_with_paths(
+            &[pref_file.display().to_string()],
+            &[yaml_file.display().to_string()],
+            9090,
+            7890,
+        );
+        assert_eq!(res_enabled.port, 9090);
+        assert_eq!(res_enabled.secret, "my-flclash-secret");
+        assert_eq!(res_enabled.mixed_port, 7896);
+        assert!(
+            res_enabled.source.starts_with("flclash:"),
+            "unexpected source: {}",
+            res_enabled.source
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

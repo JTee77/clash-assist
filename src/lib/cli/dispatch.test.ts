@@ -124,20 +124,26 @@ describe("参数 / 闸门错误：ok:false，且不碰网络", () => {
     noNetworkTouched();
   });
 
-  it("-c flclash 被拒（真实与 --mock 都一样）", async () => {
+  it("-c mihomo_party 等未支持客户端被拒（真实与 --mock 都一样）", async () => {
     for (const extra of [[], ["--mock"]]) {
-      const env = await run(["check", "all", "-c", "flclash", ...extra]);
+      const env = await run(["check", "all", "-c", "mihomo_party", ...extra]);
       expect(env.ok).toBe(false);
       expect(env.error?.code).toBe("client_unsupported");
-      expect(env.error?.message).toContain("当前仅支持 Clash Verge");
+      expect(env.error?.message).toContain("Clash Verge");
     }
     noNetworkTouched();
+  });
+
+  it("-c flclash 通过客户端闸门（discover 正常执行）", async () => {
+    const env = await run(["discover", "-c", "flclash"]);
+    expect(env.ok).toBe(true);
+    expect((env.data as { clientId: string }).clientId).toBe("flclash");
   });
 
   it("help 永远 ok", async () => {
     const env = await run(["help"]);
     expect(env.ok).toBe(true);
-    expect((env.data as { text: string }).text).toContain("0.2.2");
+    expect((env.data as { text: string }).text).toContain("0.2.3");
   });
 });
 

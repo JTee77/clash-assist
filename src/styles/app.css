@@ -1740,6 +1740,38 @@ select {
   color: var(--accent);
   text-decoration: none;
 }
+.donate-line {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.donate-addr {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  user-select: all;
+  word-break: break-all;
+}
+.donate-copy-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.donate-copy-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
 
 /* 玻璃地基：仅在 Tauri 透明窗口下（html.glass）生效。
    桌面模糊由原生 NSVisualEffectView（tauri windowEffects）提供，

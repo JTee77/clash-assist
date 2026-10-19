@@ -351,7 +351,7 @@ export async function discoverAndProbe(
     }
     return {
       ...sockFirst,
-      message: clientUnreachableHint(clientId),
+      message: clientUnreachableHint(clientId, config.source),
       proxiesError: "请确认 Mihomo Party 已打开并已连接节点",
     };
   }
@@ -368,7 +368,7 @@ export async function discoverAndProbe(
     }
     return {
       ...sockFirst,
-      message: clientUnreachableHint(clientId),
+      message: clientUnreachableHint(clientId, config.source),
       proxiesError: `请确认【${label}】已打开并已连接节点`,
     };
   }
@@ -391,8 +391,11 @@ export async function discoverAndProbe(
 
   return {
     ...result,
-    message: clientUnreachableHint(clientId),
-    proxiesError: `请确认【${label}】已打开并已连接节点`,
+    message: clientUnreachableHint(clientId, config.source),
+    proxiesError:
+      clientId === "flclash"
+        ? clientUnreachableHint("flclash", config.source)
+        : `请确认【${label}】已打开并已连接节点`,
   };
 }
 
@@ -413,6 +416,47 @@ function mergeManual(
       isManual && manual.source !== "auto"
         ? (manual.source ?? "manual")
         : config.source,
+  };
+}
+
+/**
+ * Best-effort: query live `GET /configs` from the connected Mihomo controller
+ * to sync the real-time `mixed-port` (or `port` fallback). This guarantees
+ * non-TUN (System Proxy / port-only) users and FlClash users with dynamic port
+ * overrides always probe through the actual listening proxy port.
+ */
+async function syncLiveMixedPort(config: ControllerConfig): Promise<ControllerConfig> {
+  try {
+    const res = await httpApi(config, "GET", "/configs", undefined, 1500);
+    if (res && is2xx(res.status) && res.json && typeof res.json === "object") {
+      const obj = res.json as Record<string, unknown>;
+      const mp = obj["mixed-port"];
+      const hp = obj["port"];
+      if (typeof mp === "number" && mp > 0 && mp <= 65535) {
+        return { ...config, mixedPort: mp };
+      }
+      if (typeof hp === "number" && hp > 0 && hp <= 65535 && (!mp || mp === 0)) {
+        return { ...config, mixedPort: hp };
+      }
+    }
+  } catch {
+    /* ignore and keep discovered mixedPort */
+  }
+  return config;
+}
+
+async function connectedState(
+  config: ControllerConfig,
+  label: string,
+): Promise<ConnectionState> {
+  const synced = await syncLiveMixedPort(config);
+  return {
+    status: "connected",
+    message: `已连上 ${label}`,
+    config: synced,
+    currentProxy: null,
+    usingMock: false,
+    proxiesError: null,
   };
 }
 
@@ -438,14 +482,7 @@ async function probeWithConfig(
       return unauthorizedState(config);
     }
     if (viaSock && is2xx(viaSock.status)) {
-      return {
-        status: "connected",
-        message: `已连上 ${label}`,
-        config,
-        currentProxy: null,
-        usingMock: false,
-        proxiesError: null,
-      };
+      return await connectedState(config, label);
     }
     viaTcp = await runTcp();
   } else {
@@ -454,14 +491,7 @@ async function probeWithConfig(
       return unauthorizedState(config);
     }
     if (viaTcp && is2xx(viaTcp.status)) {
-      return {
-        status: "connected",
-        message: `已连上 ${label}`,
-        config,
-        currentProxy: null,
-        usingMock: false,
-        proxiesError: null,
-      };
+      return await connectedState(config, label);
     }
     if (trySock) {
       viaSock = await runSock();
@@ -472,14 +502,7 @@ async function probeWithConfig(
     return unauthorizedState(config);
   }
   if (viaSock && is2xx(viaSock.status)) {
-    return {
-      status: "connected",
-      message: `已连上 ${label}`,
-      config,
-      currentProxy: null,
-      usingMock: false,
-      proxiesError: null,
-    };
+    return await connectedState(config, label);
   }
 
   // Dev / non-Tauri browser fallback
@@ -488,14 +511,7 @@ async function probeWithConfig(
     return unauthorizedState(config);
   }
   if (viaBrowser && is2xx(viaBrowser.status)) {
-    return {
-      status: "connected",
-      message: `已连上 ${label}`,
-      config,
-      currentProxy: null,
-      usingMock: false,
-      proxiesError: null,
-    };
+    return await connectedState(config, label);
   }
 
   if (viaSock || viaTcp || viaBrowser) {
@@ -503,7 +519,7 @@ async function probeWithConfig(
     return {
       status: "unreachable",
       message: clientId
-        ? clientUnreachableHint(clientId)
+        ? clientUnreachableHint(clientId, config.source)
         : `连接失败（HTTP ${status}）`,
       config,
       currentProxy: null,
@@ -515,7 +531,7 @@ async function probeWithConfig(
   return {
     status: "unreachable",
     message: clientId
-      ? clientUnreachableHint(clientId)
+      ? clientUnreachableHint(clientId, config.source)
       : "请先打开并连上你的VPN软件，再点「获取节点」",
     config,
     currentProxy: null,
@@ -527,11 +543,11 @@ async function probeWithConfig(
 function unauthorizedState(config: ControllerConfig): ConnectionState {
   return {
     status: "unauthorized",
-    message: "连接被拒绝，请展开「高级」核对密钥后重试",
+    message: "连接被拒绝（控制器密钥不匹配），请重启代理软件或刷新连接后重试",
     config,
     currentProxy: null,
     usingMock: false,
-    proxiesError: "密钥不正确或未配置，请展开「高级」核对",
+    proxiesError: "控制器密钥不匹配，请确认代理软件外部控制器配置后重试",
   };
 }
 
@@ -635,7 +651,7 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
   }
   if (res.status === 401 || res.status === 403) {
     return empty(
-      "连接被拒绝，请展开「高级」核对密钥后重试",
+      "连接被拒绝（控制器密钥不匹配），请重启代理软件或刷新连接后重试",
       true,
     );
   }

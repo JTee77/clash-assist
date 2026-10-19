@@ -14,12 +14,10 @@ import type { CheckCard, EgressReport } from "../lib/egress";
 import {
   CLIENT_OPTIONS,
   classifyByRegion,
-  clientLabel,
   normalizeClientId,
   shortRegionName,
   type ClientId,
   type ConnectionState,
-  type ControllerConfig,
   type ProxyNode,
 } from "../lib/mihomo";
 import {
@@ -88,12 +86,7 @@ export function HomePage({
   clientId,
   onClientIdChange,
   onRefresh,
-  manual,
-  forceMock,
-  onChangeManual,
-  onResetManual,
-  onForceMockChange,
-  onRefreshAdvanced,
+  forceMock = false,
 }: {
   connection: ConnectionState;
   busy?: boolean;
@@ -101,12 +94,7 @@ export function HomePage({
   clientId: ClientId | null;
   onClientIdChange: (id: ClientId) => void;
   onRefresh?: () => Promise<unknown> | void;
-  manual: Partial<ControllerConfig>;
-  forceMock: boolean;
-  onChangeManual: (patch: Partial<ControllerConfig>) => void;
-  onResetManual: () => void;
-  onForceMockChange: (v: boolean) => void;
-  onRefreshAdvanced: (override?: Partial<ControllerConfig>) => Promise<unknown>;
+  forceMock?: boolean;
 }) {
   const { t, td } = useI18n();
   const [nodeCards, setNodeCards] = useState<CheckCard[]>(NODE_PLACEHOLDERS);
@@ -131,22 +119,14 @@ export function HomePage({
   const [regionFilter, setRegionFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [allConfirmOpen, setAllConfirmOpen] = useState(false);
+  const [copiedDonate, setCopiedDonate] = useState(false);
   const [switchHint, setSwitchHint] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const abortAllRef = useRef(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [testingNode, setTestingNode] = useState<string | null>(null);
   const [colCount, setColCount] = useState(() =>
     typeof window === "undefined" ? 2 : colCountFor(window.innerWidth),
-  );
-
-  const cfg = connection.config;
-  const [host, setHost] = useState(manual.host ?? cfg?.host ?? "127.0.0.1");
-  const [port, setPort] = useState(String(manual.port ?? cfg?.port ?? 9097));
-  const [secret, setSecret] = useState(manual.secret ?? cfg?.secret ?? "");
-  const [mixedPort, setMixedPort] = useState(
-    String(manual.mixedPort ?? cfg?.mixedPort ?? 7897),
   );
 
   const clientUnset = !clientId;
@@ -313,27 +293,6 @@ export function HomePage({
     const id = normalizeClientId(raw);
     if (!id) return;
     onClientIdChange(id);
-  };
-
-  const applyAdvanced = async () => {
-    const patch: Partial<ControllerConfig> = {
-      host,
-      port: Number(port) || 9097,
-      secret,
-      mixedPort: Number(mixedPort) || 7897,
-      source: "manual",
-    };
-    onChangeManual(patch);
-    await onRefreshAdvanced(patch);
-  };
-
-  const autoDetect = async () => {
-    onResetManual();
-    setHost("127.0.0.1");
-    setPort("9097");
-    setSecret("");
-    setMixedPort("7897");
-    await onRefreshAdvanced({ source: "auto" });
   };
 
   const refreshAndGate = async () => {
@@ -990,106 +949,6 @@ export function HomePage({
         </div>
       ) : null}
 
-      <div className="fold-panel card">
-        <button
-          type="button"
-          className="fold-toggle"
-          aria-expanded={advancedOpen}
-          onClick={() => setAdvancedOpen((v) => !v)}
-        >
-          {advancedOpen ? t("home.advancedHide") : t("home.advancedShow")}
-        </button>
-        {advancedOpen ? (
-          <div className="fold-body">
-            <p className="muted fold-hint">
-              {t("home.currentApp")}<strong>{td(clientLabel(clientId))}</strong>
-              {clientId
-                ? t("home.currentAppAuto")
-                : t("home.currentAppPick")}
-            </p>
-            <div className="form-grid" style={{ marginBottom: 12 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={forceMock}
-                  onChange={(e) => onForceMockChange(e.target.checked)}
-                />
-                <span>
-                  <strong>{t("home.mockTitle")}</strong>
-                  <span className="muted">{t("home.mockDesc")}</span>
-                </span>
-              </label>
-            </div>
-            <div className="form-grid">
-              <p className="muted fold-hint">
-                {t("home.manualHint")}
-              </p>
-              <div className="field">
-                <label>Host</label>
-                <input
-                  value={host}
-                  onChange={(e) => setHost(e.target.value)}
-                  disabled={forceMock}
-                />
-              </div>
-              <div className="field">
-                <label>{t("home.portLabel")}</label>
-                <input
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  disabled={forceMock}
-                />
-              </div>
-              <div className="field">
-                <label>{t("home.secretLabel")}</label>
-                <input
-                  type="password"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  placeholder="set-your-secret"
-                  disabled={forceMock}
-                />
-              </div>
-              <div className="field">
-                <label>{t("home.mixedLabel")}</label>
-                <input
-                  value={mixedPort}
-                  onChange={(e) => setMixedPort(e.target.value)}
-                  disabled={forceMock}
-                />
-              </div>
-              <div className="toolbar">
-                <button
-                  className="btn btn-primary"
-                  type="button"
-                  disabled={!!busy || forceMock}
-                  onClick={() => void applyAdvanced()}
-                >
-                  {t("home.save")}
-                </button>
-                <button
-                  className="btn"
-                  type="button"
-                  disabled={!!busy || forceMock}
-                  onClick={() => void autoDetect()}
-                >
-                  {t("home.rediscover")}
-                </button>
-              </div>
-              <p className="muted fold-hint">
-                {t("home.source")}{cfg?.source ?? "—"}
-                <br />
-                {t("home.unixSock")}{cfg?.sockPath ?? t("home.none")}
-                <br />
-                {t("home.mixedPort")}{cfg?.mixedPort ?? "—"}
-                <br />
-                {t("home.currentNode")}{connection.currentProxy ?? "—"}
-              </p>
-            </div>
-          </div>
-        ) : null}
-      </div>
-
       <details className="about-footer">
         <summary>{t("home.about")}</summary>
         <div className="a-body">
@@ -1104,7 +963,26 @@ export function HomePage({
           <br />
           {t("home.thanks")}
           <br />
-          {t("home.coffee")}
+          <span className="donate-line">
+            {t("home.coffee")}
+            <code className="donate-addr">
+              0xa1ee52b64c39B94B74E50cEBF5E667a2e57E57Cb
+            </code>
+            <button
+              type="button"
+              className="donate-copy-btn"
+              onClick={() => {
+                void navigator.clipboard
+                  ?.writeText("0xa1ee52b64c39B94B74E50cEBF5E667a2e57E57Cb")
+                  .then(() => {
+                    setCopiedDonate(true);
+                    setTimeout(() => setCopiedDonate(false), 1800);
+                  });
+              }}
+            >
+              {copiedDonate ? `✓ ${t("home.copiedAddr")}` : t("home.copyAddr")}
+            </button>
+          </span>
         </div>
       </details>
     </div>

@@ -31,9 +31,8 @@ export const CLIENT_OPTIONS: ClientOption[] = [
   },
   {
     id: "flclash",
-    label: "FlClash（即将支持）",
-    hint: "即将支持，暂不可选",
-    disabled: true,
+    label: "FlClash",
+    hint: "选好后点刷新，按该软件自动连接",
   },
 ];
 
@@ -114,12 +113,11 @@ export function isClientId(v: unknown): v is ClientId {
 }
 
 /**
- * Map stored clientId. Only Clash Verge is selectable today. FlClash is listed
- * as coming soon and anything else (legacy clashx_meta/mihomo_party/nyanpasu,
- * a previously stored flclash, mihomo/manual/unknown) → null, forcing a fresh pick.
+ * Map stored clientId. Clash Verge and FlClash are selectable today.
+ * Legacy clashx_meta/mihomo_party/nyanpasu/mihomo/manual/unknown → null, forcing a fresh pick.
  */
 export function normalizeClientId(v: unknown): ClientId | null {
-  if (v === "verge") return v;
+  if (v === "verge" || v === "flclash") return v;
   return null;
 }
 
@@ -129,7 +127,13 @@ export function clientLabel(id: ClientId | null): string {
 }
 
 /** Plain-language unreachable tip naming the selected app. */
-export function clientUnreachableHint(id: ClientId): string {
+export function clientUnreachableHint(id: ClientId, source?: string): string {
+  if (id === "flclash") {
+    if (source?.startsWith("flclash-ec-disabled:")) {
+      return "检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「获取节点」";
+    }
+    return "请确认 FlClash 已打开并连接节点，且在 FlClash「设置 → 常规 → 入站」中开启了「外部控制器」";
+  }
   const name = clientLabel(id);
   return `请先打开并连上【${name}】，再点「获取节点」`;
 }

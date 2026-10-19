@@ -103,5 +103,7 @@ export const zhHant: Messages = {
   "home.about": "關於 Clash伴侶",
   "home.repo": "儲存庫：",
   "home.thanks": "致謝：Clash Verge / mihomo 社群。",
-  "home.coffee": "請我喝杯咖啡 ☕（佔位：連結或 QR Code 待定）",
+  "home.coffee": "請我喝杯咖啡 ☕：",
+  "home.copyAddr": "複製",
+  "home.copiedAddr": "已複製",
 };

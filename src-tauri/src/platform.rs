@@ -137,6 +137,28 @@ pub struct ClientDiscovery {
     pub source_prefix: &'static str,
 }
 
+/// FlClash preference files (macOS NSUserDefaults `.plist` + shared_preferences JSON).
+/// Modern FlClash (v0.9+) stores `patchClashConfig` (`external-controller`, `secret`,
+/// `mixed-port`) in `flutter.config` inside `~/Library/Preferences/com.follow.clash.plist`
+/// or `shared_preferences.json`, and may skip writing `config.yaml` on base-profile setups.
+#[cfg(target_os = "macos")]
+pub fn flclash_preference_paths() -> Vec<String> {
+    vec![
+        "~/Library/Preferences/com.follow.clash.plist".into(),
+        "~/Library/Containers/com.follow.clash/Data/Library/Preferences/com.follow.clash.plist".into(),
+        "~/Library/Application Support/com.follow.clash/shared_preferences.json".into(),
+        "~/Library/Application Support/FlClash/shared_preferences.json".into(),
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn flclash_preference_paths() -> Vec<String> {
+    vec![
+        "~/Library/Application Support/com.follow.clash/shared_preferences.json".into(),
+        "~/Library/Application Support/FlClash/shared_preferences.json".into(),
+    ]
+}
+
 /// macOS table — must stay identical to the historical hardcoded paths.
 /// Verge is NOT here: it goes through `discover_controller()` in `mihomo`.
 #[cfg(target_os = "macos")]
@@ -151,6 +173,8 @@ pub fn client_discovery(client_id: &str) -> Option<ClientDiscovery> {
         },
         "flclash" => ClientDiscovery {
             yaml_paths: vec![
+                "~/Library/Application Support/com.follow.clash/config.yaml".into(),
+                "~/Library/Application Support/FlClash/config.yaml".into(),
                 "~/Library/Application Support/com.follow.clash".into(),
                 "~/Library/Application Support/FlClash".into(),
             ],
@@ -266,6 +290,8 @@ mod tests {
         assert_eq!(
             fl.yaml_paths,
             vec![
+                "~/Library/Application Support/com.follow.clash/config.yaml".to_string(),
+                "~/Library/Application Support/FlClash/config.yaml".to_string(),
                 "~/Library/Application Support/com.follow.clash".to_string(),
                 "~/Library/Application Support/FlClash".to_string(),
             ]

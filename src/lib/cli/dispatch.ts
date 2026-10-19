@@ -53,7 +53,7 @@ export const CLI_NODES_LIMIT = 50;
 export const CLI_APP_BINARY = "/Applications/Clash Assist.app/Contents/MacOS/clash-assist";
 
 /** 唯一受支持软件的提示（与 GUI 选择器一致：只有 Clash Verge 可选）。 */
-export const CLI_ONLY_VERGE = "当前仅支持 Clash Verge（--client verge）。";
+export const CLI_ONLY_VERGE = "当前支持 Clash Verge（--client verge）与 FlClash（--client flclash）。";
 
 function version(): string {
   try {
@@ -197,7 +197,7 @@ export function resolveCliClient(
       ok: false,
       error: {
         code: "client_required",
-        message: `请用 --client verge 指定软件，或加 --mock 用演示数据。${CLI_ONLY_VERGE}`,
+        message: `请用 --client verge 或 --client flclash 指定软件，或加 --mock 用演示数据。${CLI_ONLY_VERGE}`,
       },
     };
   }
@@ -214,9 +214,7 @@ export function resolveCliClient(
   const id = normalizeClientId(raw);
   if (id) return { ok: true, clientId: id };
   let message: string;
-  if (raw === "flclash") {
-    message = `${CLI_ONLY_VERGE}FlClash 即将支持，暂不可用。`;
-  } else if (isClientId(raw)) {
+  if (isClientId(raw)) {
     message = `${CLI_ONLY_VERGE}「${raw}」暂不支持。`;
   } else {
     message = `未知软件「${raw}」。${CLI_ONLY_VERGE}`;

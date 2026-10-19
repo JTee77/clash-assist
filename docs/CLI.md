@@ -1,8 +1,8 @@
-# Clash Assist / Clash伴侣 CLI（0.2.2）
+# Clash Assist / Clash伴侣 CLI（0.2.3）
 
 与图形界面共用 `src/lib/runner`、`egress`、`score`、`mihomo`。通过 **`--cli`** 启动隐藏窗口，在 WebView 内调用同一套 Tauri 能力。一次性命令结束后把 **一行 JSON（CliEnvelope）** 打到 stdout 并退出；**`serve`** 常驻本机 loopback HTTP，直到 Ctrl+C。
 
-**目前只支持 Clash Verge / Clash Verge Rev（`--client verge`）。** FlClash 即将支持，暂不可用；其它软件不支持。
+**支持 Clash Verge / Clash Verge Rev（`--client verge`）与 FlClash（`--client flclash`）。**
 
 > 给 AI 助手 / 自动化脚本的简明指南见 [AGENTS-CLI.md](./AGENTS-CLI.md)；机器可读的命令清单：`clash-assist --cli help --json` 的 `data.spec`。
 
@@ -70,7 +70,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 
 | 选项 | 说明 |
 |------|------|
-| `--client, -c <id>` / `--client=<id>` | 只接受 `verge`。`flclash` 等任何其它值都报 `client_unsupported`（「当前仅支持 Clash Verge」） |
+| `--client, -c <id>` / `--client=<id>` | 支持 `verge` 或 `flclash`。其它值报 `client_unsupported` |
 | `--mock` | 不连真实软件，用演示节点跑通管线；可省略 `--client`（默认 verge）。**给了非法 `--client` 时 `--mock` 也照样报错，不回落** |
 | `--port, -p <N>` / `--port=<N>` | **仅 `serve`**：监听端口。默认 **17890**；`0` = 临时端口（就绪横幅打印实际端口）。配其它命令 → `port_only_for_serve` |
 | `--region <地区[,地区]>` | **仅 `nodes` / `check all` / `check nodes`**。按地区筛选：等于或包含节点 `region`（如 `日本`、`中国香港`），或别名（`JP`、`HK`、`香港`、`🇸🇬` …，与 GUI 分组同一规则 `detectRegion`）。逗号分隔表示「任一」 |
@@ -125,7 +125,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `unexpected_argument` | 子命令带了多余参数（`discover foo`、`check all x`、`help check`） | 否 |
 | `node_name_required` | `check node` 没给名字 | 否 |
 | `client_required` | 没给 `--client` 且没加 `--mock` | 否 |
-| `client_unsupported` | `--client` 不是 `verge`（含 `flclash`；`--mock` 也一样） | 否 |
+| `client_unsupported` | `--client` 不是 `verge` 或 `flclash`（`--mock` 也一样） | 否 |
 | `option_not_applicable` | 选项配错命令（如 `discover --limit 2`、`check node X --region JP`、非 install-shim 带 `--dir`） | 否 |
 | `invalid_limit` | `--limit` 不是正整数 | 否 |
 | `nodes_unavailable` | `check node` / `check nodes` / 筛选时读不到节点列表 | 否 |

@@ -25,7 +25,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
     if (connection.status === "unauthorized") {
       return {
         ok: false,
-        message: "密钥被VPN软件拒绝。展开「高级」核对密钥后重试。",
+        message: "密钥被VPN软件拒绝。请确认代理软件外部控制器配置或重启软件后重试。",
         process: connection.proxiesError ?? connection.message,
       };
     }

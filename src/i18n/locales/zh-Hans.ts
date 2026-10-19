@@ -101,7 +101,9 @@ export const zhHans = {
   "home.about": "关于 Clash伴侣",
   "home.repo": "仓库：",
   "home.thanks": "致谢：Clash Verge / mihomo 社区。",
-  "home.coffee": "请我喝杯咖啡 ☕（占位：链接或二维码待定）",
+  "home.coffee": "请我喝杯咖啡 ☕：",
+  "home.copyAddr": "复制",
+  "home.copiedAddr": "已复制",
 } as const;
 
 export type MessageKey = keyof typeof zhHans;

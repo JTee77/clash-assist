@@ -103,5 +103,7 @@ export const en: Messages = {
   "home.about": "About Clash Assist",
   "home.repo": "Repo: ",
   "home.thanks": "Thanks: the Clash Verge / mihomo community.",
-  "home.coffee": "Buy me a coffee ☕ (placeholder: link or QR code TBD)",
+  "home.coffee": "Buy me a coffee ☕: ",
+  "home.copyAddr": "Copy",
+  "home.copiedAddr": "Copied",
 };
