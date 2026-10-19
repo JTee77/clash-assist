@@ -54,7 +54,7 @@ export const CLI_SPEC = {
     { name: "update-check", usage: "update-check", description: "查询 GitHub 最新 release；data = { current, latest, update_available, url }。网络失败 → update_check_failed", switchesNodes: false, costly: false, progress: false, suggestedTimeoutSec: 15, serveRoute: null },
   ] satisfies CliSpecCommand[],
   options: [
-    { name: "--client", alias: "-c", value: "verge", appliesTo: ["discover", "nodes", "gate", "check", "env", "serve"], description: "目前只支持 verge" },
+    { name: "--client", alias: "-c", value: "verge|flclash", appliesTo: ["discover", "nodes", "gate", "check", "env", "serve"], description: "支持 verge（Clash Verge）或 flclash（FlClash）" },
     { name: "--mock", appliesTo: "all", description: "演示节点，不连真实软件（探针仍真实发请求）" },
     { name: "--region", value: "地区[,地区]", appliesTo: FILTERS, description: "按地区筛选：中文名或别名（HK、JP、🇯🇵…）" },
     { name: "--match", value: "关键词[,关键词]", appliesTo: FILTERS, description: "节点名包含任一关键词（不区分大小写）" },

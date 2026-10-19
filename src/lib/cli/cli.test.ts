@@ -206,8 +206,9 @@ describe("resolveCliClient（与 GUI normalizeClientId 对齐）", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe("client_required");
-      expect(r.error.message).toContain("当前仅支持 Clash Verge");
-      expect(r.error.message).not.toMatch(/flclash|clashx|mihomo_party|nyanpasu/i);
+      expect(r.error.message).toContain("Clash Verge");
+      expect(r.error.message).toContain("FlClash");
+      expect(r.error.message).not.toMatch(/clashx|mihomo_party|nyanpasu/i);
     }
   });
 
@@ -224,15 +225,11 @@ describe("resolveCliClient（与 GUI normalizeClientId 对齐）", () => {
     ).toEqual({ ok: true, clientId: "verge" });
   });
 
-  it("flclash 被拒，--mock 也不回落", () => {
+  it("flclash 通过", () => {
     for (const mock of [false, true]) {
-      const r = resolveCliClient({ clientId: "flclash", clientGiven: true, mock });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe("client_unsupported");
-        expect(r.error.message).toContain("当前仅支持 Clash Verge");
-        expect(r.error.message).toContain("FlClash 即将支持");
-      }
+      expect(
+        resolveCliClient({ clientId: "flclash", clientGiven: true, mock }),
+      ).toEqual({ ok: true, clientId: "flclash" });
     }
   });
 
@@ -344,14 +341,13 @@ describe("CliEnvelope", () => {
 });
 
 describe("帮助与文案", () => {
-  it("只推广 verge；FlClash 标为即将支持", () => {
-    expect(CLI_HELP_TEXT).toContain("0.2.2");
-    expect(CLI_HELP_TEXT).toContain("仅支持 verge");
-    expect(CLI_HELP_TEXT).toContain("FlClash 即将支持");
+  it("支持 verge 与 flclash（0.2.3）", () => {
+    expect(CLI_HELP_TEXT).toContain("0.2.3");
+    expect(CLI_HELP_TEXT).toContain("支持 verge");
+    expect(CLI_HELP_TEXT).toContain("flclash");
     expect(CLI_HELP_TEXT).toContain("serve");
     expect(CLI_HELP_TEXT).toContain("17890");
     expect(CLI_HELP_TEXT).not.toMatch(/clashx_meta|mihomo_party|nyanpasu/);
-    expect(CLI_HELP_TEXT).not.toMatch(/\|\s*flclash/);
   });
 });
 

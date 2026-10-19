@@ -151,7 +151,7 @@ export function useConnection() {
           const unauthorized: ConnectionState = {
             ...next,
             status: "unauthorized",
-            message: "连接被拒绝，请展开「高级」核对密钥后重试",
+            message: "连接被拒绝（控制器密钥不匹配），请重启代理软件或刷新连接后重试",
             usingMock: false,
             currentProxy: null,
             proxiesError: list.error,

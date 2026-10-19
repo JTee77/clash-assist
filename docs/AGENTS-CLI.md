@@ -1,4 +1,4 @@
-# Clash Assist / Clash伴侣 CLI —— 给 AI 助手的使用指南（0.2.2）
+# Clash Assist / Clash伴侣 CLI —— 给 AI 助手的使用指南（0.2.3）
 
 完整参考见 [CLI.md](./CLI.md)。本页只讲「怎么稳妥地调用」。
 
@@ -16,7 +16,7 @@
 "/Applications/Clash Assist.app/Contents/MacOS/clash-assist" --cli install-shim
 ```
 
-只支持 macOS、只支持 Clash Verge（`--client verge`）。`check` / `env` 需要 **macOS 14+**，更早系统返回 `os_unsupported`。
+支持 macOS 上的 Clash Verge（`--client verge`）与 FlClash（`--client flclash`）。`check` / `env` 需要 **macOS 14+**，更早系统返回 `os_unsupported`。
 
 ## 2. 先读机器可读清单
 

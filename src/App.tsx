@@ -28,14 +28,10 @@ function AppInner() {
     state,
     nodes,
     busy,
-    manual,
     forceMock,
     clientId,
     setClientId,
-    updateManual,
-    resetManual,
     refresh,
-    setForceMock,
   } = useConnection();
 
   return (
@@ -49,15 +45,7 @@ function AppInner() {
           clientId={clientId}
           onClientIdChange={setClientId}
           onRefresh={() => refresh()}
-          manual={manual}
           forceMock={forceMock}
-          onChangeManual={updateManual}
-          onResetManual={resetManual}
-          onForceMockChange={(v) => {
-            setForceMock(v);
-            void refresh(undefined, v);
-          }}
-          onRefreshAdvanced={(override) => refresh(override)}
         />
       </main>
     </div>
