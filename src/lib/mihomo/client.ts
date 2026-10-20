@@ -19,6 +19,7 @@ import {
 import { detectRegion, detectRegions } from "./regions";
 import { resolveCurrentProxy } from "./currentProxy";
 import { mockProxiesRaw } from "./mock";
+import { mergeProviderNodes, missingProviderNames, resolveProviderNode, type ProviderMap } from "./providerNodes";
 import {
   type ClientId,
   clientLabel,
@@ -203,6 +204,25 @@ async function httpApi(
 
   // No 2xx: prefer any non-null response (sock > tcp > browser) so callers see 401 etc.
   return viaSock ?? viaRust ?? viaBrowser;
+}
+
+type ControllerReader = (path: string, timeoutMs: number) => Promise<HttpResult | null>;
+
+/** Pick one responding controller and retain it for related discovery requests.
+ * An HTTP error is a response, not permission to borrow another controller's
+ * nodes. In Tauri, controller credentials stay in native transports. */
+async function openControllerRead(
+  config: ControllerConfig, path: string, timeoutMs: number,
+): Promise<{ response: HttpResult; read: ControllerReader } | null> {
+  const tcp: ControllerReader = (next, timeout) => rustHttp(config, "GET", next, undefined, timeout);
+  const unix: ControllerReader = (next, timeout) => unixHttp(config, "GET", next, undefined, timeout);
+  const browser: ControllerReader = (next, timeout) => browserFetch(config, "GET", next, undefined, timeout);
+  const readers = isTauri() ? (config.sockPath ? [unix, tcp] : [tcp, unix]) : [browser];
+  for (const read of readers) {
+    const response = await read(path, timeoutMs);
+    if (response) return { response, read };
+  }
+  return null;
 }
 
 function isJunkName(name: string): boolean {
@@ -645,8 +665,9 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
   if (slim) return slim;
 
   // Fallback: full /proxies via TCP/unix/browser (dev / non-Tauri).
-  const res = await httpApi(config, "GET", "/proxies", undefined, 18000);
-  if (!res) {
+  const controller = await openControllerRead(config, "/proxies", 18000);
+  const res = controller?.response;
+  if (!res || !controller) {
     return empty("暂时读不到节点列表，请确认软件已打开并点「获取节点」");
   }
   if (res.status === 401 || res.status === 403) {
@@ -667,7 +688,14 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
   }
 
   const obj = res.json as { proxies?: Record<string, ProxyInfo> };
-  const proxies = obj.proxies ?? {};
+  let proxies = obj.proxies ?? {};
+  if (missingProviderNames(proxies).length > 0) {
+    const providers = await controller.read("/providers/proxies", 5000);
+    const providerMap = (providers?.json as { providers?: ProviderMap } | null)?.providers;
+    if (providers && is2xx(providers.status) && providerMap && typeof providerMap === "object") {
+      proxies = mergeProviderNodes(proxies, providerMap);
+    }
+  }
   let filtered = filterNodes(proxies);
   if (filtered.nodes.length === 0) {
     filtered = resolveNodesFromGroups(proxies);
@@ -686,7 +714,9 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
     nodes: filtered.nodes,
     currentProxy: filtered.currentProxy,
     usingMock: false,
-    error: null,
+    error: missingProviderNames(proxies).length > 0
+      ? "已连上软件，但部分订阅节点未能唯一识别"
+      : null,
     unauthorized: false,
   };
 }
@@ -699,10 +729,22 @@ export async function probeDelay(
 ): Promise<number | null> {
   const enc = encodeURIComponent(nodeName);
   const path = `/proxies/${enc}/delay?timeout=${timeout}&url=${encodeURIComponent(url)}`;
-  const res = await httpApi(config, "GET", path, undefined, timeout + 800);
+  const controller = await openControllerRead(config, path, timeout + 800);
+  let res = controller?.response;
+  if (res?.status === 404 && controller) {
+    // Provider-only nodes are not addressable via /proxies/:name in Mihomo.
+    // Do not call a whole-provider healthcheck (it probes unrelated nodes).
+    const providers = await controller.read("/providers/proxies", 5000);
+    const providerMap = (providers?.json as { providers?: ProviderMap } | null)?.providers;
+    if (!providers || !is2xx(providers.status) || !providerMap || typeof providerMap !== "object") return null;
+    const found = resolveProviderNode(providerMap, nodeName);
+    if (!found) return null;
+    const providerPath = `/providers/proxies/${encodeURIComponent(found.provider)}/${enc}/healthcheck?timeout=${timeout}&url=${encodeURIComponent(url)}`;
+    res = await controller.read(providerPath, timeout + 800) ?? undefined;
+  }
   if (!res || res.status !== 200 || !res.json) return null;
   const delay = (res.json as { delay?: number }).delay;
-  return delay && delay > 0 ? delay : null;
+  return typeof delay === "number" && Number.isFinite(delay) && delay > 0 ? delay : null;
 }
 
 
