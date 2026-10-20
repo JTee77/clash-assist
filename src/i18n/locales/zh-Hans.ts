@@ -3,6 +3,9 @@ export const zhHans = {
   appName: "Clash伴侣",
   "update.found": "发现新版本 {v}",
   "update.go": "去下载",
+  "update.install": "一键更新",
+  "update.updating": "正在更新 {v} 并重启…",
+  "update.fallbackOpened": "已为你打开下载页",
   close: "关闭",
 
   "crash.title": "界面出错了",

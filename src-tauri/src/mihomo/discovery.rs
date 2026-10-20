@@ -682,11 +682,17 @@ mixed-port: 7897
 
     #[test]
     fn expand_path_str_tmpdir_and_home() {
-        std::env::set_var("TMPDIR", "/var/folders/test-tmpdir");
+        let prev = std::env::var("TMPDIR").ok();
+        std::env::set_var("TMPDIR", "/tmp/clash-assist-test-tmpdir");
         let p = expand_path_str("$TMPDIR/verge-mihomo.sock");
+        if let Some(v) = prev {
+            std::env::set_var("TMPDIR", v);
+        } else {
+            std::env::set_var("TMPDIR", "/tmp");
+        }
         assert_eq!(
             p.to_string_lossy(),
-            "/var/folders/test-tmpdir/verge-mihomo.sock"
+            "/tmp/clash-assist-test-tmpdir/verge-mihomo.sock"
         );
         let home = dirs::home_dir().expect("home");
         let p2 = expand_path_str("~/Library/foo.sock");

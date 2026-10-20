@@ -5,6 +5,9 @@ export const zhHant: Messages = {
   appName: "Clash伴侶",
   "update.found": "發現新版本 {v}",
   "update.go": "前往下載",
+  "update.install": "一鍵更新",
+  "update.updating": "正在更新 {v} 並重新啟動…",
+  "update.fallbackOpened": "已為你開啟下載頁",
   close: "關閉",
 
   "crash.title": "介面出錯了",

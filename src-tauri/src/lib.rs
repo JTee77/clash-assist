@@ -597,6 +597,12 @@ fn open_release_page(url: String) -> Result<(), String> {
     update_check::open_release_page(&url)
 }
 
+/// 应用内一键自更新：下载最新 .dmg、清除隔离属性、替换当前 .app 并重启。
+#[tauri::command]
+async fn install_update(dmg_url: Option<String>, dmg_sha256: Option<String>) -> Result<(), String> {
+    update_check::install_and_relaunch(dmg_url, dmg_sha256).await
+}
+
 /// `--cli install-shim [--dir D]`
 #[tauri::command]
 fn cli_install_shim(dir: Option<String>) -> Result<cli_shim::ShimResult, cli_shim::ShimError> {
@@ -834,6 +840,7 @@ pub fn run() {
             cli_serve_stop,
             check_update,
             open_release_page,
+            install_update,
             system_locale,
             set_ui_language
         ])

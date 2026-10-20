@@ -5,6 +5,9 @@ export const en: Messages = {
   appName: "Clash Assist",
   "update.found": "New version {v}",
   "update.go": "Download",
+  "update.install": "Update now",
+  "update.updating": "Updating to {v} & restarting…",
+  "update.fallbackOpened": "Opened download page",
   close: "Close",
 
   "crash.title": "Something went wrong",
