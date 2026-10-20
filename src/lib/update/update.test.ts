@@ -10,12 +10,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   __resetUpdateCheckForTests,
+  applyUpdate,
   checkUpdateOnce,
-  installUpdate,
+  downloadUpdate,
   openReleasePage,
+  relaunchUpdatedApp,
 } from "./index";
 
-describe("in-app self-update bridge (0.2.4)", () => {
+describe("in-app staged self-update bridge (0.2.4)", () => {
   beforeEach(() => {
     h.invoke.mockReset();
     __resetUpdateCheckForTests();
@@ -44,9 +46,13 @@ describe("in-app self-update bridge (0.2.4)", () => {
     expect(first?.dmg_url).toContain("Clash.Assist_0.2.5_aarch64.dmg");
   });
 
-  it("installUpdate forwards dmgUrl and dmgSha256 to install_update command", async () => {
-    h.invoke.mockResolvedValue(undefined);
-    await installUpdate({
+  it("runs staged downloadUpdate -> applyUpdate -> relaunchUpdatedApp commands in order", async () => {
+    h.invoke
+      .mockResolvedValueOnce("/tmp/clash-assist-update-123")
+      .mockResolvedValueOnce("/Applications/Clash Assist.app")
+      .mockResolvedValueOnce(undefined);
+
+    const workDir = await downloadUpdate({
       current: "0.2.4",
       latest: "0.2.5",
       update_available: true,
@@ -55,11 +61,21 @@ describe("in-app self-update bridge (0.2.4)", () => {
         "https://github.com/JTee77/clash-assist/releases/download/v0.2.5/Clash.Assist_0.2.5_aarch64.dmg",
       dmg_sha256: "sha256:abcd",
     });
-    expect(h.invoke).toHaveBeenCalledWith("install_update", {
+    expect(workDir).toBe("/tmp/clash-assist-update-123");
+    expect(h.invoke).toHaveBeenNthCalledWith(1, "download_update", {
       dmgUrl:
         "https://github.com/JTee77/clash-assist/releases/download/v0.2.5/Clash.Assist_0.2.5_aarch64.dmg",
       dmgSha256: "sha256:abcd",
     });
+
+    const targetApp = await applyUpdate(workDir);
+    expect(targetApp).toBe("/Applications/Clash Assist.app");
+    expect(h.invoke).toHaveBeenNthCalledWith(2, "apply_update", {
+      workDir: "/tmp/clash-assist-update-123",
+    });
+
+    await relaunchUpdatedApp();
+    expect(h.invoke).toHaveBeenNthCalledWith(3, "relaunch_updated_app");
   });
 
   it("openReleasePage swallows errors gracefully", async () => {

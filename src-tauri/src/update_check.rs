@@ -1,9 +1,9 @@
-//! 更新检查与应用内一键自更新：
-//! 1) 查询 GitHub latest release，与当前版本做 semver 比较（含 .dmg 资产直链与 SHA-256 摘要）。
-//! 2) 应用内直接下载最新 .dmg、静默挂载、提取 .app、清除 com.apple.quarantine 隔离属性、
-//!    校验签名、原子替换当前 .app 并自动重启 —— 全程无需打开浏览器，且后续升级不再触发 macOS Gatekeeper 弹窗。
-//!
-//! 测试 / 截图用：环境变量 `CLASH_ASSIST_FAKE_LATEST=0.2.5` 跳过网络，直接当作最新版本。
+//! 更新检查与应用内分阶段自更新：
+//! 1) `check`：查询 GitHub latest release，与当前版本做 semver 比较（含 .dmg 资产直链与 SHA-256 摘要）。
+//! 2) `download_to_staging`：用户点击「一键更新」后，下载最新 .dmg 并校验 SHA-256。
+//! 3) `apply_staged_update`：后台静默挂载 .dmg、提取 .app、清除 com.apple.quarantine 隔离属性、
+//!    校验签名、原子替换当前 .app（替换后不强行退出，当前窗口可继续正常使用，下次重开自动生效）。
+//! 4) `relaunch_app`：用户点击「立即重启」时，拉起新版 .app 并退出当前进程。
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -434,7 +434,8 @@ pub fn apply_dmg_to_app_bundle(
         active: true,
     };
 
-    let mounted_app = find_app_in_dir(&mnt_dir).ok_or_else(|| "更新镜像中未找到 .app 应用包".to_string())?;
+    let mounted_app = find_app_in_dir(&mnt_dir)
+        .ok_or_else(|| "更新镜像中未找到 .app 应用包".to_string())?;
     let staging_app = work_dir.join("staging.app");
     copy_bundle_via_ditto(&mounted_app, &staging_app)?;
 
@@ -483,13 +484,22 @@ pub fn apply_dmg_to_app_bundle(
     Ok(())
 }
 
-/// 应用内一键下载、校验、无隔离替换当前 `.app` 并重启。
-pub async fn install_and_relaunch(
+fn staging_base_dir() -> PathBuf {
+    let t = std::env::temp_dir();
+    if t.is_dir() {
+        t
+    } else {
+        PathBuf::from("/tmp")
+    }
+}
+
+/// 阶段 1（下载）：下载最新 `.dmg` 到独立临时目录并完成 SHA-256 校验，返回临时工作目录路径。
+pub async fn download_to_staging(
     dmg_url: Option<String>,
     dmg_sha256: Option<String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
-    let target_app = resolve_target_app_bundle(&exe)?;
+    let _target_app = resolve_target_app_bundle(&exe)?;
 
     let (resolved_url, resolved_sha) = match dmg_url.filter(|u| !u.trim().is_empty()) {
         Some(u) => (u, dmg_sha256),
@@ -508,25 +518,22 @@ pub async fn install_and_relaunch(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let base_tmp = {
-        let t = std::env::temp_dir();
-        if t.is_dir() { t } else { PathBuf::from("/tmp") }
-    };
-    let work_dir =
-        base_tmp.join(format!("clash-assist-update-{}-{now_ms}", std::process::id()));
+    let work_dir = staging_base_dir().join(format!(
+        "clash-assist-update-{}-{now_ms}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建临时更新目录失败：{e}"))?;
 
     let dmg_path = work_dir.join("update.dmg");
-    let bytes = get_bytes_with_proxy_fallback(
+    let bytes = match get_bytes_with_proxy_fallback(
         &resolved_url,
         env!("CARGO_PKG_VERSION"),
         DOWNLOAD_TIMEOUT_MS,
         5000,
         Some("application/octet-stream"),
     )
-    .await;
-
-    let bytes = match bytes {
+    .await
+    {
         Ok(b) => b,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&work_dir);
@@ -539,32 +546,72 @@ pub async fn install_and_relaunch(
         return Err(format!("写入临时更新包失败：{e}"));
     }
 
+    let dmg_for_verify = dmg_path.clone();
+    let sha_for_verify = resolved_sha.clone();
+    let verify_res = tauri::async_runtime::spawn_blocking(move || {
+        verify_sha256_file(&dmg_for_verify, sha_for_verify.as_deref())
+    })
+    .await
+    .map_err(|e| format!("校验任务异常终止：{e}"))?;
+
+    if let Err(e) = verify_res {
+        let _ = std::fs::remove_dir_all(&work_dir);
+        return Err(e);
+    }
+
+    Ok(work_dir.to_string_lossy().to_string())
+}
+
+/// 阶段 2（后台静默安装）：从临时工作目录挂载 `update.dmg`，清除隔离属性并替换当前 `.app`（不自动退出重启）。
+pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
+    let target_app = resolve_target_app_bundle(&exe)?;
+
+    let work_dir = PathBuf::from(work_dir_str.trim());
+    let file_name = work_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if !file_name.starts_with("clash-assist-update-") || !work_dir.is_dir() {
+        return Err("无效的临时更新目录".into());
+    }
+    let dmg_path = work_dir.join("update.dmg");
+    if !dmg_path.is_file() {
+        let _ = std::fs::remove_dir_all(&work_dir);
+        return Err("未找到已下载的更新包文件".into());
+    }
+
     let target_for_task = target_app.clone();
     let work_for_task = work_dir.clone();
-    let sha_for_task = resolved_sha.clone();
-    let apply_res = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        verify_sha256_file(&dmg_path, sha_for_task.as_deref())?;
+    let apply_res = tauri::async_runtime::spawn_blocking(move || {
         apply_dmg_to_app_bundle(&dmg_path, &target_for_task, &work_for_task)
     })
     .await
-    .map_err(|e| format!("更新任务异常终止：{e}"))?;
+    .map_err(|e| format!("安装任务异常终止：{e}"))?;
 
     let _ = std::fs::remove_dir_all(&work_dir);
     apply_res?;
 
+    Ok(target_app.to_string_lossy().to_string())
+}
+
+/// 阶段 3（用户主动点击「立即重启」）：拉起已替换的新版 `.app` 并退出当前进程。
+pub fn relaunch_updated_app() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
+    let target_app = resolve_target_app_bundle(&exe)?;
     if std::env::var("CLASH_ASSIST_NO_RELAUNCH").ok().as_deref() != Some("1") {
-        let _ = Command::new("/bin/sh")
+        Command::new("/bin/sh")
             .arg("-c")
             .arg("sleep 0.45 && /usr/bin/open -n \"$1\"")
             .arg("sh")
             .arg(&target_app)
-            .spawn();
+            .spawn()
+            .map_err(|e| format!("启动新版本失败：{e}"))?;
         std::thread::spawn(|| {
             std::thread::sleep(Duration::from_millis(150));
             std::process::exit(0);
         });
     }
-
     Ok(())
 }
 
@@ -643,8 +690,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn end_to_end_apply_dmg_replaces_app_and_strips_quarantine() {
-        let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let base = PathBuf::from(format!("/tmp/" )).join(format!(
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = PathBuf::from("/tmp").join(format!(
             "clash-assist-self-update-test-{}-{now_ns}",
             std::process::id()
         ));
@@ -654,7 +704,6 @@ mod tests {
         let macos_dir = new_app.join("Contents/MacOS");
         std::fs::create_dir_all(&macos_dir).unwrap();
 
-        // Create a minimal valid Info.plist and copy /bin/echo as the Mach-O executable
         let plist = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -735,7 +784,6 @@ mod tests {
 
         apply_dmg_to_app_bundle(&dmg_path, &target_app, &work_dir).expect("apply_dmg should succeed");
 
-        // Verify old file is gone, new Info.plist is present, codesign passes, and com.apple.quarantine is absent!
         assert!(!target_app.join("Contents/old.txt").exists());
         let new_plist = std::fs::read_to_string(target_app.join("Contents/Info.plist")).unwrap();
         assert!(new_plist.contains("0.2.5"));

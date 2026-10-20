@@ -6,7 +6,12 @@ export const en: Messages = {
   "update.found": "New version {v}",
   "update.go": "Download",
   "update.install": "Update now",
-  "update.updating": "Updating to {v} & restarting…",
+  "update.downloading": "Downloading update {v}…",
+  "update.installing": "Downloaded, installing in background…",
+  "update.ready": "Version {v} is installed",
+  "update.readyHint": "Click “Restart now” or relaunch next time to use the new version",
+  "update.relaunch": "Restart now",
+  "update.restarting": "Restarting…",
   "update.fallbackOpened": "Opened download page",
   close: "Close",
 

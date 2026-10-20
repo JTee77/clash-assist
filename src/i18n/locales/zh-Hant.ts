@@ -6,7 +6,12 @@ export const zhHant: Messages = {
   "update.found": "發現新版本 {v}",
   "update.go": "前往下載",
   "update.install": "一鍵更新",
-  "update.updating": "正在更新 {v} 並重新啟動…",
+  "update.downloading": "正在下載更新 {v}…",
+  "update.installing": "下載完成，正在背景靜默安裝…",
+  "update.ready": "新版本 {v} 已安裝好",
+  "update.readyHint": "現在點「立即重新啟動」或下次重開軟體即可生效",
+  "update.relaunch": "立即重新啟動",
+  "update.restarting": "正在重新啟動…",
   "update.fallbackOpened": "已為你開啟下載頁",
   close: "關閉",
 

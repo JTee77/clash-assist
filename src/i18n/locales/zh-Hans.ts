@@ -4,7 +4,12 @@ export const zhHans = {
   "update.found": "发现新版本 {v}",
   "update.go": "去下载",
   "update.install": "一键更新",
-  "update.updating": "正在更新 {v} 并重启…",
+  "update.downloading": "正在下载更新 {v}…",
+  "update.installing": "下载完成，正在后台静默安装…",
+  "update.ready": "新版本 {v} 已安装好",
+  "update.readyHint": "现在点「立即重启」或下次重开软件即可生效",
+  "update.relaunch": "立即重启",
+  "update.restarting": "正在重启…",
   "update.fallbackOpened": "已为你打开下载页",
   close: "关闭",
 
