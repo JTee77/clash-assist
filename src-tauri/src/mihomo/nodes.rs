@@ -337,6 +337,96 @@ pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, Strin
 }
 
 
+/// Only supplement members actually referenced by controller groups. Provider names
+/// are not a global node identity; never overwrite a top-level proxy or pick an
+/// arbitrary same-name entry from different subscriptions.
+fn missing_provider_names(root: &Value) -> Result<std::collections::BTreeSet<String>, String> {
+    let proxies = root.get("proxies").and_then(Value::as_object)
+        .ok_or_else(|| "missing proxies object".to_string())?;
+    let mut missing = std::collections::BTreeSet::new();
+    for group in proxies.values() {
+        if !GROUP_TYPES.contains(&group.get("type").and_then(Value::as_str).unwrap_or("")) { continue; }
+        let names = group.get("all").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(Value::as_str)
+            .chain(group.get("now").and_then(Value::as_str));
+        for name in names {
+            if !name.is_empty() && !is_junk_name(name) && !proxies.contains_key(name) {
+                missing.insert(name.to_string());
+            }
+        }
+    }
+    Ok(missing)
+}
+
+fn merge_provider_nodes(root: &mut Value, provider_root: &Value) -> Result<(), String> {
+    let providers = provider_root.get("providers").and_then(Value::as_object)
+        .ok_or_else(|| "missing providers object".to_string())?;
+    for name in missing_provider_names(root)? {
+        let mut subscriptions = Vec::new();
+        let mut compatible = Vec::new();
+        for provider in providers.values() {
+            let Some(nodes) = provider.get("proxies").and_then(Value::as_array) else { continue; };
+            for node in nodes {
+                let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
+                if node.get("name").and_then(Value::as_str) != Some(name.as_str())
+                    || node_type.is_empty() || ignore_type(node_type) { continue; }
+                if provider.get("vehicleType").and_then(Value::as_str) == Some("Compatible") {
+                    compatible.push(node);
+                } else { subscriptions.push(node); }
+            }
+        }
+        let candidates = if subscriptions.is_empty() { compatible } else { subscriptions };
+        if candidates.len() == 1 {
+            root.get_mut("proxies").and_then(Value::as_object_mut).unwrap()
+                .insert(name, candidates[0].clone());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum NodeTransport<'a> { Tcp(&'a str, u16), Unix(&'a str) }
+
+/// Read provider metadata on the SAME controller/transport as /proxies. No
+/// subscription updates, healthchecks or selector writes occur during discovery.
+async fn parse_nodes_with_providers(
+    body: &str, secret: &str, timeout_ms: u64, transport: NodeTransport<'_>,
+) -> Result<ListNodesResult, String> {
+    let mut root: Value = serde_json::from_str(body).map_err(|e| format!("json: {e}"))?;
+    let mut provider_error = None;
+    if !missing_provider_names(&root)?.is_empty() {
+        let response = match transport {
+            NodeTransport::Tcp(host, port) => http_via_tcp_async(host, port, "GET", "/providers/proxies", None, secret, timeout_ms).await,
+            NodeTransport::Unix(sock) => {
+                let (sock, secret) = (sock.to_string(), secret.to_string());
+                tauri::async_runtime::spawn_blocking(move || http_via_unix("GET", "/providers/proxies", None, &secret, Some(&sock), timeout_ms))
+                    .await.map_err(|e| format!("provider task join: {e}"))?
+            }
+        };
+        match response {
+            Ok(response) if (200..300).contains(&response.status) => {
+                match serde_json::from_str::<Value>(&response.body)
+                    .map_err(|_| "订阅节点响应无法解析".to_string())
+                    .and_then(|providers| merge_provider_nodes(&mut root, &providers)) {
+                    Ok(()) => {},
+                    Err(_) => provider_error = Some("订阅节点响应无法解析".to_string()),
+                }
+            }
+            Ok(response) => provider_error = Some(format!("订阅节点接口返回 HTTP {}", response.status)),
+            Err(_) => provider_error = Some("暂时读不到订阅节点接口".to_string()),
+        }
+    }
+    let mut result = slim_nodes_from_proxies_json(&root.to_string())?;
+    let missing = missing_provider_names(&root)?.len();
+    if missing > 0 {
+        let detail = provider_error.unwrap_or_else(|| "订阅中有同名、缺失或无效节点，无法唯一识别".to_string());
+        result.error = Some(format!("已连上软件，但有 {missing} 个订阅节点未能读取（{detail}）"));
+    } else if result.nodes.is_empty() {
+        result.error = Some("已连接但未解析到可用节点，请到设置检查 Secret / 刷新，或确认订阅已加载".to_string());
+    }
+    Ok(result)
+}
+
 async fn try_list_nodes_unix(
     secret: &str,
     sock_path: Option<&str>,
@@ -369,16 +459,10 @@ async fn try_list_nodes_unix(
             transport: Some("unix".into()),
         })),
         Ok(res) if (200..300).contains(&res.status) => {
-            match slim_nodes_from_proxies_json(&res.body) {
+            match parse_nodes_with_providers(&res.body, secret, unix_timeout, NodeTransport::Unix(sock_path.unwrap())).await {
                 Ok(mut slim) => {
                     slim.status = res.status;
                     slim.transport = Some("unix".into());
-                    if slim.nodes.is_empty() {
-                        slim.error = Some(
-                            "已连接但未解析到可用节点，请到设置检查 Secret / 刷新，或确认订阅已加载"
-                                .into(),
-                        );
-                    }
                     Ok(Some(slim))
                 }
                 Err(e) => Ok(Some(ListNodesResult {
@@ -433,16 +517,10 @@ pub async fn list_nodes_async(
             });
         }
         Ok(res) if (200..300).contains(&res.status) => {
-            match slim_nodes_from_proxies_json(&res.body) {
+            match parse_nodes_with_providers(&res.body, secret, tcp_timeout, NodeTransport::Tcp(host, port)).await {
                 Ok(mut slim) => {
                     slim.status = res.status;
                     slim.transport = Some("tcp".into());
-                    if slim.nodes.is_empty() {
-                        slim.error = Some(
-                            "已连接但未解析到可用节点，请到设置检查 Secret / 刷新，或确认订阅已加载"
-                                .into(),
-                        );
-                    }
                     return Ok(slim);
                 }
                 Err(e) => {
@@ -486,6 +564,108 @@ pub async fn list_nodes_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local controller fixture; no real proxy process or network settings are touched.
+    struct ProviderController {
+        port: u16,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl ProviderController {
+        fn start(providers_status: u16, providers_body: &str) -> Self {
+            use std::io::{Read, Write};
+            use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            listener.set_nonblocking(true).unwrap();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let (seen, done) = (requests.clone(), stop.clone());
+            let providers_body = providers_body.to_string();
+            let worker = std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    };
+                    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+                    let mut request = Vec::new();
+                    let mut buf = [0; 1024];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => request.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let line = String::from_utf8_lossy(&request).lines().next().unwrap_or("").to_string();
+                    seen.lock().unwrap().push(line.clone());
+                    let (status, body) = if line.starts_with("GET /proxies ") {
+                        (200, r#"{"proxies":{"Proxy":{"type":"Selector","now":"provider-a","all":["static-a","provider-a"]},"static-a":{"type":"Shadowsocks"}}}"#)
+                    } else if line.starts_with("GET /providers/proxies ") {
+                        (providers_status, providers_body.as_str())
+                    } else {
+                        (405, r#"{"message":"fixture only permits discovery GETs"}"#)
+                    };
+                    let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            });
+            Self { port, requests, stop, worker: Some(worker) }
+        }
+    }
+
+    impl Drop for ProviderController {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(worker) = self.worker.take() { worker.join().unwrap(); }
+        }
+    }
+
+    #[test]
+    fn list_nodes_includes_provider_leaves_and_resolves_current_without_switching() {
+        let controller = ProviderController::start(200, r#"{"providers":{"subscription":{"vehicleType":"File","proxies":[{"name":"provider-a","type":"Vless","udp":true}]}}}"#);
+        let result = tauri::async_runtime::block_on(list_nodes_async("127.0.0.1", controller.port, "", 1500, None)).unwrap();
+        let names: Vec<_> = result.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names.len(), 2, "provider-only nodes must supplement existing static nodes");
+        assert!(names.contains(&"provider-a") && names.contains(&"static-a"));
+        assert_eq!(result.current_proxy.as_deref(), Some("provider-a"));
+        assert!(result.error.is_none());
+        assert_eq!(*controller.requests.lock().unwrap(), vec!["GET /proxies HTTP/1.1", "GET /providers/proxies HTTP/1.1"]);
+    }
+
+    #[test]
+    fn provider_failure_keeps_static_nodes_and_reports_incomplete_list() {
+        let controller = ProviderController::start(403, r#"{"message":"denied"}"#);
+        let result = tauri::async_runtime::block_on(list_nodes_async("127.0.0.1", controller.port, "", 1500, None)).unwrap();
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].name, "static-a");
+        assert!(result.current_proxy.is_none());
+        assert!(result.error.as_deref().unwrap().contains("HTTP 403"));
+        assert!(!result.unauthorized, "a provider error must not discard a working root controller");
+    }
+
+    #[test]
+    fn provider_merge_rejects_ambiguous_names_and_preserves_root_identity() {
+        let mut root = serde_json::json!({"proxies": {
+            "Proxy": {"type":"Selector","now":"duplicate","all":["duplicate","root","unique","invalid"]},
+            "root": {"type":"Trojan"}
+        }});
+        let providers = serde_json::json!({"providers": {
+            "virtual": {"vehicleType":"Compatible","proxies":[{"name":"unique","type":"Vless"}]},
+            "one": {"vehicleType":"File","proxies":[{"name":"duplicate","type":"Vless"},{"name":"unique","type":"Vless","udp":true},{"name":"root","type":"Vless"},{"name":"invalid"},{"name":"unused","type":"Vless"}]},
+            "two": {"vehicleType":"HTTP","proxies":[{"name":"duplicate","type":"Trojan"}]}
+        }});
+        merge_provider_nodes(&mut root, &providers).unwrap();
+        let proxies = root["proxies"].as_object().unwrap();
+        assert_eq!(proxies["root"]["type"], "Trojan");
+        assert_eq!(proxies["unique"]["udp"], true);
+        assert!(!proxies.contains_key("duplicate"));
+        assert!(!proxies.contains_key("invalid"));
+        assert!(!proxies.contains_key("unused"));
+        assert!(resolve_current_proxy(proxies).is_none());
+    }
 
     #[test]
     fn smoke_spawn_blocking_catch_unwind_maps_panic() {
