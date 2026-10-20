@@ -1,600 +1,13 @@
-/** Region grouping — multi-signal detection with remark filtering & shared-prefix awareness */
+/** Region grouping — multi-signal detection with static rule table & precompiled regex cache */
+
+import regionRulesData from "./regionRules.json";
 
 export type RegionRule = [string, string[]];
 
-export const REGION_RULES: RegionRule[] = [
-  [
-    "中国香港",
-    [
-      "中国香港",
-      "中國香港",
-      "香港",
-      "港区",
-      "港區",
-      "深港",
-      "广港",
-      "廣港",
-      "莞港",
-      "沪港",
-      "滬港",
-      "京港",
-      "Hong Kong",
-      "HongKong",
-      "HKG",
-      "HK",
-      "🇭🇰",
-    ],
-  ],
-  [
-    "中国台湾",
-    [
-      "中国台湾",
-      "中國臺灣",
-      "中國台灣",
-      "台湾",
-      "台灣",
-      "臺湾",
-      "臺灣",
-      "台区",
-      "台區",
-      "臺區",
-      "台北",
-      "臺北",
-      "新北",
-      "高雄",
-      "台中",
-      "臺中",
-      "桃园",
-      "桃園",
-      "彰化",
-      "深台",
-      "闽台",
-      "閩台",
-      "沪台",
-      "滬台",
-      "Taiwan",
-      "Taipei",
-      "Taichung",
-      "Kaohsiung",
-      "TWN",
-      "TPE",
-      "KHH",
-      "TW",
-      "🇹🇼",
-    ],
-  ],
-  [
-    "日本",
-    [
-      "日本",
-      "日区",
-      "日區",
-      "东京",
-      "東京",
-      "大阪",
-      "名古屋",
-      "埼玉",
-      "横滨",
-      "橫濱",
-      "福冈",
-      "福岡",
-      "札幌",
-      "千叶",
-      "千葉",
-      "沪日",
-      "滬日",
-      "苏日",
-      "蘇日",
-      "广日",
-      "廣日",
-      "深日",
-      "京日",
-      "Japan",
-      "Tokyo",
-      "Osaka",
-      "Nagoya",
-      "Saitama",
-      "Fukuoka",
-      "Sapporo",
-      "JPN",
-      "NRT",
-      "HND",
-      "KIX",
-      "TYO",
-      "OSA",
-      "JP",
-      "🇯🇵",
-    ],
-  ],
-  [
-    "新加坡",
-    [
-      "新加坡",
-      "狮城",
-      "獅城",
-      "新区",
-      "新區",
-      "深新",
-      "广新",
-      "廣新",
-      "沪新",
-      "滬新",
-      "京新",
-      "Singapore",
-      "SGP",
-      "SIN",
-      "SG",
-      "🇸🇬",
-    ],
-  ],
-  [
-    "美国",
-    [
-      "美国",
-      "美國",
-      "美区",
-      "美區",
-      "美西",
-      "美东",
-      "美東",
-      "美中",
-      "洛杉矶",
-      "洛杉磯",
-      "硅谷",
-      "矽谷",
-      "圣何塞",
-      "聖荷西",
-      "圣荷西",
-      "纽约",
-      "紐約",
-      "西雅图",
-      "西雅圖",
-      "芝加哥",
-      "凤凰城",
-      "鳳凰城",
-      "达拉斯",
-      "達拉斯",
-      "波特兰",
-      "波特蘭",
-      "俄勒冈",
-      "俄勒岡",
-      "亚特兰大",
-      "亞特蘭大",
-      "迈阿密",
-      "邁阿密",
-      "丹佛",
-      "休斯顿",
-      "休斯頓",
-      "休士顿",
-      "休士頓",
-      "盐湖城",
-      "鹽湖城",
-      "阿什本",
-      "弗吉尼亚",
-      "維吉尼亞",
-      "拉斯维加斯",
-      "拉斯維加斯",
-      "旧金山",
-      "舊金山",
-      "三藩",
-      "沪美",
-      "滬美",
-      "广美",
-      "廣美",
-      "深美",
-      "京美",
-      "United States",
-      "Los Angeles",
-      "San Jose",
-      "Silicon Valley",
-      "Seattle",
-      "New York",
-      "Chicago",
-      "Phoenix",
-      "Dallas",
-      "Portland",
-      "Oregon",
-      "Atlanta",
-      "Miami",
-      "Ashburn",
-      "Virginia",
-      "Las Vegas",
-      "San Francisco",
-      "USA",
-      "LAX",
-      "SJC",
-      "SEA",
-      "ORD",
-      "DFW",
-      "JFK",
-      "EWR",
-      "IAD",
-      "MIA",
-      "PHX",
-      "PDX",
-      "DEN",
-      "SLC",
-      "ATL",
-      "SFO",
-      "US",
-      "🇺🇸",
-    ],
-  ],
-  [
-    "韩国",
-    [
-      "韩国",
-      "韓國",
-      "韩区",
-      "韓區",
-      "首尔",
-      "首爾",
-      "釜山",
-      "仁川",
-      "春川",
-      "沪韩",
-      "滬韓",
-      "青韩",
-      "青韓",
-      "威韩",
-      "威韓",
-      "京韩",
-      "京韓",
-      "鲁韩",
-      "魯韓",
-      "South Korea",
-      "Korea",
-      "Seoul",
-      "Busan",
-      "Incheon",
-      "Chuncheon",
-      "KOR",
-      "ICN",
-      "SEL",
-      "PUS",
-      "KR",
-      "🇰🇷",
-    ],
-  ],
-  [
-    "英国",
-    [
-      "英国",
-      "英國",
-      "英区",
-      "英區",
-      "伦敦",
-      "倫敦",
-      "曼彻斯特",
-      "曼徹斯特",
-      "伯明翰",
-      "爱丁堡",
-      "愛丁堡",
-      "United Kingdom",
-      "Great Britain",
-      "England",
-      "Britain",
-      "London",
-      "Manchester",
-      "GBR",
-      "LHR",
-      "LON",
-      "UK",
-      "GB",
-      "🇬🇧",
-    ],
-  ],
-  [
-    "德国",
-    [
-      "德国",
-      "德國",
-      "德区",
-      "德區",
-      "法兰克福",
-      "法蘭克福",
-      "慕尼黑",
-      "柏林",
-      "杜塞尔多夫",
-      "杜塞爾多夫",
-      "纽伦堡",
-      "紐倫堡",
-      "京德",
-      "沪德",
-      "滬德",
-      "Germany",
-      "Frankfurt",
-      "Munich",
-      "Berlin",
-      "Dusseldorf",
-      "Nuremberg",
-      "DEU",
-      "FRA",
-      "MUC",
-      "BER",
-      "DE",
-      "🇩🇪",
-    ],
-  ],
-  [
-    "法国",
-    [
-      "法国",
-      "法國",
-      "法区",
-      "法區",
-      "巴黎",
-      "马赛",
-      "馬賽",
-      "里昂",
-      "France",
-      "Paris",
-      "Marseille",
-      "Lyon",
-      "CDG",
-      "PAR",
-      "MRS",
-      "FR",
-      "🇫🇷",
-    ],
-  ],
-  [
-    "荷兰",
-    [
-      "荷兰",
-      "荷蘭",
-      "阿姆斯特丹",
-      "鹿特丹",
-      "Netherlands",
-      "Holland",
-      "Amsterdam",
-      "Rotterdam",
-      "NLD",
-      "AMS",
-      "NL",
-      "🇳🇱",
-    ],
-  ],
-  [
-    "澳大利亚",
-    [
-      "澳大利亚",
-      "澳大利亞",
-      "澳洲",
-      "澳区",
-      "澳區",
-      "悉尼",
-      "雪梨",
-      "墨尔本",
-      "墨爾本",
-      "布里斯班",
-      "珀斯",
-      "伯斯",
-      "堪培拉",
-      "Australia",
-      "Sydney",
-      "Melbourne",
-      "Brisbane",
-      "Perth",
-      "AUS",
-      "SYD",
-      "MEL",
-      "BNE",
-      "PER",
-      "AU",
-      "🇦🇺",
-    ],
-  ],
-  [
-    "加拿大",
-    [
-      "加拿大",
-      "加区",
-      "加區",
-      "温哥华",
-      "溫哥華",
-      "多伦多",
-      "多倫多",
-      "蒙特利尔",
-      "蒙特利爾",
-      "满地可",
-      "滿地可",
-      "Canada",
-      "Vancouver",
-      "Toronto",
-      "Montreal",
-      "CAN",
-      "YVR",
-      "YYZ",
-      "YUL",
-      "CA",
-      "🇨🇦",
-    ],
-  ],
-  ["爱沙尼亚", ["爱沙尼亚", "愛沙尼亞", "塔林", "Estonia", "Tallinn", "EST", "TLL", "EE", "🇪🇪"]],
-  [
-    "俄罗斯",
-    [
-      "俄罗斯",
-      "俄羅斯",
-      "俄区",
-      "俄區",
-      "莫斯科",
-      "圣彼得堡",
-      "聖彼得堡",
-      "新西伯利亚",
-      "新西伯利亞",
-      "海参崴",
-      "海參崴",
-      "符拉迪沃斯托克",
-      "伯力",
-      "Russia",
-      "Moscow",
-      "Saint Petersburg",
-      "Novosibirsk",
-      "Vladivostok",
-      "RUS",
-      "SVO",
-      "DME",
-      "VVO",
-      "RU",
-      "🇷🇺",
-    ],
-  ],
-  [
-    "印度",
-    [
-      "印度",
-      "印区",
-      "印區",
-      "孟买",
-      "孟買",
-      "新德里",
-      "班加罗尔",
-      "班加羅爾",
-      "金奈",
-      "钦奈",
-      "India",
-      "Mumbai",
-      "New Delhi",
-      "Bangalore",
-      "Chennai",
-      "IND",
-      "BOM",
-      "BLR",
-      "MAA",
-      "IN",
-      "🇮🇳",
-    ],
-  ],
-  [
-    "马来西亚",
-    [
-      "马来西亚",
-      "馬來西亞",
-      "大马",
-      "大馬",
-      "马区",
-      "馬區",
-      "吉隆坡",
-      "新山",
-      "槟城",
-      "檳城",
-      "Malaysia",
-      "Kuala Lumpur",
-      "Johor",
-      "Penang",
-      "MYS",
-      "KUL",
-      "MY",
-      "🇲🇾",
-    ],
-  ],
-  [
-    "泰国",
-    [
-      "泰国",
-      "泰國",
-      "泰区",
-      "泰區",
-      "曼谷",
-      "清迈",
-      "清邁",
-      "普吉",
-      "Thailand",
-      "Bangkok",
-      "Chiang Mai",
-      "THA",
-      "BKK",
-      "TH",
-      "🇹🇭",
-    ],
-  ],
-  [
-    "菲律宾",
-    [
-      "菲律宾",
-      "菲律賓",
-      "菲区",
-      "菲區",
-      "马尼拉",
-      "馬尼拉",
-      "宿务",
-      "宿霧",
-      "Philippines",
-      "Manila",
-      "Cebu",
-      "PHL",
-      "MNL",
-      "PH",
-      "🇵🇭",
-    ],
-  ],
-  [
-    "土耳其",
-    [
-      "土耳其",
-      "土区",
-      "土區",
-      "伊斯坦布尔",
-      "伊斯坦布爾",
-      "伊斯坦堡",
-      "安卡拉",
-      "Turkey",
-      "Turkiye",
-      "Türkiye",
-      "Istanbul",
-      "Ankara",
-      "TUR",
-      "IST",
-      "TR",
-      "🇹🇷",
-    ],
-  ],
-  [
-    "阿根廷",
-    [
-      "阿根廷",
-      "阿区",
-      "阿區",
-      "布宜诺斯艾利斯",
-      "布宜諾斯艾利斯",
-      "Argentina",
-      "Buenos Aires",
-      "ARG",
-      "EZE",
-      "AR",
-      "🇦🇷",
-    ],
-  ],
-  [
-    "巴西",
-    [
-      "巴西",
-      "圣保罗",
-      "聖保羅",
-      "里约",
-      "里約",
-      "Brazil",
-      "Sao Paulo",
-      "São Paulo",
-      "Rio",
-      "BRA",
-      "GRU",
-      "BR",
-      "🇧🇷",
-    ],
-  ],
-  ["瑞士", ["瑞士", "苏黎世", "蘇黎世", "日内瓦", "日內瓦", "Switzerland", "Zurich", "Zürich", "Geneva", "CHE", "ZRH", "GVA", "CH", "🇨🇭"]],
-  ["瑞典", ["瑞典", "斯德哥尔摩", "斯德哥爾摩", "Sweden", "Stockholm", "SWE", "ARN", "SE", "🇸🇪"]],
-];
+export const REGION_RULES: RegionRule[] = regionRulesData.rules as RegionRule[];
 
-const SHORT_REGION_NAMES: Record<string, string> = {
-  中国香港: "香港",
-  中国台湾: "台湾",
-  澳大利亚: "澳洲",
-  其他地区: "其他",
-};
+const SHORT_REGION_NAMES: Record<string, string> =
+  regionRulesData.shortRegionNames;
 
 /** 紧凑地区标签（供筛选胶囊/下拉展示，内部 region 值保持不变）。 */
 export function shortRegionName(region: string): string {
@@ -602,83 +15,17 @@ export function shortRegionName(region: string): string {
 }
 
 /** 国内入口+落地双字专线词（优先级低于明确落地国/城市/旗帜/代号）。 */
-const TRANSIT_LINE_PATTERNS = new Set([
-  "深港",
-  "广港",
-  "廣港",
-  "莞港",
-  "沪港",
-  "滬港",
-  "京港",
-  "深台",
-  "闽台",
-  "閩台",
-  "沪台",
-  "滬台",
-  "沪日",
-  "滬日",
-  "苏日",
-  "蘇日",
-  "广日",
-  "廣日",
-  "深日",
-  "京日",
-  "深新",
-  "广新",
-  "廣新",
-  "沪新",
-  "滬新",
-  "京新",
-  "沪美",
-  "滬美",
-  "广美",
-  "廣美",
-  "深美",
-  "京美",
-  "沪韩",
-  "滬韓",
-  "青韩",
-  "青韓",
-  "威韩",
-  "威韓",
-  "京韩",
-  "京韓",
-  "鲁韩",
-  "魯韓",
-  "京德",
-  "沪德",
-  "滬德",
-]);
+const TRANSIT_LINE_PATTERNS = new Set<string>(
+  regionRulesData.transitLinePatterns,
+);
 
 /** 单字简称映射（仅在独立查询或「港01 / 日-02」等非汉字粘连编号时启用）。 */
-const SINGLE_CJK_MAP: Record<string, string> = {
-  港: "中国香港",
-  台: "中国台湾",
-  臺: "中国台湾",
-  日: "日本",
-  新: "新加坡",
-  狮: "新加坡",
-  獅: "新加坡",
-  美: "美国",
-  韩: "韩国",
-  韓: "韩国",
-  英: "英国",
-  德: "德国",
-  法: "法国",
-  荷: "荷兰",
-  澳: "澳大利亚",
-  加: "加拿大",
-  俄: "俄罗斯",
-  印: "印度",
-  马: "马来西亚",
-  馬: "马来西亚",
-  泰: "泰国",
-  菲: "菲律宾",
-  土: "土耳其",
-};
+const SINGLE_CJK_MAP: Record<string, string> = regionRulesData.singleCjkMap;
 
 /** 易与英文介词/代词撞车的两字母代码：无数字后缀时要求全大写。 */
-const CASE_SENSITIVE_BARE_CODES = new Set(["IN", "MY", "US", "IT", "OR", "AT", "TO", "NO", "SO", "BE", "DO", "GO", "IS", "AS", "BY"]);
+const CASE_SENSITIVE_BARE_CODES = new Set<string>(
+  regionRulesData.caseSensitiveBareCodes,
+);
 
 /** 流媒体/AI 解锁与中转/入口描述关键词：所在备注块或修饰子句降权处理。 */
 const UNLOCK_OR_TRANSIT_RE =
@@ -689,6 +36,9 @@ const BRAND_FLAVOR_RE =
   /高速|机场|機場|订阅|訂閱|套餐|专线|專線|网络|網絡|加速|云|雲|频道|頻道|节点|節點|群组|群組|国际|國際|全球|互联|互聯/;
 
 const ARROW_SPLIT_RE = /\s*(?:--+>|==+>|[→⇒➔➜➡])\s*/;
+
+const SINGLE_NUM_PATTERN =
+  "(^|[^A-Za-z\\u4e00-\\u9fff])([港台臺日新美韩韓英德法荷澳加俄印马馬泰菲土])\\s*[-_]?\\s*\\d+";
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -701,6 +51,75 @@ function isFlagEmoji(p: string): boolean {
 function isAreaCompound(p: string): boolean {
   return /^[港台臺日新美韩韓英德法澳加俄印马馬泰菲土阿][区區]$/.test(p);
 }
+
+type CompiledPattern =
+  | {
+      kind: "literal";
+      region: string;
+      pattern: string;
+      tier: number;
+    }
+  | {
+      kind: "asciiWord";
+      region: string;
+      re: RegExp;
+    }
+  | {
+      kind: "code";
+      region: string;
+      withDigitsRe: RegExp;
+      bareRe: RegExp;
+      requireUpperWithDigits: boolean;
+    };
+
+/** 模块初始化时一次性预编译全部 500+ 词条，运行时零 RegExp 动态分配。 */
+const COMPILED_PATTERNS: readonly CompiledPattern[] = (() => {
+  const list: CompiledPattern[] = [];
+  for (const [region, patterns] of REGION_RULES) {
+    for (const p of patterns) {
+      if (isFlagEmoji(p)) {
+        list.push({ kind: "literal", region, pattern: p, tier: 4 });
+        continue;
+      }
+
+      if (/[\u4e00-\u9fff]/.test(p)) {
+        const tier = TRANSIT_LINE_PATTERNS.has(p)
+          ? 1
+          : isAreaCompound(p)
+            ? 2
+            : 3;
+        list.push({ kind: "literal", region, pattern: p, tier });
+        continue;
+      }
+
+      const escaped = escapeRegExp(p);
+      if (p.length >= 4) {
+        list.push({
+          kind: "asciiWord",
+          region,
+          re: new RegExp(`(^|[^A-Za-z])(${escaped})(?=[^A-Za-z]|$)`, "i"),
+        });
+        continue;
+      }
+
+      const caseSensitive = CASE_SENSITIVE_BARE_CODES.has(p);
+      list.push({
+        kind: "code",
+        region,
+        withDigitsRe: new RegExp(
+          `(^|[^A-Za-z0-9])(${escaped})\\d+(?![A-Za-z])`,
+          "i",
+        ),
+        bareRe: new RegExp(
+          `(^|[^A-Za-z0-9])(${escaped})(?=[^A-Za-z0-9]|$)`,
+          caseSensitive ? "" : "i",
+        ),
+        requireUpperWithDigits: caseSensitive && p !== "US",
+      });
+    }
+  }
+  return list;
+})();
 
 interface RegionMatch {
   region: string;
@@ -722,77 +141,47 @@ function matchSegment(seg: string): RegionMatch | null {
     }
   };
 
-  for (const [region, patterns] of REGION_RULES) {
-    for (const p of patterns) {
-      if (isFlagEmoji(p)) {
-        const idx = seg.indexOf(p);
-        if (idx !== -1) consider(region, 4, idx);
+  for (const item of COMPILED_PATTERNS) {
+    if (item.kind === "literal") {
+      const idx = seg.indexOf(item.pattern);
+      if (idx !== -1) consider(item.region, item.tier, idx);
+      continue;
+    }
+
+    if (item.kind === "asciiWord") {
+      const m = item.re.exec(seg);
+      if (m) {
+        const idx = m.index + (m[1]?.length ?? 0);
+        consider(item.region, 3, idx);
+      }
+      continue;
+    }
+
+    // 2~3 字母国家码 / 机房三字码：
+    // 1) 后跟数字编号（如 JP1、JP80、US01、HK22），左边界必须非字母数字（防 Node1/Plus1/Main1）
+    const md = item.withDigitsRe.exec(seg);
+    if (md) {
+      const matchedCode = md[2] ?? "";
+      if (
+        !item.requireUpperWithDigits ||
+        matchedCode === matchedCode.toUpperCase()
+      ) {
+        const idx = md.index + (md[1]?.length ?? 0);
+        consider(item.region, 3, idx);
         continue;
       }
+    }
 
-      const hasCjk = /[\u4e00-\u9fff]/.test(p);
-      if (hasCjk) {
-        const idx = seg.indexOf(p);
-        if (idx !== -1) {
-          const tier = TRANSIT_LINE_PATTERNS.has(p)
-            ? 1
-            : isAreaCompound(p)
-              ? 2
-              : 3;
-          consider(region, tier, idx);
-        }
-        continue;
-      }
-
-      // ASCII 国家/城市全名（长度 >= 4）
-      if (p.length >= 4) {
-        const re = new RegExp(`(^|[^A-Za-z])(${escapeRegExp(p)})(?=[^A-Za-z]|$)`, "i");
-        const m = re.exec(seg);
-        if (m) {
-          const idx = m.index + (m[1]?.length ?? 0);
-          consider(region, 3, idx);
-        }
-        continue;
-      }
-
-      // 2~3 字母国家码 / 机房三字码：
-      // 1) 后跟数字编号（如 JP1、JP80、US01、HK22），左边界必须非字母数字（防 Node1/Plus1/Main1）
-      const withDigitsRe = new RegExp(
-        `(^|[^A-Za-z0-9])(${escapeRegExp(p)})\\d+(?![A-Za-z])`,
-        "i",
-      );
-      const md = withDigitsRe.exec(seg);
-      if (md) {
-        const matchedCode = md[2] ?? "";
-        // 对 in1 / my1 等极易撞词的小写形式要求大写；常见代码（jp1/us1/hk1/sg1/kr1/tw1/de1/fr1/uk1）大小写皆可
-        if (
-          !CASE_SENSITIVE_BARE_CODES.has(p) ||
-          p === "US" ||
-          matchedCode === matchedCode.toUpperCase()
-        ) {
-          const idx = md.index + (md[1]?.length ?? 0);
-          consider(region, 3, idx);
-          continue;
-        }
-      }
-
-      // 2) 独立代码（如 HK、JP、US-01、LAX-01）
-      const flags = CASE_SENSITIVE_BARE_CODES.has(p) ? "" : "i";
-      const bareRe = new RegExp(
-        `(^|[^A-Za-z0-9])(${escapeRegExp(p)})(?=[^A-Za-z0-9]|$)`,
-        flags,
-      );
-      const mb = bareRe.exec(seg);
-      if (mb) {
-        const idx = mb.index + (mb[1]?.length ?? 0);
-        consider(region, 3, idx);
-      }
+    // 2) 独立代码（如 HK、JP、US-01、LAX-01）
+    const mb = item.bareRe.exec(seg);
+    if (mb) {
+      const idx = mb.index + (mb[1]?.length ?? 0);
+      consider(item.region, 3, idx);
     }
   }
 
   // 单字中文 + 编号（如 港01、日-02、美 01），要求左右无其他汉字粘连
-  const singleNumRe =
-    /(^|[^A-Za-z\u4e00-\u9fff])([港台臺日新美韩韓英德法荷澳加俄印马馬泰菲土])\s*[-_]?\s*\d+/g;
+  const singleNumRe = new RegExp(SINGLE_NUM_PATTERN, "g");
   let sm: RegExpExecArray | null;
   while ((sm = singleNumRe.exec(seg)) !== null) {
     const ch = sm[2];
@@ -870,7 +259,10 @@ function detectPrimaryRegion(text: string): string | null {
 
   // 方向箭头（如 香港 -> 美国 01）：优先取箭头右侧终点
   if (ARROW_SPLIT_RE.test(trimmed)) {
-    const parts = trimmed.split(ARROW_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+    const parts = trimmed
+      .split(ARROW_SPLIT_RE)
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (parts.length >= 2) {
       const dest = detectPrimaryRegion(parts[parts.length - 1]);
       if (dest) return dest;
@@ -964,10 +356,13 @@ export function detectRegion(name: string): string {
 /**
  * 提取节点开头的候选公共前缀（含分隔符，如 "香港高速3-"、"[某某云] "）。
  */
-function extractCandidatePrefix(name: string): { prefix: string; rest: string } | null {
-  const m = /^(?:\[[^\]]+\]|【[^】]+】|[^-—–_|/·:\s]{2,16})\s*[-—–_|/·:]\s*/.exec(
-    name.trim(),
-  );
+function extractCandidatePrefix(
+  name: string,
+): { prefix: string; rest: string } | null {
+  const m =
+    /^(?:\[[^\]]+\]|【[^】]+】|[^-—–_|/·:\s]{2,16})\s*[-—–_|/·:]\s*/.exec(
+      name.trim(),
+    );
   if (!m) return null;
   const prefix = m[0];
   const rest = name.trim().slice(prefix.length).trim();

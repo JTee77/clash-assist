@@ -377,6 +377,8 @@ export const EN_RULES: [string, string][] = [
   ["密钥被VPN软件拒绝。请确认代理软件外部控制器配置或重启软件后重试。", "The VPN app rejected the secret. Check the external-controller settings or restart the app and retry."],
   ["密钥被VPN软件拒绝。展开「高级」核对密钥后重试。", "The VPN app rejected the secret. Check it under “Advanced” and retry."],
   ["请先点「获取节点」，确认已连上。", "Click “Get nodes” first to confirm the connection."],
+  ["检测到代理软件开启了「入站认证」，本地代理端口拒绝未认证探测。请关闭「入站认证」（FlClash 位于「设置 → 常规 → 入站」）后再点「获取节点」。", "Inbound Authentication is enabled in your proxy app, blocking local proxy probes. Disable “Authentication” (in FlClash under “Settings → General → Inbound”) and click “Get nodes” again."],
+  ["检测到代理软件未开启本地混合代理端口（mixed-port 为 0）。请在软件设置中开启混合端口后再点「获取节点」。", "Local mixed proxy port is disabled (mixed-port is 0). Enable the mixed port in your proxy app settings and click “Get nodes” again."],
   ["软件在线，但海外探测全部失败。请换个节点再试。", "App is online, but all overseas probes failed. Try another node."],
   ["流量可能没走代理。请在软件里开启系统代理或 TUN 后再测。", "Traffic may not be using the proxy. Enable system proxy or TUN in the app and test again."],
   ["测试条件满足：客户端在线，访问海外站点大致正常，未见明显未走代理直连。可以开始测节点。", "Ready: client online, overseas sites mostly reachable, no obvious proxy bypass. You can start testing nodes."],

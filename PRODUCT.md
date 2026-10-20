@@ -1,16 +1,16 @@
-# Clash伴侣 / Clash Assist — 产品说明（v0.2.2）
+# Clash伴侣 / Clash Assist — 产品说明（v0.2.4）
 
 ## 定位
 **Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
 
 一句话：**看看你的代理会不会漏 DNS、关心的服务能不能用、实际够不够快。**
 
-**不提供**任何节点或 VPN 服务。当前仅支持 Clash Verge / Clash Verge Rev。FlClash 的支持即将上线，充分实测后再正式加入。
+**不提供**任何节点或 VPN 服务。当前支持 **Clash Verge / Clash Verge Rev** 与 **FlClash**。
 
 许可证：**GPL-3.0**（GNU 通用公共许可证第 3 版；可商用，分发改版须同样开源）。
 
 ## 受众
-- 已在用 Clash Verge / Clash Verge Rev 的 Mac 用户（FlClash 即将支持，尚未正式加入）
+- 已在用 Clash Verge / Clash Verge Rev 或 FlClash 的 Mac 用户
 - 需要比「能开 Google」更深的检查
 - 普通用户可直接用 GUI；进阶用户可用 CLI 拿 JSON
 
@@ -36,8 +36,10 @@
 
 ## 近期版本更新
 
-**当前版本：0.2.2**（产品名 Clash伴侣 / Clash Assist）
+**当前版本：0.2.4**（产品名 Clash伴侣 / Clash Assist）
 
+- **0.2.4**：补齐 `proxy-providers` 订阅节点读取与单节点 healthcheck 延迟探测回退；新增入站认证（Authentication）与混合代理端口关闭（mixed-port=0）预检提示；抽离节点地区静态规则表与预编译正则缓存；重构主页节点筛选与检测调度 Hooks。
+- **0.2.3**：正式支持 FlClash 客户端接入与外部控制器未开启引导；新增实时混合代理端口同步；CLI 支持 `--cached` 读取本地缓存；大幅增强 6 类机场节点命名地区识别。
 - **0.2.2**：新增节点按地区与关键词筛选、支持仅测筛选出的节点；新增检测结果本地自动保存（重开应用自动回填上次结果）；优化 Gemini 解锁检测准确性。
 - **0.2.1**：新增简体中文 / 繁體中文 / English 多语言支持（可跟随系统或手动切换）；优化不同窗口宽度下的按钮与布局自适应表现。
 - **0.2.0**：正式更名为 **Clash伴侣 / Clash Assist**，更换全新应用图标与安装包界面，新增启动更新提示。
@@ -62,7 +64,7 @@
 获取节点后先 `runLightGate`：客户端是否连上、海外是否大致通、是否像未走代理直连。不过则口语提示，不进入节点测评。
 
 ### CLI（0.1.12 骨架；0.1.16 收口 + 最小 serve；0.1.17 面向 AI 助手补齐）
-与 GUI **共用** `lib/runner` + `egress` + `score` + `mihomo`。**目前只支持 `--client verge`**（Clash Verge / Clash Verge Rev）；FlClash 即将支持，暂不可用。
+与 GUI **共用** `lib/runner` + `egress` + `score` + `mihomo`。**支持 `--client verge`**（Clash Verge / Clash Verge Rev）与 **`--client flclash`**（FlClash）。
 
 ```text
 clash-assist --cli discover --client verge

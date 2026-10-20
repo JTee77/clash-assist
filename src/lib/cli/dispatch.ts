@@ -183,9 +183,9 @@ export type ClientResolution =
   | { ok: false; error: CliError };
 
 /**
- * --client 闸门，与 GUI 的 normalizeClientId 同一判定（目前只有 verge）。
+ * --client 闸门，与 GUI 的 normalizeClientId 同一判定（目前支持 verge 与 flclash）。
  * - 未给 --client：--mock 时默认 verge；否则 client_required
- * - 给了但不受支持（flclash / clashx_meta / … / 任意未知值）：client_unsupported，
+ * - 给了但不受支持（clashx_meta / mihomo_party / … / 任意未知值）：client_unsupported，
  *   --mock 也不例外（不静默回落到 verge）
  */
 export function resolveCliClient(

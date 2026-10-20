@@ -341,8 +341,8 @@ describe("CliEnvelope", () => {
 });
 
 describe("帮助与文案", () => {
-  it("支持 verge 与 flclash（0.2.3）", () => {
-    expect(CLI_HELP_TEXT).toContain("0.2.3");
+  it("支持 verge 与 flclash（0.2.4）", () => {
+    expect(CLI_HELP_TEXT).toContain("0.2.4");
     expect(CLI_HELP_TEXT).toContain("支持 verge");
     expect(CLI_HELP_TEXT).toContain("flclash");
     expect(CLI_HELP_TEXT).toContain("serve");

@@ -75,12 +75,13 @@ expect_cli() {
 }
 
 echo "== help =="
-expect_cli 0 "Clash Assist CLI 0.1.16" 60 help --no-json
+expect_cli 0 "Clash Assist (Clash伴侣) CLI" 60 help --no-json
 
 echo "== 未知命令 / 未知选项 / 非法 client → ok:false + exit 1 =="
 expect_cli 1 '"code":"unknown_command"' 60 frobnicate
 expect_cli 1 '"code":"unknown_option"' 60 discover --mock --verbose
-expect_cli 1 '"code":"client_unsupported"' 60 discover --mock -c flclash
+expect_cli 1 '"code":"client_unsupported"' 60 discover --mock -c clashx_meta
+expect_cli 0 '"ok":true' 60 discover --mock -c flclash --json
 expect_cli 1 '"code":"client_required"' 60 gate
 
 echo "== discover --mock =="

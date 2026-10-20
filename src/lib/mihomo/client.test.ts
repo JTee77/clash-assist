@@ -94,3 +94,120 @@ describe("0.2.3 FlClash client & live mixed-port sync", () => {
     expect(state.message).toContain("检测到 FlClash 未开启外部控制器");
   });
 });
+
+describe("0.2.4 inboundAuth & mixedPortDisabled detection in GET /configs", () => {
+  beforeEach(() => {
+    h.invoke.mockReset();
+    (globalThis as unknown as { window?: Record<string, unknown> }).window = {
+      __TAURI_INTERNALS__: {},
+    };
+  });
+
+  it("flags inboundAuth=true when authentication is non-empty without loopback exemption", async () => {
+    h.invoke.mockImplementation(async (cmd: string, args?: { req?: { path?: string } }) => {
+      if (cmd === "discover_mihomo_for_client") {
+        return {
+          host: "127.0.0.1",
+          port: 9090,
+          secret: "fl-32-secret",
+          mixedPort: 7890,
+          source: "flclash:/Users/test/Library/Preferences/com.follow.clash.plist",
+          sockPath: null,
+        };
+      }
+      if (cmd === "mihomo_http") {
+        if (args?.req?.path === "/version") {
+          return { status: 200, body: JSON.stringify({ version: "v1.19.0", meta: true }) };
+        }
+        if (args?.req?.path === "/configs") {
+          return {
+            status: 200,
+            body: JSON.stringify({
+              "mixed-port": 7890,
+              authentication: ["abcd1234:1234567890abcdef"],
+              "skip-auth-prefixes": [],
+            }),
+          };
+        }
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+
+    const state = await discoverAndProbe(undefined, "flclash");
+    expect(state.status).toBe("connected");
+    expect(state.config?.inboundAuth).toBe(true);
+    expect(state.config?.mixedPortDisabled).toBe(false);
+  });
+
+  it("does not flag inboundAuth when 127.0.0.1/8 is in skip-auth-prefixes", async () => {
+    h.invoke.mockImplementation(async (cmd: string, args?: { req?: { path?: string } }) => {
+      if (cmd === "discover_mihomo_for_client") {
+        return {
+          host: "127.0.0.1",
+          port: 9097,
+          secret: "verge-secret",
+          mixedPort: 7897,
+          source: "verge",
+          sockPath: null,
+        };
+      }
+      if (cmd === "mihomo_http") {
+        if (args?.req?.path === "/version") {
+          return { status: 200, body: JSON.stringify({ version: "v1.19.0", meta: true }) };
+        }
+        if (args?.req?.path === "/configs") {
+          return {
+            status: 200,
+            body: JSON.stringify({
+              "mixed-port": 7897,
+              authentication: ["user:pass"],
+              "skip-auth-prefixes": ["127.0.0.1/8", "::1/128"],
+            }),
+          };
+        }
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+
+    const state = await discoverAndProbe(undefined, "verge");
+    expect(state.status).toBe("connected");
+    expect(state.config?.inboundAuth).toBeUndefined();
+    expect(state.config?.mixedPort).toBe(7897);
+  });
+
+  it("flags mixedPortDisabled=true when GET /configs reports mixed-port=0 and port=0", async () => {
+    h.invoke.mockImplementation(async (cmd: string, args?: { req?: { path?: string } }) => {
+      if (cmd === "discover_mihomo_for_client") {
+        return {
+          host: "127.0.0.1",
+          port: 9090,
+          secret: "fl-32-secret",
+          mixedPort: 7890,
+          source: "flclash:/Users/test/Library/Preferences/com.follow.clash.plist",
+          sockPath: null,
+        };
+      }
+      if (cmd === "mihomo_http") {
+        if (args?.req?.path === "/version") {
+          return { status: 200, body: JSON.stringify({ version: "v1.19.0", meta: true }) };
+        }
+        if (args?.req?.path === "/configs") {
+          return {
+            status: 200,
+            body: JSON.stringify({
+              "mixed-port": 0,
+              port: 0,
+              authentication: null,
+            }),
+          };
+        }
+      }
+      throw new Error(`unexpected cmd ${cmd}`);
+    });
+
+    const state = await discoverAndProbe(undefined, "flclash");
+    expect(state.status).toBe("connected");
+    expect(state.config?.mixedPort).toBe(0);
+    expect(state.config?.mixedPortDisabled).toBe(true);
+  });
+});
