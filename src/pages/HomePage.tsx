@@ -1,83 +1,25 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useState } from "react";
 import { CheckCardView } from "../components/CheckCardView";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { LanguageToggle } from "../components/LanguageToggle";
 import { useI18n } from "../i18n";
 import { NodeCard } from "../components/NodeCard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { CheckCard, EgressReport } from "../lib/egress";
 import {
   CLIENT_OPTIONS,
-  classifyByRegion,
   normalizeClientId,
   shortRegionName,
   type ClientId,
   type ConnectionState,
   type ProxyNode,
 } from "../lib/mihomo";
+import { useNodeFilter } from "../hooks/useNodeFilter";
 import {
-  starRank,
-  runLightGate,
-  type GateResult,
-  type NodeScoreResult,
-} from "../lib/score";
-import {
-  ENV_PLACEHOLDERS,
-  NODE_PLACEHOLDERS,
-  cacheScopeFor,
-  formatCachedTime,
-  loadCachedResults,
-  mergeScoreList,
-  runEnv,
-  saveCachedEnvCards,
-  saveCachedScores,
-  sortNodeScores,
-  testAll as runTestAll,
-  testOne,
-  type RunnerHooks,
-  type RunnerProgress,
-} from "../lib/runner";
+  splitProgressDisplay,
+  useRunnerController,
+} from "../hooks/useRunnerController";
 
-type TestMode = "current" | "all";
-
-/** 宽屏筛选栏最多直接平铺几个地区胶囊；超出部分收进紧凑「更多地区」下拉，确保单行不折行。 */
-const MAX_INLINE_REGIONS = 6;
-
-/** 瀑布流列数：单卡固定 298px + 9px 列距，1–8 列封顶。
- * 余量 ≈ main 左右 padding + tray 左右 pad。
- * 1920 宽约 6 列；(vw-72)/307。 */
-function colCountFor(vw: number): number {
-  return Math.min(8, Math.max(1, Math.floor((vw - 72) / 307)));
-}
-
-/** 进度文案拆成「阶段」+「节点名」。节点名统一交由 CSS 在超长时做省略号截断（title 保留全名）。 */
-export function splitProgressDisplay(p: RunnerProgress | null): {
-  phase: string;
-  node?: string;
-} | null {
-  if (!p?.text) return null;
-  const embedded = /^(.*?)（(.+?)）$/u.exec(p.text);
-  if (embedded) {
-    return { phase: embedded[1]!.trimEnd(), node: embedded[2] };
-  }
-  const prefixed =
-    /^(正在切换到|正在检测|正在切回原先节点)[：:\s]+(.+?)(?:…|\.{3})?$/u.exec(
-      p.text,
-    );
-  if (prefixed) {
-    return { phase: prefixed[1]!, node: prefixed[2]!.trim() };
-  }
-  const cleanPhase = p.text.replace(/(?:…|\.{3})$/u, "").trimEnd();
-  if (p.testingNode && !cleanPhase.includes(p.testingNode)) {
-    return { phase: cleanPhase, node: p.testingNode };
-  }
-  return { phase: p.text };
-}
+export { splitProgressDisplay };
 
 export function HomePage({
   connection,
@@ -97,195 +39,75 @@ export function HomePage({
   forceMock?: boolean;
 }) {
   const { t, td } = useI18n();
-  const [nodeCards, setNodeCards] = useState<CheckCard[]>(NODE_PLACEHOLDERS);
-  const [envCards, setEnvCards] = useState<CheckCard[]>(ENV_PLACEHOLDERS);
-  const [report, setReport] = useState<EgressReport | null>(null);
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<RunnerProgress | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [mode, setMode] = useState<TestMode>("current");
-  const [gate, setGate] = useState<GateResult | null>(null);
-  const [nodeScores, setNodeScores] = useState<NodeScoreResult[]>([]);
-  const [envOpen, setEnvOpen] = useState(false);
-  const [envRunning, setEnvRunning] = useState(false);
-  /** 环境检查完成后在按钮旁显示 ✓成功；下次检查开始时清除 */
-  const [envCheckOk, setEnvCheckOk] = useState(false);
-  /** 测全部 / 单节点完成后在「测全部节点」旁显示 ✓成功；下次开测时清除 */
-  const [nodeTestOk, setNodeTestOk] = useState(false);
-  /** 从本地缓存恢复的上次检测时间（本轮尚未跑新检测时显示） */
-  const [cachedNodesAt, setCachedNodesAt] = useState<string | null>(null);
-  const [cachedEnvAt, setCachedEnvAt] = useState<string | null>(null);
-  /** 节点筛选：地区（null = 全部）与搜索词 */
-  const [regionFilter, setRegionFilter] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [allConfirmOpen, setAllConfirmOpen] = useState(false);
   const [copiedDonate, setCopiedDonate] = useState(false);
-  const [switchHint, setSwitchHint] = useState<string | null>(null);
-  const [restoreError, setRestoreError] = useState<string | null>(null);
-  const abortAllRef = useRef(false);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [testingNode, setTestingNode] = useState<string | null>(null);
-  const [colCount, setColCount] = useState(() =>
-    typeof window === "undefined" ? 2 : colCountFor(window.innerWidth),
-  );
 
   const clientUnset = !clientId;
-  const cacheScope = cacheScopeFor(
+
+  const {
+    cacheScope,
+    mixedPortNum,
+    nodeCards,
+    envCards,
+    running,
+    refreshing,
+    mode,
+    gate,
+    nodeScores,
+    envOpen,
+    envRunning,
+    envCheckOk,
+    nodeTestOk,
+    allConfirmOpen,
+    setAllConfirmOpen,
+    switchHint,
+    restoreError,
+    testingNode,
+    detectionDone,
+    progressDisplay,
+    barPct,
+    cachedEnvTimeText,
+    cachedNodesTimeText,
+    refreshAndGate,
+    runEnvCheck,
+    openConfirmAll,
+    confirmAll,
+    onAbortAll,
+    testOneNode,
+  } = useRunnerController({
+    connection,
+    nodes,
     clientId,
-    forceMock || connection.usingMock,
-  );
-  const prevScopeRef = useRef<string | null>(cacheScope);
+    forceMock,
+    onRefresh,
+  });
 
-  // 切换客户端或 Mock 模式时重置当轮状态，以便干净回填对应缓存
-  useEffect(() => {
-    if (prevScopeRef.current === cacheScope) return;
-    prevScopeRef.current = cacheScope;
-    setNodeScores([]);
-    setEnvCards(ENV_PLACEHOLDERS);
-    setEnvOpen(false);
-    setNodeTestOk(false);
-    setEnvCheckOk(false);
-    setCachedNodesAt(null);
-    setCachedEnvAt(null);
-    setRegionFilter(null);
-    setSearchQuery("");
-    setExpanded(new Set());
-  }, [cacheScope]);
-
-  // 获取到节点列表后，若本轮尚未跑过实时检测，自动回填最近一次缓存结果
-  useEffect(() => {
-    if (!cacheScope || nodes.length === 0) return;
-    const cached = loadCachedResults(
-      cacheScope,
-      nodes.map((n) => n.name),
-    );
-    if (!cached) return;
-    if (!running && !nodeTestOk && nodeScores.length === 0 && cached.scores.length > 0) {
-      setNodeScores(cached.scores);
-      setCachedNodesAt(cached.scoresUpdatedAt);
-    }
-    if (!envRunning && !envCheckOk && cached.envCards.length > 0) {
-      setEnvCards(cached.envCards);
-      setEnvOpen(true);
-      setCachedEnvAt(cached.envUpdatedAt);
-    }
-  }, [cacheScope, nodes, running, nodeTestOk, nodeScores.length, envRunning, envCheckOk]);
-
-  const scoreByName = useMemo(() => {
-    const m = new Map<string, (typeof nodeScores)[number]>();
-    for (const s of nodeScores) m.set(s.nodeName, s);
-    return m;
-  }, [nodeScores]);
-
-  const orderedNodes = useMemo(() => {
-    const current = connection.currentProxy;
-    const ordered = [...nodes];
-    if (nodeScores.length > 0) {
-      // 三桶排序：已测活的在前（按星级/总分），没测的居中（保持订阅顺序，
-      // 当前节点优先），不可用的垫底——测全部过程中死节点边测边出分，
-      // 不能让它们反而浮到最前面干扰阅读。
-      const bucket = (s?: NodeScoreResult) =>
-        !s ? 1 : s.stars === "unavailable" ? 2 : 0;
-      ordered.sort((a, b) => {
-        const sa = scoreByName.get(a.name);
-        const sb = scoreByName.get(b.name);
-        const ka = bucket(sa);
-        const kb = bucket(sb);
-        if (ka !== kb) return ka - kb;
-        if (sa && sb) {
-          const byStar = starRank(sb.stars) - starRank(sa.stars);
-          if (byStar !== 0) return byStar;
-          return sb.totalScore - sa.totalScore;
-        }
-        if (a.name === current) return -1;
-        if (b.name === current) return 1;
-        return 0;
-      });
-      return ordered;
-    }
-    if (current) {
-      const i = ordered.findIndex((n) => n.name === current);
-      if (i > 0) {
-        const [row] = ordered.splice(i, 1);
-        ordered.unshift(row);
-      }
-    }
-    return ordered;
-  }, [nodes, connection.currentProxy, nodeScores, scoreByName]);
-
-  const regionGroups = useMemo(() => classifyByRegion(nodes), [nodes]);
-
-  // 订阅更新后若原选中的地区已不存在，自动回到「全部」
-  useEffect(() => {
-    if (
-      regionFilter !== null &&
-      !regionGroups.some(([reg]) => reg === regionFilter)
-    ) {
-      setRegionFilter(null);
-    }
-  }, [regionFilter, regionGroups]);
-
-  const trimmedQuery = searchQuery.trim().toLowerCase();
-  const isFiltered = regionFilter !== null || trimmedQuery.length > 0;
-
-  const filteredNodes = useMemo(() => {
-    if (!isFiltered) return orderedNodes;
-    return orderedNodes.filter((n) => {
-      if (regionFilter !== null && n.region !== regionFilter) return false;
-      if (trimmedQuery.length > 0) {
-        const hay = `${n.name} ${n.type} ${n.region} ${shortRegionName(n.region)}`.toLowerCase();
-        if (!hay.includes(trimmedQuery)) return false;
-      }
-      return true;
-    });
-  }, [orderedNodes, isFiltered, regionFilter, trimmedQuery]);
-
-  const inlineRegions = useMemo(
-    () =>
-      regionGroups.length <= MAX_INLINE_REGIONS
-        ? regionGroups
-        : regionGroups.slice(0, MAX_INLINE_REGIONS - 1),
-    [regionGroups],
-  );
-  const overflowRegions = useMemo(
-    () =>
-      regionGroups.length <= MAX_INLINE_REGIONS
-        ? []
-        : regionGroups.slice(MAX_INLINE_REGIONS - 1),
-    [regionGroups],
-  );
-  const overflowNodeCount = useMemo(
-    () => overflowRegions.reduce((sum, [, list]) => sum + list.length, 0),
-    [overflowRegions],
-  );
-  const overflowActive = useMemo(
-    () =>
-      regionFilter !== null &&
-      overflowRegions.some(([reg]) => reg === regionFilter),
-    [regionFilter, overflowRegions],
-  );
-
-  const mixedPortNum = connection.config?.mixedPort ?? null;
-
-  const upsertNodeCard = (card: CheckCard) => {
-    setNodeCards((prev) => {
-      const idx = prev.findIndex((p) => p.id === card.id);
-      if (idx === -1) return [...prev, card];
-      const next = [...prev];
-      next[idx] = card;
-      return next;
-    });
-  };
-
-  const upsertEnvCard = (card: CheckCard) => {
-    setEnvCards((prev) => {
-      const idx = prev.findIndex((p) => p.id === card.id);
-      if (idx === -1) return [...prev, card];
-      const next = [...prev];
-      next[idx] = card;
-      return next;
-    });
-  };
+  const {
+    regionFilter,
+    setRegionFilter,
+    searchQuery,
+    setSearchQuery,
+    resetFilter,
+    expanded,
+    allExpanded,
+    toggleExpand,
+    expandNode,
+    toggleExpandAll,
+    scoreByName,
+    orderedNodes,
+    regionGroups,
+    isFiltered,
+    filteredNodes,
+    inlineRegions,
+    overflowRegions,
+    overflowNodeCount,
+    overflowActive,
+    nodeColumns,
+  } = useNodeFilter({
+    nodes,
+    currentProxy: connection.currentProxy,
+    nodeScores,
+    cacheScope,
+  });
 
   const onSelectClient = (raw: string) => {
     const picked = CLIENT_OPTIONS.find((o) => o.id === raw);
@@ -293,119 +115,6 @@ export function HomePage({
     const id = normalizeClientId(raw);
     if (!id) return;
     onClientIdChange(id);
-  };
-
-  const refreshAndGate = async () => {
-    setRefreshing(true);
-    try {
-      const next = await onRefresh?.();
-      const conn =
-        next && typeof next === "object" && "status" in (next as object)
-          ? (next as ConnectionState)
-          : connection;
-      const g = await runLightGate(conn);
-      setGate(g);
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const ensureGate = async (): Promise<GateResult> => {
-    setProgress({ text: "测试条件检查中…" });
-    const g = await runLightGate(connection);
-    setGate(g);
-    // 不置 null：避免测全部接上预检前闪空白/「连…」；由 runner 覆盖或结束时清空
-    return g;
-  };
-
-  const buildHooks = (resetSubset?: ReadonlySet<string>): RunnerHooks => ({
-    onProgress: setProgress,
-    onNodeCards: setNodeCards,
-    onUpsertNodeCard: upsertNodeCard,
-    onReport: setReport,
-    onUpsertScore: (score) => {
-      setCachedNodesAt(null);
-      saveCachedScores(cacheScope, [score]);
-      setNodeScores((prev) => {
-        const next = prev.filter((x) => x.nodeName !== score.nodeName);
-        next.push(score);
-        return sortNodeScores(next);
-      });
-    },
-    onScores: (list) => {
-      if (list.length > 0) {
-        setCachedNodesAt(null);
-        saveCachedScores(cacheScope, list);
-      }
-      setNodeScores((prev) => mergeScoreList(prev, list, resetSubset));
-    },
-    onHint: setSwitchHint,
-    onRestoreError: setRestoreError,
-    onGate: setGate,
-    onEnvCards: (cards) => {
-      setEnvCards(cards);
-      saveCachedEnvCards(cacheScope, cards);
-    },
-    onUpsertEnvCard: upsertEnvCard,
-  });
-
-  const testAll = async () => {
-    const targetNodes = filteredNodes;
-    if (targetNodes.length === 0) return;
-    const subsetNames = isFiltered
-      ? new Set(targetNodes.map((n) => n.name))
-      : undefined;
-    abortAllRef.current = false;
-    setNodeTestOk(false);
-    setCachedNodesAt(null);
-    setRunning(true);
-    try {
-      const ok = await runTestAll(
-        {
-          connection,
-          nodes: targetNodes,
-          forceMock,
-          mixedPort: mixedPortNum,
-          ensureGate,
-          shouldAbort: () => abortAllRef.current,
-        },
-        buildHooks(subsetNames),
-      );
-      if (ok) setNodeTestOk(true);
-    } finally {
-      setRunning(false);
-      abortAllRef.current = false;
-    }
-  };
-
-  const runEnvCheck = async () => {
-    setEnvCheckOk(false);
-    setCachedEnvAt(null);
-    setEnvRunning(true);
-    setEnvOpen(true);
-    try {
-      const ok = await runEnv(
-        {
-          connection,
-          mixedPort: mixedPortNum,
-          exitIp: report?.exitIp ?? null,
-        },
-        buildHooks(),
-      );
-      if (ok) setEnvCheckOk(true);
-    } finally {
-      setEnvRunning(false);
-    }
-  };
-
-  const onConfirmAll = () => {
-    setAllConfirmOpen(false);
-    void testAll();
-  };
-
-  const onAbortAll = () => {
-    abortAllRef.current = true;
-    setProgress({ text: "正在停止…", testingNode: undefined });
   };
 
   // v0.1.10：版本号进原生标题栏（玻璃窗口下正文不再放介绍卡）。
@@ -416,107 +125,6 @@ export function HomePage({
         .catch(() => {});
     }
   }, [t]);
-
-  // 步骤③完成判定：三种检测路径（环境检查/测全部/测单节点）任一产出过结果
-  const envDone =
-    envCards.length > 0 &&
-    envCards.every(
-      (c) => c.level !== "unknown" && c.level !== "running",
-    );
-  const detectionDone = nodeScores.length > 0 || envDone;
-
-  const toggleExpand = (name: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-
-  // 瀑布流列数：Tauri 的 webview 宽度 = 窗口宽度，直接用 window.innerWidth +
-  // resize 事件，比 ResizeObserver 可靠 —— 不受"工作区条件渲染、挂载时序"影响。
-  useEffect(() => {
-    const onResize = () => setColCount(colCountFor(window.innerWidth));
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  const nodeColumns: ProxyNode[][] = useMemo(
-    () => {
-      const cols: ProxyNode[][] = Array.from({ length: colCount }, () => []);
-      filteredNodes.forEach((n, i) => cols[i % colCount].push(n));
-      return cols;
-    },
-    [filteredNodes, colCount],
-  );
-
-  // 测全部的行内进度（0–100；无比例时 null）
-  const progressPct =
-    progress &&
-    typeof progress.current === "number" &&
-    typeof progress.total === "number" &&
-    progress.total > 0
-      ? Math.max(
-          0,
-          Math.min(100, Math.round((progress.current / progress.total) * 100)),
-        )
-      : null;
-  const progressDisplay = splitProgressDisplay(progress);
-  // 进度条始终占位：切换/准备等无比例阶段沿用上一次的比例（运行开始为 0），只换文字，停止按钮不移动
-  const lastPctRef = useRef(0);
-  if (!running) lastPctRef.current = 0;
-  else if (progressPct != null) lastPctRef.current = progressPct;
-  const barPct = progressPct ?? lastPctRef.current;
-
-  const allExpanded =
-    filteredNodes.length > 0 &&
-    filteredNodes.every((n) => expanded.has(n.name));
-
-  const toggleExpandAll = () =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (allExpanded) {
-        for (const n of filteredNodes) next.delete(n.name);
-      } else {
-        for (const n of filteredNodes) next.add(n.name);
-      }
-      return next;
-    });
-
-  // 单独测某个节点：完整深测（runNodeDiagnostics）；非当前节点临时切换后切回。
-  const testOneNode = async (node: ProxyNode) => {
-    if (running) return;
-    setMode("current");
-    setNodeTestOk(false);
-    setCachedNodesAt(null);
-    setRestoreError(null);
-    setRunning(true);
-    setTestingNode(node.name);
-    try {
-      const ok = await testOne(
-        {
-          node,
-          connection,
-          forceMock,
-          mixedPort: mixedPortNum,
-          ensureGate,
-        },
-        buildHooks(),
-      );
-      if (ok) {
-        setExpanded((prev) => new Set(prev).add(node.name));
-        setNodeTestOk(true);
-      }
-    } finally {
-      setRunning(false);
-      setTestingNode(null);
-      setProgress(null);
-    }
-  };
-
-  const cachedEnvTimeText = formatCachedTime(cachedEnvAt);
-  const cachedNodesTimeText = formatCachedTime(cachedNodesAt);
 
   return (
     <div className="home-page">
@@ -653,11 +261,7 @@ export function HomePage({
                     type="button"
                     className="btn btn-primary action-btn"
                     disabled={running || clientUnset || filteredNodes.length === 0}
-                    onClick={() => {
-                      setMode("all");
-                      setRestoreError(null);
-                      setAllConfirmOpen(true);
-                    }}
+                    onClick={openConfirmAll}
                   >
                     {running && mode === "all"
                       ? isFiltered
@@ -890,7 +494,7 @@ export function HomePage({
                         testing={testingNode === n.name}
                         retestLocked={running}
                         onToggle={() => toggleExpand(n.name)}
-                        onTest={() => void testOneNode(n)}
+                        onTest={() => void testOneNode(n, expandNode)}
                       />
                     ))}
                   </div>
@@ -902,10 +506,7 @@ export function HomePage({
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() => {
-                    setRegionFilter(null);
-                    setSearchQuery("");
-                  }}
+                  onClick={resetFilter}
                 >
                   {t("home.filterReset")}
                 </button>
@@ -933,7 +534,7 @@ export function HomePage({
                 className="btn btn-primary"
                 type="button"
                 disabled={clientUnset || filteredNodes.length === 0}
-                onClick={onConfirmAll}
+                onClick={() => confirmAll(filteredNodes, isFiltered)}
               >
                 {t("home.ok")}
               </button>

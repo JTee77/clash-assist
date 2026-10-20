@@ -7,6 +7,10 @@ export interface ControllerConfig {
   mixedPort: number;
   source: string;
   sockPath?: string | null;
+  /** True when GET /configs has non-empty authentication without 127.0.0.1 loopback exemption */
+  inboundAuth?: boolean;
+  /** True when GET /configs explicitly reports mixed-port=0 and port=0 */
+  mixedPortDisabled?: boolean;
 }
 
 /**

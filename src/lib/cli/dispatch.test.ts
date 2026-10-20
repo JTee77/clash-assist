@@ -143,7 +143,7 @@ describe("参数 / 闸门错误：ok:false，且不碰网络", () => {
   it("help 永远 ok", async () => {
     const env = await run(["help"]);
     expect(env.ok).toBe(true);
-    expect((env.data as { text: string }).text).toContain("0.2.3");
+    expect((env.data as { text: string }).text).toContain("0.2.4");
   });
 });
 

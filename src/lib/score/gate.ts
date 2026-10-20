@@ -36,6 +36,24 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
         process: connection.message,
       };
     }
+    if (connection.config?.inboundAuth) {
+      return {
+        ok: false,
+        message:
+          "检测到代理软件开启了「入站认证」，本地代理端口拒绝未认证探测。请关闭「入站认证」（FlClash 位于「设置 → 常规 → 入站」）后再点「获取节点」。",
+        process:
+          "GET /configs 检测到 authentication 非空且未豁免 127.0.0.1 环回地址。",
+      };
+    }
+    if (connection.config?.mixedPortDisabled) {
+      return {
+        ok: false,
+        message:
+          "检测到代理软件未开启本地混合代理端口（mixed-port 为 0）。请在软件设置中开启混合端口后再点「获取节点」。",
+        process:
+          "GET /configs 返回 mixed-port=0 且 port=0，无可用本地 HTTP/Mixed 代理端口。",
+      };
+    }
   }
 
   const mixedPort = connection.config?.mixedPort ?? null;

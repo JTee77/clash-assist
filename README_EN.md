@@ -29,7 +29,8 @@ Because the app is signed locally (ad-hoc) rather than notarized with a paid $99
 2. Open **System Settings › Privacy & Security**, scroll down, and click **“Open Anyway”**.
 3. Click **“Open Anyway”** again in the confirmation prompt and authenticate with your Mac password or Touch ID.
 
-> 💡 **Quick terminal shortcut (optional)**: To skip System Settings after installing or updating, run `xattr -cr "/Applications/Clash Assist.app"` in Terminal and open the app directly.
+> ✨ **Zero-Prompt In-App Updates (v0.2.4+)**: Once installed, whenever a new version is available, simply click **“Update now”** in the top titlebar pill — Clash Assist will download, replace, and restart itself automatically **without triggering Gatekeeper prompts again**.
+> 💡 **Quick terminal shortcut (optional)**: On your very first install from a browser, you can also run `xattr -cr "/Applications/Clash Assist.app"` in Terminal to skip System Settings.
 
 ### About the “Local Network” Permission Prompt
 

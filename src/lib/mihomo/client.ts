@@ -445,6 +445,19 @@ function mergeManual(
  * non-TUN (System Proxy / port-only) users and FlClash users with dynamic port
  * overrides always probe through the actual listening proxy port.
  */
+function isLoopbackExempted(skipPrefixes: unknown): boolean {
+  if (!Array.isArray(skipPrefixes)) return false;
+  return skipPrefixes.some((entry) => {
+    if (typeof entry !== "string") return false;
+    const p = entry.trim();
+    return (
+      p === "127.0.0.1" ||
+      p.startsWith("127.0.0.1/") ||
+      p.startsWith("127.0.0.0/")
+    );
+  });
+}
+
 async function syncLiveMixedPort(config: ControllerConfig): Promise<ControllerConfig> {
   try {
     const res = await httpApi(config, "GET", "/configs", undefined, 1500);
@@ -452,12 +465,26 @@ async function syncLiveMixedPort(config: ControllerConfig): Promise<ControllerCo
       const obj = res.json as Record<string, unknown>;
       const mp = obj["mixed-port"];
       const hp = obj["port"];
+      const authList = obj["authentication"];
+      const hasAuth =
+        Array.isArray(authList) &&
+        authList.some((item) => typeof item === "string" && item.trim().length > 0);
+      const inboundAuth = hasAuth && !isLoopbackExempted(obj["skip-auth-prefixes"]);
+
+      let next: ControllerConfig = inboundAuth
+        ? { ...config, inboundAuth: true }
+        : config;
+
       if (typeof mp === "number" && mp > 0 && mp <= 65535) {
-        return { ...config, mixedPort: mp };
+        return { ...next, mixedPort: mp, mixedPortDisabled: false };
       }
       if (typeof hp === "number" && hp > 0 && hp <= 65535 && (!mp || mp === 0)) {
-        return { ...config, mixedPort: hp };
+        return { ...next, mixedPort: hp, mixedPortDisabled: false };
       }
+      if (mp === 0 && (hp === 0 || hp === undefined)) {
+        return { ...next, mixedPort: 0, mixedPortDisabled: true };
+      }
+      return next;
     }
   } catch {
     /* ignore and keep discovered mixedPort */
