@@ -35,7 +35,7 @@ export function HomePage({
   nodes: ProxyNode[];
   clientId: ClientId | null;
   onClientIdChange: (id: ClientId) => void;
-  onRefresh?: () => Promise<unknown> | void;
+  onRefresh?: (explicitClientId?: ClientId | null) => Promise<unknown> | void;
   forceMock?: boolean;
 }) {
   const { t, td } = useI18n();
@@ -62,7 +62,6 @@ export function HomePage({
     switchHint,
     restoreError,
     testingNode,
-    detectionDone,
     progressDisplay,
     barPct,
     cachedEnvTimeText,
@@ -115,6 +114,8 @@ export function HomePage({
     const id = normalizeClientId(raw);
     if (!id) return;
     onClientIdChange(id);
+    // 手动切换软件后立即自动拉取该软件的节点并校验门禁
+    void refreshAndGate(id);
   };
 
   // v0.1.10：版本号进原生标题栏（玻璃窗口下正文不再放介绍卡）。
@@ -128,34 +129,13 @@ export function HomePage({
 
   return (
     <div className="home-page">
-      <div className="flow-row">
-        <div className="flow-hint" aria-label={t("home.stepsAria")}>
-          <span className={`fh-step ${gate?.ok ? "done" : "cur"}`}>
-            <i>{gate?.ok ? "✓" : "1"}</i>{t("home.step1")}
-            <span className="fh-arrow" aria-hidden="true">→</span>
-          </span>
-          <span className="fh-rest">
-            <span className={`fh-step ${gate?.ok ? "done" : "todo"}`}>
-              <i>{gate?.ok ? "✓" : "2"}</i>{t("home.step2")}
-              <span className="fh-arrow" aria-hidden="true">→</span>
-            </span>
-            <span
-              className={`fh-step ${!gate?.ok ? "todo" : detectionDone ? "done" : "cur"}`}
+      <header className="home-topbar">
+        <div className="client-ops-cluster">
+          <div className="client-field">
+            <label
+              className="client-picker-label home-block-title"
+              htmlFor="home-client-select"
             >
-              <i>{!gate?.ok ? "3" : detectionDone ? "✓" : "3"}</i>{t("home.step3")}
-            </span>
-          </span>
-        </div>
-        <div className="flow-toggles">
-          <LanguageToggle />
-          <ThemeToggle />
-        </div>
-      </div>
-
-      <div className="app-header">
-        <div className="home-ops-controls">
-          <div className="picker-group">
-            <label className="client-picker-label home-block-title" htmlFor="home-client-select">
               {t("home.whichApp")}
             </label>
             <select
@@ -179,12 +159,12 @@ export function HomePage({
               ))}
             </select>
           </div>
+
           <div className="action-with-ok">
             <button
               className="btn btn-primary action-btn"
               type="button"
-              disabled={!!busy || refreshing || running || clientUnset}
-              title={clientUnset ? t("home.pickAppFirst") : undefined}
+              disabled={!!busy || refreshing || running}
               onClick={() => void refreshAndGate()}
             >
               {busy || refreshing ? t("home.fetching") : t("home.getNodes")}
@@ -192,12 +172,14 @@ export function HomePage({
             {!refreshing &&
             (connection.status === "connected" && gate?.ok ? (
               <span className="fetch-ok" title={td(connection.message)}>
-                <span className="status-ok-mark">✓</span>{t("home.success")}
+                <span className="status-ok-mark">✓</span>
+                {t("home.syncedNodes", { n: orderedNodes.length })}
               </span>
             ) : gate && !gate.ok ? (
               <>
                 <span className="fetch-fail">
-                  <span className="status-fail-mark">✗</span>{t("home.failed")}
+                  <span className="status-fail-mark">✗</span>
+                  {t("home.failed")}
                 </span>
                 <span className="fetch-fail-msg" role="status">
                   {td(gate.message)}
@@ -206,7 +188,12 @@ export function HomePage({
             ) : null)}
           </div>
         </div>
-      </div>
+
+        <div className="global-toggles">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
+      </header>
 
       {gate?.ok && orderedNodes.length > 0 ? (
         <>
@@ -223,11 +210,16 @@ export function HomePage({
                   disabled={envRunning || running}
                   onClick={() => void runEnvCheck()}
                 >
-                  {envRunning ? t("home.envChecking") : envOpen ? t("home.envRecheck") : t("home.envStart")}
+                  {envRunning
+                    ? t("home.envChecking")
+                    : envOpen
+                      ? t("home.envRecheck")
+                      : t("home.envStart")}
                 </button>
                 {!envRunning && envCheckOk ? (
                   <span className="fetch-ok" role="status">
-                    <span className="status-ok-mark">✓</span>{t("home.success")}
+                    <span className="status-ok-mark">✓</span>
+                    {t("home.success")}
                   </span>
                 ) : !envRunning && cachedEnvTimeText ? (
                   <span className="cache-tag" role="status">
@@ -273,7 +265,8 @@ export function HomePage({
                   </button>
                   {!running && nodeTestOk ? (
                     <span className="fetch-ok" role="status">
-                      <span className="status-ok-mark">✓</span>{t("home.success")}
+                      <span className="status-ok-mark">✓</span>
+                      {t("home.success")}
                     </span>
                   ) : !running && cachedNodesTimeText ? (
                     <span className="cache-tag" role="status">
@@ -376,14 +369,22 @@ export function HomePage({
                   className="ws-expand-link"
                   disabled={filteredNodes.length === 0}
                   onClick={toggleExpandAll}
-                  title={allExpanded ? t("home.collapseAllTitle") : t("home.expandAllTitle")}
+                  title={
+                    allExpanded
+                      ? t("home.collapseAllTitle")
+                      : t("home.expandAllTitle")
+                  }
                 >
                   {allExpanded ? t("home.collapseAll") : t("home.expandAll")}
                 </button>
               </div>
             </div>
 
-            <div className="node-filter-bar" role="region" aria-label={t("home.filterRegionAria")}>
+            <div
+              className="node-filter-bar"
+              role="region"
+              aria-label={t("home.filterRegionAria")}
+            >
               <div className="nf-pills">
                 <button
                   type="button"
@@ -560,12 +561,12 @@ export function HomePage({
             rel="noreferrer"
           >
             github.com/JTee77/clash-assist
-           </a>
+          </a>
           <br />
           {t("home.thanks")}
           <br />
           <span className="donate-line">
-            {t("home.coffee")}
+            <span>{t("home.coffee")}</span>
             <code className="donate-addr">
               0xa1ee52b64c39B94B74E50cEBF5E667a2e57E57Cb
             </code>
@@ -578,10 +579,11 @@ export function HomePage({
                   .then(() => {
                     setCopiedDonate(true);
                     setTimeout(() => setCopiedDonate(false), 1800);
-                  });
+                  })
+                  .catch(() => {});
               }}
             >
-              {copiedDonate ? `✓ ${t("home.copiedAddr")}` : t("home.copyAddr")}
+              {copiedDonate ? t("home.copiedAddr") : t("home.copyAddr")}
             </button>
           </span>
         </div>

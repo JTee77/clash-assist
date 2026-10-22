@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveCurrentProxy } from "./currentProxy";
+import {
+  resolveCurrentProxy,
+  resolveSelectorSnapshotFromMap,
+  resolveSwitchPlanFromMap,
+} from "./currentProxy";
 import type { ProxyInfo } from "./types";
 
 const leaf = (name: string, type: string): ProxyInfo => ({ name, type });
@@ -197,5 +201,106 @@ describe("resolveCurrentProxy", () => {
       DIRECT: leaf("DIRECT", "Direct"),
     };
     expect(resolveCurrentProxy(proxies)).toBeNull();
+  });
+});
+
+describe("resolveSelectorSnapshotFromMap & resolveSwitchPlanFromMap", () => {
+  it("规则模式下 GLOBAL=DIRECT 且带 Emoji 主组「🔰 节点选择」时，绝不误选 GLOBAL", () => {
+    const nodes = ["香港高速3-HK21", "香港高速3-美国02 美区奈飞解锁", "香港高速3-美国82 奈飞"];
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "DIRECT", ["DIRECT", "REJECT", ...nodes]),
+      "🔰 节点选择": group("🔰 节点选择", "香港高速3-HK21", [
+        "♻️ 自动选择",
+        "🎯 全球直连",
+        ...nodes,
+      ]),
+      "♻️ 自动选择": group("♻️ 自动选择", "香港高速3-HK21", nodes, "URLTest"),
+      "🎥 NETFLIX": group("🎥 NETFLIX", "🔰 节点选择", ["🔰 节点选择", ...nodes]),
+      DIRECT: leaf("DIRECT", "Direct"),
+      REJECT: leaf("REJECT", "Reject"),
+    };
+    withLeaves(proxies, nodes, "Vless");
+
+    const snap = resolveSelectorSnapshotFromMap(proxies, "香港高速3-HK21");
+    expect(snap).toEqual({
+      group: "🔰 节点选择",
+      now: "香港高速3-HK21",
+    });
+
+    const targetSnap = resolveSelectorSnapshotFromMap(
+      proxies,
+      "香港高速3-美国02 美区奈飞解锁",
+    );
+    expect(targetSnap?.group).toBe("🔰 节点选择");
+  });
+
+  it("当主组「🔰 节点选择」当前指向「♻️ 自动选择」(URLTest) 时，快照锁住外层 Selector 以便测完切回「♻️ 自动选择」", () => {
+    const nodes = ["HK-1", "US-1"];
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "DIRECT", ["DIRECT", ...nodes]),
+      "🔰 节点选择": group("🔰 节点选择", "♻️ 自动选择", ["♻️ 自动选择", ...nodes]),
+      "♻️ 自动选择": group("♻️ 自动选择", "HK-1", nodes, "URLTest"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    withLeaves(proxies, nodes);
+
+    const snap = resolveSelectorSnapshotFromMap(proxies, "HK-1");
+    expect(snap?.group).toBe("🔰 节点选择");
+    expect(snap?.now).toBe("♻️ 自动选择");
+  });
+
+  it("当主组只挂载地区子组（「🚀 节点选择」->「🇺🇸 美国节点」-> 节点）时，生成两步切换计划并记录完整恢复链", () => {
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "DIRECT", ["DIRECT"]),
+      "🚀 节点选择": group("🚀 节点选择", "🇭🇰 香港节点", [
+        "🇭🇰 香港节点",
+        "🇺🇸 美国节点",
+      ]),
+      "🇭🇰 香港节点": group("🇭🇰 香港节点", "HK-1", ["HK-1", "HK-2"]),
+      "🇺🇸 美国节点": group("🇺🇸 美国节点", "US-1", ["US-1", "US-2"]),
+      "HK-1": leaf("HK-1", "Vmess"),
+      "HK-2": leaf("HK-2", "Vmess"),
+      "US-1": leaf("US-1", "Vmess"),
+      "US-2": leaf("US-2", "Vmess"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+
+    const snap = resolveSelectorSnapshotFromMap(proxies, "HK-1");
+    expect(snap).toEqual({
+      group: "🚀 节点选择",
+      now: "🇭🇰 香港节点",
+      restoreChain: [
+        { group: "🚀 节点选择", now: "🇭🇰 香港节点" },
+        { group: "🇭🇰 香港节点", now: "HK-1" },
+        { group: "🇺🇸 美国节点", now: "US-1" },
+      ],
+    });
+
+    const steps = resolveSwitchPlanFromMap(proxies, "US-2", "🚀 节点选择");
+    expect(steps).toEqual([
+      { group: "🇺🇸 美国节点", name: "US-2" },
+      { group: "🚀 节点选择", name: "🇺🇸 美国节点" },
+    ]);
+  });
+
+  it("自定义主组名（如「🐱 猫猫云」）无关键字时，按最大真实节点数准确命中主组而非 GLOBAL", () => {
+    const nodes = ["N1", "N2", "N3", "N4"];
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "DIRECT", ["DIRECT", ...nodes]),
+      "🐱 猫猫云": group("🐱 猫猫云", "N1", ["DIRECT", ...nodes]),
+      AI: group("AI", "N2", ["N2"]),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    withLeaves(proxies, nodes);
+
+    const snap = resolveSelectorSnapshotFromMap(proxies, "N1");
+    expect(snap).toEqual({
+      group: "🐱 猫猫云",
+      now: "N1",
+      restoreChain: [
+        { group: "🐱 猫猫云", now: "N1" },
+        { group: "AI", now: "N2" },
+      ],
+    });
   });
 });

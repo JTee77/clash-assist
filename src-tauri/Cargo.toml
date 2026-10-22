@@ -1,6 +1,6 @@
 [package]
 name = "clash-assist"
-version = "0.2.4"
+version = "0.2.5"
 license = "GPL-3.0-or-later"
 description = "Clash Assist (Clash伴侣) — macOS Apple Silicon proxy egress diagnostics"
 authors = ["JTee77"]

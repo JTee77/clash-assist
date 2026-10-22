@@ -720,7 +720,14 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(app_menu::build);
+    let builder = builder.menu(app_menu::build).on_menu_event(|app, event| {
+        if event.id() == "reload_window" {
+            use tauri::Manager;
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.eval("window.location.reload()");
+            }
+        }
+    });
     builder
         .setup(|app| {
             use tauri::Manager;

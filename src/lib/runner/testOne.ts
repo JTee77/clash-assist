@@ -40,7 +40,7 @@ export async function testOne(
       });
       snap = await resolveSelectorSnapshot(config, connection.currentProxy);
       const group =
-        (await findSelectorGroup(config, node.name)) ?? snap?.group;
+        snap?.group ?? (await findSelectorGroup(config, node.name));
       if (!group) {
         hooks.onHint?.("找不到可切换的策略组，没法单独测这个节点。");
         return false;
@@ -84,6 +84,7 @@ export async function testOne(
       const restored = await restoreProxy(config, {
         group: plan.group,
         now: plan.now,
+        ...(plan.restoreChain ? { restoreChain: plan.restoreChain } : {}),
       });
       hooks.onRestoreError?.(restoreErrorFor(plan, restored));
     } else if (plan.kind !== "none") {

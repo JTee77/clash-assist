@@ -192,7 +192,7 @@ export async function testAll(
           testingNode: n.name,
         });
         const group =
-          (await findSelectorGroup(config!, n.name)) ?? originalSnap.group;
+          originalSnap.group || (await findSelectorGroup(config!, n.name));
         if (!group) {
           upsertScore(
             scoreDeadNode(n.name, "找不到可切换的策略组，没法检测这个节点。"),
@@ -283,6 +283,7 @@ export async function testAll(
       const restored = await restoreProxy(config, {
         group: plan.group,
         now: plan.now,
+        ...(plan.restoreChain ? { restoreChain: plan.restoreChain } : {}),
       });
       hooks.onRestoreError?.(restoreErrorFor(plan, restored));
       hooks.onProgress(null);

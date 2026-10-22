@@ -11,7 +11,12 @@ export type RestorePlan =
   /** 没切过节点：什么都不用做，也不报错。 */
   | { kind: "none" }
   /** 切过且记下了原先节点：应调用 restoreProxy。 */
-  | { kind: "restore"; group: string; now: string }
+  | {
+      kind: "restore";
+      group: string;
+      now: string;
+      restoreChain?: Array<{ group: string; now: string }>;
+    }
   /** 切过但没记下原先节点：无法自动切回，必须报错。 */
   | { kind: "missing_snapshot" };
 
@@ -21,7 +26,12 @@ export function planRestore(
 ): RestorePlan {
   if (!didSwitch) return { kind: "none" };
   if (snapshot?.group && snapshot.now) {
-    return { kind: "restore", group: snapshot.group, now: snapshot.now };
+    return {
+      kind: "restore",
+      group: snapshot.group,
+      now: snapshot.now,
+      ...(snapshot.restoreChain ? { restoreChain: snapshot.restoreChain } : {}),
+    };
   }
   return { kind: "missing_snapshot" };
 }

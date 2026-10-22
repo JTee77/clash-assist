@@ -370,6 +370,9 @@ export const EN_RULES: [string, string][] = [
   ["已启用 Mock 演示模式（未连接真实软件）", "Mock demo mode on (no real app connected)"],
   ["请先选择软件", "Pick an app first"],
   ["连接检测失败", "Connection check failed"],
+  ["未检测到正在运行的VPN软件。请先打开软件并连上节点后点「刷新节点」。", "No running VPN app detected. Open your VPN app and connect to a node, then click “Refresh nodes”."],
+  ["检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「获取节点」", "FlClash External Controller is disabled. Enable “External Controller” in FlClash under “Settings → General → Inbound”, then click “Refresh nodes”"],
+  ["请确认 FlClash 已打开并连接节点，且在 FlClash「设置 → 常规 → 入站」中开启了「外部控制器」", "Make sure FlClash is open and connected to a node, and “External Controller” is enabled under “Settings → General → Inbound”"],
 
   // ── 预检 gate ──
   ["请先在上方选择软件，再点「获取节点」。", "Pick your app above first, then click “Get nodes”."],

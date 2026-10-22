@@ -17,7 +17,13 @@ import {
   type ProxyNode,
 } from "./types";
 import { detectRegion, detectRegions } from "./regions";
-import { resolveCurrentProxy } from "./currentProxy";
+import {
+  resolveCurrentProxy,
+  resolveSelectorSnapshotFromMap,
+  resolveSwitchPlanFromMap,
+  type SelectorSnapshot,
+} from "./currentProxy";
+export type { SelectorSnapshot };
 import { mockProxiesRaw } from "./mock";
 import { mergeProviderNodes, missingProviderNames, resolveProviderNode, type ProviderMap } from "./providerNodes";
 import {
@@ -776,8 +782,8 @@ export async function probeDelay(
 
 
 /**
- * 查找包含该节点的选择器组名（优先 Proxy / GLOBAL）。
- * 仅用于用户确认后的「测全部」临时切换；其它路径不要调用 switchProxy。
+ * 查找包含该节点（或可通过嵌套子组切换到该节点）的顶层主 Selector 组名。
+ * 仅用于用户主动触发「测单个 / 测全部」时的临时切换；其它路径不要调用 switchProxy。
  */
 export async function findSelectorGroup(
   config: ControllerConfig,
@@ -787,15 +793,9 @@ export async function findSelectorGroup(
   return snap?.group ?? null;
 }
 
-export type SelectorSnapshot = {
-  group: string;
-  /** 该策略组当前选中的节点名 */
-  now: string | null;
-};
-
 /**
- * 解析包含指定节点（或当前选中）的策略组，并读出组内 `now`。
- * 用于「测全部」开始前记录、结束后强制切回。
+ * 解析包含指定节点（或当前选中）的主控策略组，并读出组内 `now` 及嵌套恢复链 `restoreChain`。
+ * 用于「测单个 / 测全部」开始前记录、结束后强制切回。
  */
 export async function resolveSelectorSnapshot(
   config: ControllerConfig,
@@ -805,35 +805,7 @@ export async function resolveSelectorSnapshot(
   if (!res || !is2xx(res.status) || !res.json) return null;
   const obj = res.json as { proxies?: Record<string, ProxyInfo> };
   const proxies = obj.proxies ?? {};
-  const prefer = ["Proxy", "GLOBAL", "proxy", "SELECT", "节点选择"];
-
-  const isSelectable = (p: ProxyInfo) => {
-    const t = (p.type || "").toLowerCase();
-    return t === "selector" || t === "urltest" || t === "fallback";
-  };
-
-  const candidates: string[] = [];
-  for (const name of prefer) {
-    const p = proxies[name];
-    if (!p) continue;
-    if (nodeName) {
-      if (p.all?.includes(nodeName)) candidates.push(name);
-    } else if (isSelectable(p) && p.now) {
-      candidates.push(name);
-    }
-  }
-  for (const [name, p] of Object.entries(proxies)) {
-    if (prefer.includes(name)) continue;
-    if (!isSelectable(p)) continue;
-    if (nodeName ? p.all?.includes(nodeName) : !!p.now) {
-      candidates.push(name);
-    }
-  }
-
-  const group = candidates[0];
-  if (!group) return null;
-  const now = proxies[group]?.now ?? nodeName ?? null;
-  return { group, now };
+  return resolveSelectorSnapshotFromMap(proxies, nodeName);
 }
 
 export async function switchProxy(
@@ -843,16 +815,45 @@ export async function switchProxy(
 ): Promise<boolean> {
   const enc = encodeURIComponent(group);
   const res = await httpApi(config, "PUT", `/proxies/${enc}`, { name });
-  return !!res && is2xx(res.status);
+  if (res && is2xx(res.status)) return true;
+
+  // 若目标节点位于主组下属的地区子组中（如「🚀 节点选择」->「🇺🇸 美国节点」-> 节点），
+  // 自动查询 /proxies 计算多步切换路径并依次执行
+  const mapRes = await httpApi(config, "GET", "/proxies", undefined, 6000);
+  if (!mapRes || !is2xx(mapRes.status) || !mapRes.json) return false;
+  const proxies = (mapRes.json as { proxies?: Record<string, ProxyInfo> }).proxies ?? {};
+  const steps = resolveSwitchPlanFromMap(proxies, name, group);
+  if (steps.length === 0) return false;
+  for (const step of steps) {
+    const stepEnc = encodeURIComponent(step.group);
+    const r = await httpApi(config, "PUT", `/proxies/${stepEnc}`, { name: step.name });
+    if (!r || !is2xx(r.status)) return false;
+  }
+  return true;
 }
 
-/** 切回原先节点；失败返回 false（调用方必须向用户报错，不可静默）。 */
+/** 切回原先节点（含嵌套子组链）；任一步失败返回 false（调用方必须向用户报错，不可静默）。 */
 export async function restoreProxy(
   config: ControllerConfig,
   snapshot: SelectorSnapshot,
 ): Promise<boolean> {
   if (!snapshot.now) return false;
-  return switchProxy(config, snapshot.group, snapshot.now);
+  if (snapshot.restoreChain && snapshot.restoreChain.length > 0) {
+    let allOk = true;
+    // 先恢复内层子组，最后恢复顶层主组
+    for (let i = snapshot.restoreChain.length - 1; i >= 0; i--) {
+      const item = snapshot.restoreChain[i]!;
+      const enc = encodeURIComponent(item.group);
+      const res = await httpApi(config, "PUT", `/proxies/${enc}`, { name: item.now });
+      if (!res || !is2xx(res.status)) {
+        allOk = false;
+      }
+    }
+    return allOk;
+  }
+  const enc = encodeURIComponent(snapshot.group);
+  const res = await httpApi(config, "PUT", `/proxies/${enc}`, { name: snapshot.now });
+  return !!res && is2xx(res.status);
 }
 
 export async function closeConnections(config: ControllerConfig): Promise<boolean> {
