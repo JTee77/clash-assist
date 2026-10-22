@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CheckCard, EgressReport } from "../lib/egress";
 import type {
   ClientId,
@@ -64,7 +64,7 @@ export function useRunnerController({
   nodes: ProxyNode[];
   clientId: ClientId | null;
   forceMock: boolean;
-  onRefresh?: () => Promise<unknown> | void;
+  onRefresh?: (explicitClientId?: ClientId | null) => Promise<unknown> | void;
 }) {
   const [nodeCards, setNodeCards] = useState<CheckCard[]>(NODE_PLACEHOLDERS);
   const [envCards, setEnvCards] = useState<CheckCard[]>(ENV_PLACEHOLDERS);
@@ -90,6 +90,7 @@ export function useRunnerController({
   const [testingNode, setTestingNode] = useState<string | null>(null);
 
   const abortAllRef = useRef(false);
+  const autoSniffedRef = useRef(false);
   const cacheScope = cacheScopeFor(
     clientId,
     forceMock || connection.usingMock,
@@ -126,11 +127,7 @@ export function useRunnerController({
       setNodeScores(cached.scores);
       setCachedNodesAt(cached.scoresUpdatedAt);
     }
-    if (!envRunning && !envCheckOk && cached.envCards.length > 0) {
-      setEnvCards(cached.envCards);
-      setEnvOpen(true);
-      setCachedEnvAt(cached.envUpdatedAt);
-    }
+    // B方案：环境泄漏检查每次新打开软件保持折叠状态，不自动展开旧卡片，避免误导为当前实时环境
   }, [
     cacheScope,
     nodes,
@@ -163,20 +160,37 @@ export function useRunnerController({
     });
   };
 
-  const refreshAndGate = async () => {
-    setRefreshing(true);
-    try {
-      const next = await onRefresh?.();
-      const conn =
-        next && typeof next === "object" && "status" in (next as object)
-          ? (next as ConnectionState)
-          : connection;
-      const g = await runLightGate(conn);
-      setGate(g);
-    } finally {
-      setRefreshing(false);
-    }
-  };
+  const refreshAndGate = useCallback(
+    async (explicitClientId?: ClientId | null) => {
+      const startedAt = Date.now();
+      setRefreshing(true);
+      setGate(null);
+      try {
+        const next = await onRefresh?.(explicitClientId);
+        const conn =
+          next && typeof next === "object" && "status" in (next as object)
+            ? (next as ConnectionState)
+            : connection;
+        const g = await runLightGate(conn);
+        // 保证用户肉眼能感知到「同步中…」的反馈，避免 50ms 瞬回看起来像没动静
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < 380) {
+          await new Promise((r) => setTimeout(r, 380 - elapsed));
+        }
+        setGate(g);
+      } finally {
+        setRefreshing(false);
+      }
+    },
+    [onRefresh, connection],
+  );
+
+  // 打开软件后自动嗅探一次正在运行的客户端并拉出节点 + 轻门禁校验
+  useEffect(() => {
+    if (autoSniffedRef.current) return;
+    autoSniffedRef.current = true;
+    void refreshAndGate();
+  }, [refreshAndGate]);
 
   const ensureGate = async (): Promise<GateResult> => {
     setProgress({ text: "测试条件检查中…" });

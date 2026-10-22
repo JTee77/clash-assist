@@ -264,17 +264,7 @@ select {
   display: inline-flex;
   align-items: center;
 }
-.picker-group {
-  /* 固定宽度，让「获取节点」左缘精确落在动作列 --action-x 上
-     content-inset 14 + 348 + controls gap 14 = --action-x(376)
-     title → 8–12 → dropdown 在本 group；dropdown → 14 → 获取节点 在 controls */
-  flex: 0 0 348px;
-  max-width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
+
 .client-picker-select {
   flex: 0 1 240px;
   max-width: 100%;
@@ -801,23 +791,81 @@ select {
 
 /* Row 1 — software：左簇 title→dropdown→获取节点→成功；短底部分割线；
    与下方 tray 同侧 inset；主按钮落 --action-x，不推到行最右。 */
-.app-header {
+/* ============================================================
+   顶部解耦架构：
+   1. .home-topbar：两端对齐顶层容器（左业务，右全局设置）
+   2. .client-ops-cluster：业务操作簇（选择框单元 + 刷新动作）
+   3. .global-toggles：永远钉在右上角，脱离业务折行
+   ============================================================ */
+.home-topbar {
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  /* 成功标已跟在按钮旁（.action-with-ok gap 8），这里只是整行间距 */
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 16px;
   margin: 0 0 var(--tray-gap);
-  padding: 8px var(--content-inset-x) 10px;
-  border: none;
+  padding: 6px var(--content-inset-x) 10px;
   border-bottom: 1px solid var(--soft-row-divider);
-  border-radius: 0;
-  background: transparent;
-  flex-wrap: wrap;
+  box-sizing: border-box;
 }
-.app-header .client-picker-select {
-  min-width: 160px;
+
+.client-ops-cluster {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.client-field {
+  /* 宽屏固定 348px：确保「刷新节点」左缘落于精确的 --action-x (376px) 线上 */
+  flex: 0 0 348px;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.client-picker-label {
+  flex-shrink: 0;
+  line-height: var(--control-h);
+  height: var(--control-h);
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.client-picker-select {
   flex: 0 1 240px;
+  max-width: 100%;
+  min-width: 160px;
+  height: var(--control-h);
+  margin: 0;
+  padding: 0 10px;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  line-height: 1;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 12px, calc(100% - 9px) 12px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+
+.global-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-top: 3px; /* 居中对齐 30px 高度行 */
 }
 
 /* 环境托盘头：主按钮左缘锁 --action-x；副标题贴标题右侧，窄列内可自然折行 */
@@ -1203,10 +1251,10 @@ select {
     display: inline-block;
   }
   .nf-search-wrap {
-    flex: 1 1 140px;
-    width: auto;
-    max-width: 220px;
-    min-width: 0;
+    flex: 0 1 184px;
+    width: 184px;
+    max-width: 184px;
+    min-width: 110px;
   }
 }
 @container filterbar (max-width: 460px) {
@@ -1215,9 +1263,9 @@ select {
     max-width: 148px;
   }
   .nf-search-wrap {
-    margin-left: 0;
+    margin-left: auto;
     flex: 1 1 110px;
-    max-width: none;
+    max-width: 184px;
   }
 }
 .node-empty {
@@ -1252,17 +1300,16 @@ select {
   gap: var(--nc-gap);
 }
 
-/* 共用换行点 ≤1100px：当窗口收窄到节点检测行右侧不足以容纳完整节点名与进度组时，
-   三颗主按钮（获取节点 / 环境检查 / 测全部）在同一时刻一起换到各自标题下方并靠左，
-   从而释放整行宽度让正在测的节点名称完整显示 */
-@media (max-width: 1100px) {
-  .home-ops-controls {
+/* 共用换行点 ≤840px：收紧换行时机，窗口在 840px~1100px 之间保持紧凑同行展示；
+   当窗口进一步收窄到右侧真正放不下完整进度与展开链接时（≤840px），
+   三颗主按钮才在同一时刻一起换到各自标题下方靠左，释放全宽展示正在检测的节点全名 */
+@media (max-width: 840px) {
+  .client-ops-cluster {
     flex-wrap: wrap;
     row-gap: 8px;
   }
-  .home-ops-controls .picker-group {
+  .client-ops-cluster .action-with-ok {
     flex: 1 1 100%;
-    max-width: 100%;
   }
   .env-head,
   .ws-ops {
@@ -1294,6 +1341,15 @@ select {
 @media (max-width: 760px) {
   .main {
     padding: 8px 12px 12px;
+  }
+  .client-ops-cluster .client-field {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .client-ops-cluster .client-picker-select {
+    flex: 0 0 240px;
+    width: 240px;
   }
   .card-grid-home {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

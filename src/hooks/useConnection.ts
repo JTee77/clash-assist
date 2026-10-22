@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import {
+  CLIENT_OPTIONS,
   CLIENT_STORAGE_KEY,
   defaultConfig,
   discoverAndProbe,
@@ -38,6 +39,25 @@ function readForceMock(): boolean {
     return false;
   }
 }
+
+function sniffCandidateOrder(preferred: ClientId | null): ClientId[] {
+  const selectable = CLIENT_OPTIONS.filter((o) => !o.disabled).map((o) => o.id);
+  if (preferred && selectable.includes(preferred)) {
+    return [preferred, ...selectable.filter((id) => id !== preferred)];
+  }
+  return selectable;
+}
+
+/** 判断某客户端是否在本地硬盘上留下了真实配置/Socket 痕迹（而非纯默认回退） */
+function hasClientFootprint(state: ConnectionState): boolean {
+  const src = state.config?.source ?? "";
+  if (!src || src === "defaults" || src === "unset-default") return false;
+  if (src.endsWith(":defaults") || src.startsWith("preset-")) return false;
+  return true;
+}
+
+const UNDETECTED_APP_MESSAGE =
+  "未检测到正在运行的VPN软件。请先打开软件并连上节点后点「刷新节点」。";
 
 export function useConnection() {
   const [forceMock, setForceMockState] = useState<boolean>(readForceMock);
@@ -79,7 +99,7 @@ export function useConnection() {
     }
   };
 
-  const setClientId = (id: ClientId | null) => {
+  const setClientId = useCallback((id: ClientId | null) => {
     setClientIdState(id);
     try {
       if (id) localStorage.setItem(CLIENT_STORAGE_KEY, id);
@@ -87,10 +107,14 @@ export function useConnection() {
     } catch {
       /* ignore */
     }
-  };
+  }, []);
 
   const refresh = useCallback(
-    async (override?: Partial<ControllerConfig>, mockOverride?: boolean) => {
+    async (
+      override?: Partial<ControllerConfig>,
+      mockOverride?: boolean,
+      explicitClientId?: ClientId | null,
+    ) => {
       const gen = ++refreshGen.current;
       setBusy(true);
       try {
@@ -112,65 +136,156 @@ export function useConnection() {
           return next;
         }
 
-        if (!clientId) {
-          const next: ConnectionState = {
-            status: "unknown",
-            message: "请先选择软件",
-            config: { ...defaultConfig(), ...manual, ...override },
-            currentProxy: null,
-            usingMock: false,
-            proxiesError: null,
-          };
-          if (gen === refreshGen.current) {
-            setState(next);
-            setNodes([]);
-          }
-          return next;
-        }
-
         const merged = { ...manual, ...override };
-        const next = await discoverAndProbe(
-          Object.keys(merged).length ? merged : undefined,
-          clientId,
-        );
+        const manualArg = Object.keys(merged).length ? merged : undefined;
 
-        if (gen !== refreshGen.current) return next;
+        // 1) 若用户在下拉框显式选择了某款软件，则仅针对该软件探测并报该软件的专属提示
+        if (explicitClientId) {
+          setClientId(explicitClientId);
+          const next = await discoverAndProbe(manualArg, explicitClientId);
+          if (gen !== refreshGen.current) return next;
 
-        if (!next.config || next.status === "unreachable" || next.status === "unauthorized") {
-          setState({ ...next, proxiesError: next.proxiesError ?? null });
-          setNodes([]);
-          return next;
-        }
+          if (
+            !next.config ||
+            next.status === "unreachable" ||
+            next.status === "unauthorized"
+          ) {
+            setState({ ...next, proxiesError: next.proxiesError ?? null });
+            setNodes([]);
+            return next;
+          }
 
-        const list = await getProxies(next.config);
-        if (gen !== refreshGen.current) return next;
+          const list = await getProxies(next.config);
+          if (gen !== refreshGen.current) return next;
+          setNodes(list.nodes);
 
-        setNodes(list.nodes);
+          if (list.unauthorized) {
+            const unauthorized: ConnectionState = {
+              ...next,
+              status: "unauthorized",
+              message:
+                "连接被拒绝（控制器密钥不匹配），请重启代理软件或刷新连接后重试",
+              usingMock: false,
+              currentProxy: null,
+              proxiesError: list.error,
+            };
+            setState(unauthorized);
+            return unauthorized;
+          }
 
-        if (list.unauthorized) {
-          const unauthorized: ConnectionState = {
+          const mergedState: ConnectionState = {
             ...next,
-            status: "unauthorized",
-            message: "连接被拒绝（控制器密钥不匹配），请重启代理软件或刷新连接后重试",
             usingMock: false,
-            currentProxy: null,
+            currentProxy: list.currentProxy ?? next.currentProxy,
             proxiesError: list.error,
+            message: list.error
+              ? `${next.message} — ${list.error}`
+              : next.message,
           };
-          setState(unauthorized);
-          return unauthorized;
+          setState(mergedState);
+          return mergedState;
         }
 
-        const mergedState: ConnectionState = {
-          ...next,
+        // 2) 自动嗅探：依次探测候选软件
+        const candidates = sniffCandidateOrder(clientId);
+        const results: Array<{ id: ClientId; state: ConnectionState }> = [];
+        let connectedHit: { id: ClientId; state: ConnectionState } | null = null;
+
+        for (const cand of candidates) {
+          const probed = await discoverAndProbe(manualArg, cand);
+          if (gen !== refreshGen.current) return probed;
+          results.push({ id: cand, state: probed });
+          if (probed.status === "connected") {
+            connectedHit = { id: cand, state: probed };
+            break;
+          }
+        }
+
+        // 2a) 有软件在线响应：直接选中并拉取节点
+        if (connectedHit && connectedHit.state.config) {
+          setClientId(connectedHit.id);
+          const next = connectedHit.state;
+          const list = await getProxies(next.config!);
+          if (gen !== refreshGen.current) return next;
+          setNodes(list.nodes);
+
+          if (list.unauthorized) {
+            const unauthorized: ConnectionState = {
+              ...next,
+              status: "unauthorized",
+              message:
+                "连接被拒绝（控制器密钥不匹配），请重启代理软件或刷新连接后重试",
+              usingMock: false,
+              currentProxy: null,
+              proxiesError: list.error,
+            };
+            setState(unauthorized);
+            return unauthorized;
+          }
+
+          const mergedState: ConnectionState = {
+            ...next,
+            usingMock: false,
+            currentProxy: list.currentProxy ?? next.currentProxy,
+            proxiesError: list.error,
+            message: list.error
+              ? `${next.message} — ${list.error}`
+              : next.message,
+          };
+          setState(mergedState);
+          return mergedState;
+        }
+
+        // 2b) 均未连上：检查是否只有唯一一款软件在本地有配置痕迹（或者只有唯一一款报 401）
+        const authHit = results.find((r) => r.state.status === "unauthorized");
+        if (authHit) {
+          setClientId(authHit.id);
+          setState({
+            ...authHit.state,
+            proxiesError: authHit.state.proxiesError ?? null,
+          });
+          setNodes([]);
+          return authHit.state;
+        }
+
+        const withFootprint = results.filter((r) => hasClientFootprint(r.state));
+        if (withFootprint.length === 1) {
+          const single = withFootprint[0]!;
+          setClientId(single.id);
+          setState({
+            ...single.state,
+            proxiesError: single.state.proxiesError ?? null,
+          });
+          setNodes([]);
+          return single.state;
+        }
+
+        // 2c) 两款都装了且都没开（或两款都没装）：若之前已有明确的 clientId 选择则保留，
+        // 若首次打开无明确选择则不替用户瞎猜，保持未选状态并提示用户打开软件或手动选择
+        if (clientId) {
+          const preferredRes =
+            results.find((r) => r.id === clientId)?.state ?? results[0]?.state;
+          if (preferredRes) {
+            setState({
+              ...preferredRes,
+              proxiesError: preferredRes.proxiesError ?? null,
+            });
+            setNodes([]);
+            return preferredRes;
+          }
+        }
+
+        const undecided: ConnectionState = {
+          status: "unreachable",
+          message: UNDETECTED_APP_MESSAGE,
+          config: { ...defaultConfig(), ...manual, ...override },
+          currentProxy: null,
           usingMock: false,
-          currentProxy: list.currentProxy ?? next.currentProxy,
-          proxiesError: list.error,
-          message: list.error
-            ? `${next.message} — ${list.error}`
-            : next.message,
+          proxiesError: UNDETECTED_APP_MESSAGE,
         };
-        setState(mergedState);
-        return mergedState;
+        setState(undecided);
+        setNodes([]);
+        return undecided;
       } catch (err) {
         const message =
           err instanceof Error ? err.message : String(err ?? "连接检测失败");
@@ -193,11 +308,8 @@ export function useConnection() {
         }
       }
     },
-    [manual, forceMock, clientId],
+    [manual, forceMock, clientId, setClientId],
   );
-
-  // Intentionally no boot auto-refresh: opening the window must not invoke Mihomo HTTP.
-  // User / Pit clicks「刷新连接」on Home or Settings.
 
   const updateManual = (patch: Partial<ControllerConfig>) => {
     setManual((m) => ({ ...m, ...patch }));
@@ -219,6 +331,5 @@ export function useConnection() {
     updateManual,
     resetManual,
     refresh,
-    setNodes,
   };
 }

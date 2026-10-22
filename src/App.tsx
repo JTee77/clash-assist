@@ -44,7 +44,9 @@ function AppInner() {
           nodes={nodes}
           clientId={clientId}
           onClientIdChange={setClientId}
-          onRefresh={() => refresh()}
+          onRefresh={(explicitClientId) =>
+            refresh(undefined, undefined, explicitClientId)
+          }
           forceMock={forceMock}
         />
       </main>

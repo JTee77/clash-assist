@@ -4,7 +4,7 @@
 //! 前端手动切换语言时经 `set_ui_language` 覆盖并重建菜单。
 use std::sync::Mutex;
 
-use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Runtime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,11 +118,22 @@ pub fn build<R: Runtime>(h: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::select_all(h, t("全选", "全選", "Select All").as_deref())?,
         ],
     )?;
+    let reload_item = MenuItem::with_id(
+        h,
+        "reload_window",
+        pick("重新加载", "重新載入", "Reload"),
+        true,
+        Some("CmdOrCtrl+R"),
+    )?;
     let view = Submenu::with_items(
         h,
         pick("显示", "顯示方式", "View"),
         true,
-        &[&PredefinedMenuItem::fullscreen(h, t("进入全屏幕", "進入全螢幕", "Enter Full Screen").as_deref())?],
+        &[
+            &reload_item,
+            &PredefinedMenuItem::separator(h)?,
+            &PredefinedMenuItem::fullscreen(h, t("进入全屏幕", "進入全螢幕", "Enter Full Screen").as_deref())?,
+        ],
     )?;
     let window = Submenu::with_id_and_items(
         h,
