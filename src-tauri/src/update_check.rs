@@ -16,7 +16,19 @@ pub const RELEASES_PAGE: &str = "https://github.com/JTee77/clash-assist/releases
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/JTee77/clash-assist/releases/download/";
 pub const FAKE_LATEST_ENV: &str = "CLASH_ASSIST_FAKE_LATEST";
 const TIMEOUT_MS: u64 = 5000;
-const DOWNLOAD_TIMEOUT_MS: u64 = 120_000;
+/// 下载进度事件名（前端 TitleBar 监听）。
+pub const DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
+/// 单块空闲超时：30 秒没有新数据视为连接停滞。替代旧的全局 120s 总超时——
+/// 大安装包在慢网络下会被总超时误杀；流式下载有进度事件，停滞对用户可见。
+const DOWNLOAD_IDLE_TIMEOUT_MS: u64 = 30_000;
+
+/// 下载进度（camelCase 序列化给前端）。
+#[derive(Debug, Clone, Serialize)]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub percent: Option<u8>,
+}
 
 #[derive(Debug, Serialize, Clone)]
 pub struct UpdateInfo {
@@ -125,14 +137,16 @@ fn active_local_proxy_port() -> Option<u16> {
 
 fn build_http_client(
     current: &str,
-    timeout_ms: u64,
+    timeout_ms: Option<u64>,
     connect_ms: u64,
     proxy_port: Option<u16>,
 ) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
         .connect_timeout(Duration::from_millis(connect_ms))
         .user_agent(format!("clash-assist/{current}"));
+    if let Some(ms) = timeout_ms {
+        builder = builder.timeout(Duration::from_millis(ms));
+    }
     if let Some(port) = proxy_port {
         let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
             .map_err(|e| format!("proxy: {e}"))?;
@@ -149,7 +163,7 @@ async fn get_bytes_with_proxy_fallback(
     accept_header: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     if let Some(port) = active_local_proxy_port() {
-        if let Ok(client) = build_http_client(current, timeout_ms, connect_ms, Some(port)) {
+        if let Ok(client) = build_http_client(current, Some(timeout_ms), connect_ms, Some(port)) {
             let mut req = client.get(url);
             if let Some(acc) = accept_header {
                 req = req.header("Accept", acc);
@@ -164,7 +178,7 @@ async fn get_bytes_with_proxy_fallback(
         }
     }
 
-    let client = build_http_client(current, timeout_ms, connect_ms, None)?;
+    let client = build_http_client(current, Some(timeout_ms), connect_ms, None)?;
     let mut req = client.get(url);
     if let Some(acc) = accept_header {
         req = req.header("Accept", acc);
@@ -182,6 +196,114 @@ async fn get_bytes_with_proxy_fallback(
         .await
         .map_err(|e| format!("读取 GitHub 响应失败：{e}"))?;
     Ok(bytes.to_vec())
+}
+
+/// 流式下载 .dmg 到落盘：按块写入并广播进度事件，避免整包读进内存（旧实现
+/// `resp.bytes()` 会把上百 MB 的 DMG 完整驻留 RAM）。只在「尚未开始传输」时做
+/// 代理→直连回落；开始收流后中途失败直接报错，重试由用户再点一次。
+async fn stream_dmg_to_file(
+    app: &tauri::AppHandle,
+    url: &str,
+    current: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    use tauri::Emitter;
+
+    let mut last_err = String::new();
+    for proxy_port in [active_local_proxy_port(), None] {
+        let client = match build_http_client(current, None, 5000, proxy_port) {
+            Ok(c) => c,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        let resp = match client.get(url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                last_err = format!("HTTP {}", r.status());
+                continue;
+            }
+            Err(e) => {
+                last_err = format!("连接失败：{e}");
+                continue;
+            }
+        };
+        let total = resp.content_length();
+        let mut file = match std::fs::File::create(dest) {
+            Ok(f) => f,
+            Err(e) => return Err(format!("创建下载文件失败：{e}")),
+        };
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0;
+        let mut last_pct: i64 = -1;
+        let mut last_emitted_at: u64 = 0;
+        loop {
+            let next = match tokio::time::timeout(
+                Duration::from_millis(DOWNLOAD_IDLE_TIMEOUT_MS),
+                stream.next(),
+            )
+            .await
+            {
+                Ok(item) => item,
+                Err(_) => {
+                    return Err(format!(
+                        "下载停滞：超过 {} 秒没有收到新数据，已中止",
+                        DOWNLOAD_IDLE_TIMEOUT_MS / 1000
+                    ));
+                }
+            };
+            let Some(chunk) = next else { break };
+            let chunk = chunk.map_err(|e| format!("读取下载流失败：{e}"))?;
+            // 块为 KB 级，本地写入的短阻塞可忽略，不为此引入异步文件 IO。
+            file.write_all(&chunk)
+                .map_err(|e| format!("写入下载文件失败：{e}"))?;
+            downloaded += chunk.len() as u64;
+
+            let percent = total.map(|t| ((downloaded * 100) / t).min(100) as u8);
+            let should_emit = match percent {
+                Some(p) => (p as i64) != last_pct,
+                None => downloaded - last_emitted_at >= (1 << 20), // 无总长：每 1 MiB 报一次
+            };
+            if should_emit {
+                let _ = app.emit(
+                    DOWNLOAD_PROGRESS_EVENT,
+                    DownloadProgress {
+                        downloaded,
+                        total,
+                        percent,
+                    },
+                );
+                if let Some(p) = percent {
+                    last_pct = p as i64;
+                }
+                last_emitted_at = downloaded;
+            }
+        }
+        file.flush().map_err(|e| format!("落盘失败：{e}"))?;
+        // 收尾补发一次，确保前端能看到 100%（流末尾可能不足一个百分比间隔）
+        if let Some(t) = total {
+            let p = ((downloaded * 100) / t).min(100) as u8;
+            if (p as i64) != last_pct {
+                let _ = app.emit(
+                    DOWNLOAD_PROGRESS_EVENT,
+                    DownloadProgress {
+                        downloaded,
+                        total,
+                        percent: Some(p),
+                    },
+                );
+            }
+        }
+        return Ok(());
+    }
+    Err(if last_err.is_empty() {
+        "无可用的下载路径".to_string()
+    } else {
+        last_err
+    })
 }
 
 pub async fn check(current: &str) -> Result<UpdateInfo, String> {
@@ -493,8 +615,9 @@ fn staging_base_dir() -> PathBuf {
     }
 }
 
-/// 阶段 1（下载）：下载最新 `.dmg` 到独立临时目录并完成 SHA-256 校验，返回临时工作目录路径。
+/// 阶段 1（下载）：流式下载最新 `.dmg` 到独立临时目录（边下边报进度），完成后做 SHA-256 校验，返回临时工作目录路径。
 pub async fn download_to_staging(
+    app: &tauri::AppHandle,
     dmg_url: Option<String>,
     dmg_sha256: Option<String>,
 ) -> Result<String, String> {
@@ -525,25 +648,11 @@ pub async fn download_to_staging(
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建临时更新目录失败：{e}"))?;
 
     let dmg_path = work_dir.join("update.dmg");
-    let bytes = match get_bytes_with_proxy_fallback(
-        &resolved_url,
-        env!("CARGO_PKG_VERSION"),
-        DOWNLOAD_TIMEOUT_MS,
-        5000,
-        Some("application/octet-stream"),
-    )
-    .await
+    if let Err(e) =
+        stream_dmg_to_file(app, &resolved_url, env!("CARGO_PKG_VERSION"), &dmg_path).await
     {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&work_dir);
-            return Err(format!("下载更新包失败：{e}"));
-        }
-    };
-
-    if let Err(e) = std::fs::write(&dmg_path, &bytes) {
         let _ = std::fs::remove_dir_all(&work_dir);
-        return Err(format!("写入临时更新包失败：{e}"));
+        return Err(format!("下载更新包失败：{e}"));
     }
 
     let dmg_for_verify = dmg_path.clone();

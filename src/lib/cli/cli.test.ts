@@ -10,6 +10,7 @@ import {
 import { CLI_COMMANDS, CLI_HELP_TEXT, parseCliArgv } from "./parse";
 import { cliExitCode, errEnvelope, okEnvelope } from "./types";
 import cliModeCases from "./cli-mode-cases.json";
+import pkg from "../../../package.json";
 // Vite ?raw：不依赖 @types/node 即可读 Rust 源码做同步断言
 import libRs from "../../../src-tauri/src/lib.rs?raw";
 
@@ -341,8 +342,9 @@ describe("CliEnvelope", () => {
 });
 
 describe("帮助与文案", () => {
-  it("支持 verge 与 flclash（0.2.4）", () => {
-    expect(CLI_HELP_TEXT).toContain("0.2.4");
+  it("help 版本号与 package.json 一致（动态注入，不再硬编码）", () => {
+    expect(CLI_HELP_TEXT).toContain(pkg.version);
+    expect(CLI_HELP_TEXT).not.toContain("0.2.4（");
     expect(CLI_HELP_TEXT).toContain("支持 verge");
     expect(CLI_HELP_TEXT).toContain("flclash");
     expect(CLI_HELP_TEXT).toContain("serve");

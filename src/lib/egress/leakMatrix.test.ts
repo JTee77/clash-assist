@@ -206,6 +206,25 @@ describe("candidateScope", () => {
     expect(candidateScope("fd12::34")).toBe("private");
   });
 
+  it("TUN fake-ip / CGNAT / IPv4-mapped → private（修复：曾被误判 public）", () => {
+    // mihomo/Clash TUN 默认 fake-ip 段 198.18.0.0/15（RFC 2544 基准段，永不公网路由）
+    expect(candidateScope("198.18.0.1")).toBe("private");
+    expect(candidateScope("198.19.255.254")).toBe("private");
+    // CGNAT 100.64.0.0/10（运营商 NAT / Tailscale 类网段）
+    expect(candidateScope("100.64.0.1")).toBe("private");
+    expect(candidateScope("100.127.255.254")).toBe("private");
+    // IPv4-mapped IPv6 按映射的 v4 判定
+    expect(candidateScope("::ffff:192.168.1.20")).toBe("private");
+    expect(candidateScope("::ffff:198.18.0.1")).toBe("private");
+  });
+
+  it("段边界外仍是 public（不为让用例通过而扩段）", () => {
+    expect(candidateScope("100.128.0.1")).toBe("public"); // CGNAT 上界外
+    expect(candidateScope("100.63.255.254")).toBe("public"); // CGNAT 下界外
+    expect(candidateScope("198.20.0.1")).toBe("public"); // fake-ip 段外
+    expect(candidateScope("::ffff:8.8.8.8")).toBe("public"); // 映射的是公网 v4
+  });
+
   it("可路由公网 IPv4/IPv6 → public", () => {
     expect(candidateScope("8.8.8.8")).toBe("public");
     expect(candidateScope("203.0.113.9")).toBe("public");
@@ -229,6 +248,19 @@ describe("classifyWebRtc + candidateScope 联动", () => {
         address: a,
         scope: candidateScope(a),
       })),
+    });
+    expect(r.level).toBe("pass");
+  });
+
+  it("TUN fake-ip host 候选 → pass（不再误报公网暴露）", () => {
+    // TUN 开启时 ICE host 候选会枚举到 TUN 网卡地址 198.18.x.x
+    const r = classifyWebRtc({
+      apiAvailable: true,
+      gatherFailed: false,
+      proxyExitIps: ["2.2.2.2"],
+      candidates: [
+        { type: "host" as const, address: "198.18.0.1", scope: candidateScope("198.18.0.1") },
+      ],
     });
     expect(r.level).toBe("pass");
   });

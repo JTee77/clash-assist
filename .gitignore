@@ -27,6 +27,10 @@ dist-ssr
 src-tauri/target
 src-tauri/gen
 
+# 构建产物：由 scripts/build-assets-car.sh 在打包前生成（tauri.conf beforeBuildCommand 已挂载），
+# actool 输出含非确定字节，track 会常年脏工作区——不进版本库。
+src-tauri/icons/Assets.car
+
 # Env / secrets
 .env
 .env.*

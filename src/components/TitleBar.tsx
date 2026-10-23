@@ -1,4 +1,5 @@
 import { useI18n } from "../i18n";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import {
   applyUpdate,
@@ -8,6 +9,13 @@ import {
   relaunchUpdatedApp,
   type UpdateInfo,
 } from "../lib/update";
+
+/** Rust stream_dmg_to_file 广播的下载进度（update_check.rs::DownloadProgress）。 */
+type DownloadProgressPayload = {
+  downloaded: number;
+  total: number | null;
+  percent: number | null;
+};
 
 type UpdateStage =
   | "idle"
@@ -30,6 +38,7 @@ export function TitleBar() {
   const [dismissed, setDismissed] = useState(false);
   const [stage, setStage] = useState<UpdateStage>("idle");
   const [fallbackError, setFallbackError] = useState<string | null>(null);
+  const [downloadPct, setDownloadPct] = useState<number | null>(null);
   const { t } = useI18n();
 
   useEffect(() => {
@@ -41,6 +50,25 @@ export function TitleBar() {
       alive = false;
     };
   }, []);
+
+  // 下载阶段订阅进度事件；离开阶段即退订并清零（重新获取期间隐去上一轮状态）。
+  useEffect(() => {
+    if (stage !== "downloading") return;
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    void listen<DownloadProgressPayload>("update-download-progress", (e) => {
+      const p = e.payload?.percent;
+      if (typeof p === "number") setDownloadPct(p);
+    }).then((u) => {
+      if (alive) unlisten = u;
+      else u();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+      setDownloadPct(null);
+    };
+  }, [stage]);
 
   const handlePrimaryClick = async () => {
     if (!update) return;
@@ -86,7 +114,9 @@ export function TitleBar() {
 
   const statusText = update
     ? stage === "downloading"
-      ? t("update.downloading", { v: update.latest })
+      ? `${t("update.downloading", { v: update.latest })}${
+          downloadPct != null ? ` ${downloadPct}%` : ""
+        }`
       : stage === "installing"
         ? t("update.installing")
         : stage === "ready"
