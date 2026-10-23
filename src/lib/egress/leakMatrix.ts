@@ -170,23 +170,33 @@ export function localeCountry(): string | null {
 
 /**
  * ICE 候选地址 → scope 归类（纯函数，可单测）。
- * 修复：mDNS 混淆主机名（如 `a1b2….local`）不是可路由公网 IP，旧内联判定因它含 "."
+ * 修复1：mDNS 混淆主机名（如 `a1b2….local`）不是可路由公网 IP，旧内联判定因它含 "."
  * 而误判为 public，导致 WebRTC 卡把隐私地址也列进「暴露的公网地址」。
+ * 修复2：TUN/fake-ip 场景——mihomo TUN 默认用 198.18.0.0/15（RFC 2544 基准段，永不公网路由），
+ * ICE host 候选会枚举到 TUN 网卡地址，误判 public 造成「公网暴露」假警报；
+ * 同理补 CGNAT 100.64.0.0/10（运营商级 NAT，含 Tailscale 类网段）与
+ * IPv4-mapped IPv6（::ffff:x.x.x.x，浏览器对 v4 映射地址的标准写法）。
  */
 export function isPrivateOrLocalAddress(ip: string): boolean {
   const t = ip.trim().toLowerCase();
   if (t === "::1" || t === "0.0.0.0") return true;
   if (t.startsWith("fe80:")) return true; // link-local
   if (t.startsWith("fc") || t.startsWith("fd")) return true; // ULA rough
+  // IPv4-mapped IPv6（::ffff:a.b.c.d）按映射的 v4 判定
+  if (t.startsWith("::ffff:") && t.includes(".")) {
+    return isPrivateOrLocalAddress(t.slice("::ffff:".length));
+  }
   const m = t.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return false;
   const a = Number(m[1]);
   const b = Number(m[2]);
   if (a === 10) return true;
   if (a === 127) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
   if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true; // fake-ip / 基准段 198.18.0.0/15
   return false;
 }
 
