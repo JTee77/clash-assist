@@ -2,6 +2,19 @@ import type { CheckTarget, CliCommandName, CliError, ParsedCli } from "./types";
 export type { ParsedCli } from "./types";
 
 /**
+ * CLI 版本号唯一来源：package.json（vite/vitest 经 `__APP_VERSION__` 注入，
+ * 见 vite.config.ts / vitest.config.ts）。未注入时回落 "0.0.0"，不伪装版本。
+ * help 文本与 envelope 的 version 字段都走这里，杜绝硬编码漂移。
+ */
+export function cliVersion(): string {
+  try {
+    return typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+/**
  * CLI 子命令全集。
  * ⚠️ 必须与 Rust `src-tauri/src/lib.rs` 的 `CLI_VERBS` 完全一致
  * （`is_cli_mode` 靠它决定是否隐藏主窗走 CLI）。cli.test.ts 有同步断言。
@@ -302,7 +315,7 @@ export function parseCliArgv(argv: string[]): ParsedCli {
   };
 }
 
-export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI 0.2.4（与 GUI 共用 runner / egress / score）
+export const CLI_HELP_TEXT = `Clash Assist (Clash伴侣) CLI ${cliVersion()}（与 GUI 共用 runner / egress / score）
 
 用法：
   clash-assist --cli <command> [options]

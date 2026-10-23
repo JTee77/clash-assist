@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EgressReport } from "../egress";
 import type { ConnectionState, ProxyNode } from "../mihomo";
 import type { CheckAllData, CheckNodeData } from "./dispatch";
+import pkg from "../../../package.json";
 
 const h = vi.hoisted(() => ({
   runNodeDiagnostics: vi.fn(),
@@ -143,7 +144,7 @@ describe("参数 / 闸门错误：ok:false，且不碰网络", () => {
   it("help 永远 ok", async () => {
     const env = await run(["help"]);
     expect(env.ok).toBe(true);
-    expect((env.data as { text: string }).text).toContain("0.2.4");
+    expect((env.data as { text: string }).text).toContain(pkg.version);
   });
 });
 

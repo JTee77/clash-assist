@@ -36,7 +36,7 @@ import {
   type NodeScoreResult,
   type NodeStars,
 } from "../score";
-import { CLI_HELP_TEXT, type ParsedCli } from "./parse";
+import { CLI_HELP_TEXT, cliVersion, type ParsedCli } from "./parse";
 import { CLI_SPEC } from "./spec";
 import {
   errEnvelope,
@@ -54,14 +54,6 @@ export const CLI_APP_BINARY = "/Applications/Clash Assist.app/Contents/MacOS/cla
 
 /** 唯一受支持软件的提示（与 GUI 选择器一致：只有 Clash Verge 可选）。 */
 export const CLI_ONLY_VERGE = "当前支持 Clash Verge（--client verge）与 FlClash（--client flclash）。";
-
-function version(): string {
-  try {
-    return typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
 
 // ───────────────────────── data shapes（docs/CLI.md 同步） ─────────────────────────
 
@@ -287,7 +279,7 @@ export function abortedEnvelope(parsed: ParsedCli): CliEnvelope<never> {
     parsed.command,
     "aborted",
     "已中断：收到中断信号（此命令不切换节点，无需切回）。",
-    version(),
+    cliVersion(),
   );
 }
 
@@ -653,7 +645,7 @@ async function dispatchInner(
   opts: CliDispatchOptions,
   emit: Emit,
 ): Promise<CliEnvelope> {
-  const ver = version();
+  const ver = cliVersion();
   const cmd = parsed.command;
   const isAborted = () => opts.shouldAbort?.() === true;
 
