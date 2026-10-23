@@ -198,22 +198,26 @@ async fn get_bytes_with_proxy_fallback(
     Ok(bytes.to_vec())
 }
 
-/// 流式下载 .dmg 到落盘：按块写入并广播进度事件，避免整包读进内存（旧实现
+/// 进度回调接缝：每跨过 1%（无总长时每 1 MiB）调用一次，收尾必补发 100%。
+/// 生产路径由 lib.rs 传入「emit 到前端」的闭包；单测传入收集闭包——进度管线可无 GUI 全测。
+pub type ProgressCallback<'a> = &'a (dyn Fn(DownloadProgress) + Send + Sync);
+
+/// 流式下载 .dmg 到落盘：按块写入并回调进度，避免整包读进内存（旧实现
 /// `resp.bytes()` 会把上百 MB 的 DMG 完整驻留 RAM）。只在「尚未开始传输」时做
 /// 代理→直连回落；开始收流后中途失败直接报错，重试由用户再点一次。
 async fn stream_dmg_to_file(
-    app: &tauri::AppHandle,
     url: &str,
     current: &str,
     dest: &Path,
+    proxy_port: Option<u16>,
+    on_progress: ProgressCallback<'_>,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
     use std::io::Write;
-    use tauri::Emitter;
 
     let mut last_err = String::new();
-    for proxy_port in [active_local_proxy_port(), None] {
-        let client = match build_http_client(current, None, 5000, proxy_port) {
+    for attempt_port in [proxy_port, None] {
+        let client = match build_http_client(current, None, 5000, attempt_port) {
             Ok(c) => c,
             Err(e) => {
                 last_err = e;
@@ -268,14 +272,11 @@ async fn stream_dmg_to_file(
                 None => downloaded - last_emitted_at >= (1 << 20), // 无总长：每 1 MiB 报一次
             };
             if should_emit {
-                let _ = app.emit(
-                    DOWNLOAD_PROGRESS_EVENT,
-                    DownloadProgress {
-                        downloaded,
-                        total,
-                        percent,
-                    },
-                );
+                on_progress(DownloadProgress {
+                    downloaded,
+                    total,
+                    percent,
+                });
                 if let Some(p) = percent {
                     last_pct = p as i64;
                 }
@@ -287,14 +288,11 @@ async fn stream_dmg_to_file(
         if let Some(t) = total {
             let p = ((downloaded * 100) / t).min(100) as u8;
             if (p as i64) != last_pct {
-                let _ = app.emit(
-                    DOWNLOAD_PROGRESS_EVENT,
-                    DownloadProgress {
-                        downloaded,
-                        total,
-                        percent: Some(p),
-                    },
-                );
+                on_progress(DownloadProgress {
+                    downloaded,
+                    total,
+                    percent: Some(p),
+                });
             }
         }
         return Ok(());
@@ -615,9 +613,9 @@ fn staging_base_dir() -> PathBuf {
     }
 }
 
-/// 阶段 1（下载）：流式下载最新 `.dmg` 到独立临时目录（边下边报进度），完成后做 SHA-256 校验，返回临时工作目录路径。
+/// 阶段 1（下载）：流式下载最新 `.dmg` 到独立临时目录（进度经回调上报，lib.rs 负责 emit），完成后做 SHA-256 校验，返回临时工作目录路径。
 pub async fn download_to_staging(
-    app: &tauri::AppHandle,
+    on_progress: ProgressCallback<'_>,
     dmg_url: Option<String>,
     dmg_sha256: Option<String>,
 ) -> Result<String, String> {
@@ -648,8 +646,10 @@ pub async fn download_to_staging(
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建临时更新目录失败：{e}"))?;
 
     let dmg_path = work_dir.join("update.dmg");
+    let proxy_port = active_local_proxy_port();
     if let Err(e) =
-        stream_dmg_to_file(app, &resolved_url, env!("CARGO_PKG_VERSION"), &dmg_path).await
+        stream_dmg_to_file(&resolved_url, env!("CARGO_PKG_VERSION"), &dmg_path, proxy_port, on_progress)
+            .await
     {
         let _ = std::fs::remove_dir_all(&work_dir);
         return Err(format!("下载更新包失败：{e}"));
@@ -916,5 +916,64 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 无 GUI 进度管线测试：本地 HTTP 服务器分块供流，断言
+    /// 文件完整落盘、百分比严格递增、收尾补发 100%。
+    #[test]
+    fn streaming_reports_monotonic_percent() {
+        use std::io::{Read, Write as IoWrite};
+
+        const TOTAL: usize = 1_000_000;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf); // 丢弃请求行与头（单请求连接）
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {TOTAL}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n"
+            );
+            sock.write_all(head.as_bytes()).unwrap();
+            for _ in 0..10 {
+                sock.write_all(&vec![b'a'; TOTAL / 10]).unwrap();
+                sock.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(30));
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("ca-stream-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("t.dmg");
+
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+        let sink = seen.clone();
+        let on_progress = move |p: DownloadProgress| {
+            if let Some(pct) = p.percent {
+                sink.lock().unwrap().push(pct);
+            }
+        };
+
+        let url = format!("http://127.0.0.1:{port}/t.dmg");
+        tauri::async_runtime::block_on(stream_dmg_to_file(
+            &url,
+            "test",
+            &dest,
+            None, // 不走本地代理探测，直连本地测试服务器
+            &on_progress,
+        ))
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), TOTAL as u64);
+        let pcts = seen.lock().unwrap().clone();
+        assert!(!pcts.is_empty(), "至少应有一次进度回调");
+        assert_eq!(*pcts.last().unwrap(), 100, "收尾必须补发 100%");
+        assert!(
+            pcts.windows(2).all(|w| w[0] < w[1]),
+            "百分比必须严格递增: {pcts:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
