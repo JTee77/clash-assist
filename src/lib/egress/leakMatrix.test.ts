@@ -25,7 +25,7 @@ describe("classifyIpv6Leak", () => {
   it("未连代理口 → unknown（不误判）", () => {
     const r = classifyIpv6Leak(v6({ proxyConfigured: false, directV6: "2400::1" }));
     expect(r.level).toBe("unknown");
-    expect(r.suggestion).toContain("获取节点");
+    expect(r.suggestion).toContain("刷新节点");
   });
 
   it("直连有 v6、代理无 → fail（旁路签名）", () => {

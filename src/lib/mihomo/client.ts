@@ -587,7 +587,7 @@ async function probeWithConfig(
     status: "unreachable",
     message: clientId
       ? clientUnreachableHint(clientId, config.source)
-      : "请先打开并连上你的VPN软件，再点「获取节点」",
+      : "请先打开并连上你的VPN软件，再点「刷新节点」",
     config,
     currentProxy: null,
     usingMock: false,
@@ -704,7 +704,7 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
   const controller = await openControllerRead(config, "/proxies", 18000);
   const res = controller?.response;
   if (!res || !controller) {
-    return empty("暂时读不到节点列表，请确认软件已打开并点「获取节点」");
+    return empty("暂时读不到节点列表，请确认软件已打开并点「刷新节点」");
   }
   if (res.status === 401 || res.status === 403) {
     return empty(
@@ -715,11 +715,11 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
   if (!is2xx(res.status) || !res.json) {
     if (is2xx(res.status) && !res.json) {
       return empty(
-        `读节点列表失败（响应异常），请再点「获取节点」`,
+        `读节点列表失败（响应异常），请再点「刷新节点」`,
       );
     }
     return empty(
-      `读节点列表失败，请确认软件已打开并点「获取节点」`,
+      `读节点列表失败，请确认软件已打开并点「刷新节点」`,
     );
   }
 
