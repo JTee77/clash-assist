@@ -79,11 +79,30 @@ pub struct SlimNode {
     pub last_delay_at: Option<String>,
 }
 
+/// One policy group, as needed by the frontend's single current-proxy resolver.
+///
+/// `all` is shipped verbatim (not reduced to a count) on purpose: counting real
+/// leaves requires the leaf predicate, and keeping that predicate in one place
+/// (TS `currentProxy.ts`) is what stops Rust and the webview from disagreeing
+/// about which node is "in use". Measured cost on a real 17-group / 34-node
+/// subscription: +13 KB per `mihomo_list_nodes` call (6.9 KB → 20 KB).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlimGroup {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub group_type: String,
+    pub now: Option<String>,
+    pub all: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListNodesResult {
     pub nodes: Vec<SlimNode>,
-    pub current_proxy: Option<String>,
+    /// Every Selector / URLTest / Fallback / LoadBalance group. The frontend
+    /// derives the current node from this + `nodes`; Rust no longer resolves it.
+    pub groups: Vec<SlimGroup>,
     pub status: u16,
     pub error: Option<String>,
     pub unauthorized: bool,
