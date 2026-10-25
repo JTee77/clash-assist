@@ -212,6 +212,53 @@ mod tests {
         assert!(inner.is_err(), "expected Err to closed port, got {inner:?}");
     }
 
+    /// 锁住控制器 TCP 路径的超时语义：对面收下连接但不回任何字节时，调用必须被
+    /// `timeout_ms` 掐断，而不是挂到对面主动关连接为止。
+    ///
+    /// 判据用**耗时**而不是错误字符串：`http_via_tcp_async` 把 `reqwest::Error`
+    /// 映射成了 String，而 reqwest 对总超时的 Display 是
+    /// `error sending request for url (...)`，`is_timeout()` 只能从 source 链里
+    /// 找到 `TimedOut`——字符串层面区分不出超时与发送失败。对面撑 1500 ms 才关连接，
+    /// 所以「明显早于 1500 ms 结束」只可能是 250 ms 预算生效；下限则排除了连接被
+    /// 立刻重置这种假通过。
+    ///
+    /// 这条测试是 0.2.7 性能核查顺手补的：曾考虑改成共享 Client，实测后回退，
+    /// 但「超时到底有没有生效」原本没有任何测试覆盖。
+    #[test]
+    fn http_via_tcp_times_out_on_silent_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            // 收下连接后什么都不回，靠 sleep 撑住 socket（早于超时返回会误判成 reset）
+            if let Ok((stream, _)) = listener.accept() {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                drop(stream);
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let result =
+            tauri::async_runtime::block_on(http_via_tcp_async("127.0.0.1", port, "GET", "/proxies", None, "", 250));
+        let elapsed = started.elapsed();
+
+        let err = match result {
+            Ok(ok) => {
+                worker.join().unwrap();
+                panic!("沉默的服务端不该返回成功：{ok:?}");
+            }
+            Err(e) => e,
+        };
+        assert!(
+            elapsed >= std::time::Duration::from_millis(200),
+            "只等了 {elapsed:?}（预算 250 ms），说明不是超时结束的：{err}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(1200),
+            "250 ms 预算却等了 {elapsed:?}，说明超时没生效"
+        );
+        worker.join().unwrap();
+    }
+
     #[test]
     fn smoke_proxy_fetch_invalid_port_no_panic() {
         let result = std::panic::catch_unwind(|| {

@@ -122,15 +122,15 @@ fn group_summaries(proxies: &serde_json::Map<String, Value>) -> Vec<SlimGroup> {
     groups
 }
 
-/// Parse /proxies JSON into the frontend payload: a slim node list (no history
-/// arrays; only the last delay result + alive flag are kept) plus the group table.
-pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, String> {
-    let root: Value = serde_json::from_str(body).map_err(|e| format!("json: {e}"))?;
-    let proxies = root
-        .get("proxies")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| "missing proxies object".to_string())?;
+/// Borrow the `proxies` object out of a parsed `/proxies` body.
+fn proxies_of(root: &Value) -> Result<&serde_json::Map<String, Value>, String> {
+    root.get("proxies")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "missing proxies object".to_string())
+}
 
+/// Build the frontend payload from an **already parsed** `proxies` map.
+fn slim_list_from_proxies(proxies: &serde_json::Map<String, Value>) -> ListNodesResult {
     let groups = group_summaries(proxies);
 
     let mut nodes: Vec<SlimNode> = Vec::new();
@@ -190,14 +190,28 @@ pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, Strin
             .collect();
     }
 
-    Ok(ListNodesResult {
+    ListNodesResult {
         nodes,
         groups,
         status: 200,
         error: None,
         unauthorized: false,
         transport: None,
-    })
+    }
+}
+
+/// Parse a raw `/proxies` body into the frontend payload (slim nodes — no
+/// history arrays, only the last delay result + alive flag — plus the group
+/// table).
+///
+/// Test-only on purpose: the production node-list path already has the body
+/// parsed for the provider merge and feeds [`slim_list_from_proxies`] directly.
+/// Going through a string there used to mean re-serializing the whole tree and
+/// parsing it back — see `parse_nodes_with_providers`.
+#[cfg(test)]
+pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, String> {
+    let root: Value = serde_json::from_str(body).map_err(|e| format!("json: {e}"))?;
+    Ok(slim_list_from_proxies(proxies_of(&root)?))
 }
 
 
@@ -222,10 +236,20 @@ fn missing_provider_names(root: &Value) -> Result<std::collections::BTreeSet<Str
     Ok(missing)
 }
 
-fn merge_provider_nodes(root: &mut Value, provider_root: &Value) -> Result<(), String> {
+/// Insert the uniquely-resolvable provider entries for `missing` into `root`.
+///
+/// `missing` is passed in rather than recomputed here, and the return value is
+/// how many names actually landed — the caller needs a residual count and can
+/// get it by subtraction instead of re-scanning the whole proxy tree.
+fn merge_provider_nodes(
+    root: &mut Value,
+    provider_root: &Value,
+    missing: &std::collections::BTreeSet<String>,
+) -> Result<usize, String> {
     let providers = provider_root.get("providers").and_then(Value::as_object)
         .ok_or_else(|| "missing providers object".to_string())?;
-    for name in missing_provider_names(root)? {
+    let mut inserted = 0usize;
+    for name in missing {
         let mut subscriptions = Vec::new();
         let mut compatible = Vec::new();
         for provider in providers.values() {
@@ -242,10 +266,11 @@ fn merge_provider_nodes(root: &mut Value, provider_root: &Value) -> Result<(), S
         let candidates = if subscriptions.is_empty() { compatible } else { subscriptions };
         if candidates.len() == 1 {
             root.get_mut("proxies").and_then(Value::as_object_mut).unwrap()
-                .insert(name, candidates[0].clone());
+                .insert(name.to_string(), candidates[0].clone());
+            inserted += 1;
         }
     }
-    Ok(())
+    Ok(inserted)
 }
 
 #[derive(Clone, Copy)]
@@ -258,7 +283,9 @@ async fn parse_nodes_with_providers(
 ) -> Result<ListNodesResult, String> {
     let mut root: Value = serde_json::from_str(body).map_err(|e| format!("json: {e}"))?;
     let mut provider_error = None;
-    if !missing_provider_names(&root)?.is_empty() {
+    let missing_before = missing_provider_names(&root)?;
+    let mut inserted = 0usize;
+    if !missing_before.is_empty() {
         let response = match transport {
             NodeTransport::Tcp(host, port) => http_via_tcp_async(host, port, "GET", "/providers/proxies", None, secret, timeout_ms).await,
             NodeTransport::Unix(sock) => {
@@ -271,8 +298,8 @@ async fn parse_nodes_with_providers(
             Ok(response) if (200..300).contains(&response.status) => {
                 match serde_json::from_str::<Value>(&response.body)
                     .map_err(|_| "订阅节点响应无法解析".to_string())
-                    .and_then(|providers| merge_provider_nodes(&mut root, &providers)) {
-                    Ok(()) => {},
+                    .and_then(|providers| merge_provider_nodes(&mut root, &providers, &missing_before)) {
+                    Ok(n) => inserted = n,
                     Err(_) => provider_error = Some("订阅节点响应无法解析".to_string()),
                 }
             }
@@ -280,8 +307,10 @@ async fn parse_nodes_with_providers(
             Err(_) => provider_error = Some("暂时读不到订阅节点接口".to_string()),
         }
     }
-    let mut result = slim_nodes_from_proxies_json(&root.to_string())?;
-    let missing = missing_provider_names(&root)?.len();
+    let mut result = slim_list_from_proxies(proxies_of(&root)?);
+    // merge 只会补进 missing_before 里的名字，所以剩余数按插入数直接减，
+    // 不必再扫一遍整棵代理树（大订阅下这是第三遍全量扫描）。
+    let missing = missing_before.len() - inserted;
     if missing > 0 {
         let detail = provider_error.unwrap_or_else(|| "订阅中有同名、缺失或无效节点，无法唯一识别".to_string());
         result.error = Some(format!("已连上软件，但有 {missing} 个订阅节点未能读取（{detail}）"));
@@ -526,7 +555,11 @@ mod tests {
             "one": {"vehicleType":"File","proxies":[{"name":"duplicate","type":"Vless"},{"name":"unique","type":"Vless","udp":true},{"name":"root","type":"Vless"},{"name":"invalid"},{"name":"unused","type":"Vless"}]},
             "two": {"vehicleType":"HTTP","proxies":[{"name":"duplicate","type":"Trojan"}]}
         }});
-        merge_provider_nodes(&mut root, &providers).unwrap();
+        let missing = missing_provider_names(&root).unwrap();
+        let inserted = merge_provider_nodes(&mut root, &providers, &missing).unwrap();
+        // 「duplicate」有两个候选、「invalid」没有 type、「unused」没被任何组引用 → 只补进 unique。
+        assert_eq!(inserted, 1, "只有能唯一识别的名字才该补进来");
+        assert_eq!(missing.len(), 3, "duplicate / unique / invalid 都缺失，unused 不算");
         let proxies = root["proxies"].as_object().unwrap();
         assert_eq!(proxies["root"]["type"], "Trojan");
         assert_eq!(proxies["unique"]["udp"], true);
