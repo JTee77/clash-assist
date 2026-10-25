@@ -45,7 +45,7 @@ export const zhHans = {
 
   "home.stepsAria": "使用步骤",
   "home.step1": "打开你的VPN软件并连上一个可用节点",
-  "home.step2": "在下方选择你使用的VPN软件 · 获取节点",
+  "home.step2": "在下方选择你使用的VPN软件 · 刷新节点",
   "home.step3": "进行检测",
   "home.whichApp": "你在用哪款软件？",
   "home.pickFirstTitle": "自动识别运行中的软件，也可手动选择",

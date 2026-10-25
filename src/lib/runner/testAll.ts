@@ -71,7 +71,7 @@ export async function testAll(
       const fail: GateResult = {
         ok: false,
         message:
-          "还没有读到节点列表。请先点「获取节点」，确认VPN软件里已经加载了订阅。",
+          "还没有读到节点列表。请先点「刷新节点」，确认VPN软件里已经加载了订阅。",
       };
       hooks.onGate?.(fail);
       return false;

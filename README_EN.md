@@ -42,7 +42,7 @@ The first time you run **Environment Leak Check**, macOS may ask for **Local Net
 
 1. Open **Clash Verge** or **FlClash** and connect to a node as usual.
    - *If you use **FlClash**, first enable **“External Controller”** in FlClash under **Settings → General → Inbound**.*
-2. Open **Clash Assist**, pick your client at the top, and click **“Get nodes”**.
+2. Open **Clash Assist**, pick your client at the top, and click **“Refresh nodes”**.
 3. From there, you can:
    - Click **“Test”** on any single node card to run a full check on that node; or
    - Filter by region/keyword and click **“Test filtered” / “Test all nodes”** — Clash Assist will test them one by one, rate each node, and automatically switch back to your original node when finished.

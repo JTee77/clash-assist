@@ -47,7 +47,7 @@ export const zhHant: Messages = {
 
   "home.stepsAria": "使用步驟",
   "home.step1": "打開你的VPN軟體並連上一個可用節點",
-  "home.step2": "在下方選擇你使用的VPN軟體 · 取得節點",
+  "home.step2": "在下方選擇你使用的VPN軟體 · 重新整理節點",
   "home.step3": "進行檢測",
   "home.whichApp": "你在用哪款軟體？",
   "home.pickFirstTitle": "自動識別執行中的軟體，也可手動選擇",

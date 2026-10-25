@@ -145,6 +145,8 @@ describe("dynamic English", () => {
 describe("dynamic zh-Hant", () => {
   it("uses Taiwan phrasing", async () => {
     await loadHant();
-    expect(toHant("请先打开并连上你的VPN软件，再点「获取节点」")).toBe("請先開啟並連上你的VPN軟體，再點「取得節點」");
+    // 「刷新」经 opencc + HANT_FIXES 落到台湾用语「重新整理」，
+    // 与繁中按钮文案 `home.getNodes: 重新整理節點` 逐字一致。
+    expect(toHant("请先打开并连上你的VPN软件，再点「刷新节点」")).toBe("請先開啟並連上你的VPN軟體，再點「重新整理節點」");
   });
 });

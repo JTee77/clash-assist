@@ -64,7 +64,7 @@ export function classifyIpv6Leak(p: Ipv6Probe): LeakVerdict {
       conclusion: p.directV6
         ? `直连可达 IPv6（${p.directV6}），但尚未连上代理口，无法对照。`
         : "IPv6 状态不明（未连上代理口）。",
-      suggestion: "请先点「获取节点」确保已连上软件，再重测。",
+      suggestion: "请先点「刷新节点」确保已连上软件，再重测。",
       rationale: ["缺少代理侧对照"],
     };
   }

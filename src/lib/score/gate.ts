@@ -11,7 +11,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
     if (connection.status === "unknown") {
       return {
         ok: false,
-        message: "请先在上方选择软件，再点「获取节点」。",
+        message: "请先在上方选择软件，再点「刷新节点」。",
       };
     }
     if (connection.status === "unreachable") {
@@ -26,7 +26,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
         ok: false,
         message: hasSpecificHint
           ? specificMsg
-          : "连不上VPN软件。确认它已打开并连上一个可用节点后，再点「获取节点」。",
+          : "连不上VPN软件。确认它已打开并连上一个可用节点后，再点「刷新节点」。",
         process: connection.message,
       };
     }
@@ -40,7 +40,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
     if (connection.status !== "connected" && connection.status !== "mock") {
       return {
         ok: false,
-        message: "请先点「获取节点」，确认已连上。",
+        message: "请先点「刷新节点」，确认已连上。",
         process: connection.message,
       };
     }
@@ -48,7 +48,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
       return {
         ok: false,
         message:
-          "检测到代理软件开启了「入站认证」，本地代理端口拒绝未认证探测。请关闭「入站认证」（FlClash 位于「设置 → 常规 → 入站」）后再点「获取节点」。",
+          "检测到代理软件开启了「入站认证」，本地代理端口拒绝未认证探测。请关闭「入站认证」（FlClash 位于「设置 → 常规 → 入站」）后再点「刷新节点」。",
         process:
           "GET /configs 检测到 authentication 非空且未豁免 127.0.0.1 环回地址。",
       };
@@ -57,7 +57,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
       return {
         ok: false,
         message:
-          "检测到代理软件未开启本地混合代理端口（mixed-port 为 0）。请在软件设置中开启混合端口后再点「获取节点」。",
+          "检测到代理软件未开启本地混合代理端口（mixed-port 为 0）。请在软件设置中开启混合端口后再点「刷新节点」。",
         process:
           "GET /configs 返回 mixed-port=0 且 port=0，无可用本地 HTTP/Mixed 代理端口。",
       };

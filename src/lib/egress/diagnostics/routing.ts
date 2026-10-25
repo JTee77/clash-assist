@@ -171,7 +171,7 @@ export async function checkSplitRouting(
         ? "仅完成直连国内基线；尚未连上代理口，无法判断分流"
         : "国内直连基线失败，且尚未连上代理口",
       process,
-      suggestion: "请先点「获取节点」确保已连上软件，再重测分流。",
+      suggestion: "请先点「刷新节点」确保已连上软件，再重测分流。",
     };
   }
 

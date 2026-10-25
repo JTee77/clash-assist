@@ -47,7 +47,7 @@ export const en: Messages = {
 
   "home.stepsAria": "Steps",
   "home.step1": "Open your VPN app and connect to a working node",
-  "home.step2": "Pick your VPN app below · Get nodes",
+  "home.step2": "Pick your VPN app below · Refresh nodes",
   "home.step3": "Run tests",
   "home.whichApp": "Which app do you use?",
   "home.pickFirstTitle": "Auto-detects running app, or select manually",

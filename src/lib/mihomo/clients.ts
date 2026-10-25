@@ -130,12 +130,12 @@ export function clientLabel(id: ClientId | null): string {
 export function clientUnreachableHint(id: ClientId, source?: string): string {
   if (id === "flclash") {
     if (source?.startsWith("flclash-ec-disabled:")) {
-      return "检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「获取节点」";
+      return "检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「刷新节点」";
     }
     return "请确认 FlClash 已打开并连接节点，且在 FlClash「设置 → 常规 → 入站」中开启了「外部控制器」";
   }
   const name = clientLabel(id);
-  return `请先打开并连上【${name}】，再点「获取节点」`;
+  return `请先打开并连上【${name}】，再点「刷新节点」`;
 }
 
 /** Legacy Verge unix sock (pre-2.5.6). Prefer Rust discovery for live path. */

@@ -59,7 +59,7 @@ export async function runNodeDiagnostics(
   const note =
     mixedPort != null && mixedPort > 0
       ? "只测当前出口相关项（连通、出口、带宽与服务检查）。环境项请用「环境泄漏检查」。"
-      : "未配置代理口时，部分探针可能走窗口直连。建议先获取节点。";
+      : "未配置代理口时，部分探针可能走窗口直连。建议先刷新节点。";
 
   const push = (c: CheckCard) => {
     onCard?.(c);

@@ -243,7 +243,7 @@ select {
 .home-ops-controls {
   display: flex;
   align-items: center;
-  /* dropdown → 14 → 获取节点。宽屏同行；与环境/节点主按钮共用 ≤720 整组换行 */
+  /* dropdown → 14 → 刷新节点。宽屏同行；与环境/节点主按钮共用 ≤720 整组换行 */
   gap: 14px;
   flex: 1 1 auto;
   width: 100%;
@@ -744,7 +744,7 @@ select {
   --nc-full-pad-y: 17px;
   /* 展开锁死 = 两张收起卡 + 中间间距：68+9+68=145；超出裁切 */
   --nc-exp-h: calc(var(--nc-h) * 2 + var(--nc-gap));
-  /* 软件行「获取节点」左缘（content-inset + picker + gap）；近标题，非行最右 */
+  /* 软件行「刷新节点」左缘（content-inset + picker + gap）；近标题，非行最右 */
   --action-x: 376px;
   /* 主控尺寸与圆角 token：三大主按钮 / 软件下拉 / 旁路成功失败芯片共用 */
   --control-h: 30px;
@@ -789,7 +789,7 @@ select {
   background: var(--card-on-tray);
 }
 
-/* Row 1 — software：左簇 title→dropdown→获取节点→成功；短底部分割线；
+/* Row 1 — software：左簇 title→dropdown→刷新节点→成功；短底部分割线；
    与下方 tray 同侧 inset；主按钮落 --action-x，不推到行最右。 */
 /* ============================================================
    顶部解耦架构：
@@ -915,7 +915,7 @@ select {
 }
 
 /* 节点托盘头：与 .env-head 完全同构的 Grid 两列布局，首列宽 calc(var(--action-x) - var(--tray-pad-x))，
-   确保宽屏下三颗主按钮（获取节点 / 环境检查 / 测全部）严格左缘对齐在 --action-x；
+   确保宽屏下三颗主按钮（刷新节点 / 环境检查 / 测全部）严格左缘对齐在 --action-x；
    窗口收窄至 ≤1100px 时三颗主按钮同步换到各自标题下方靠左，释放全行宽度以完整展示正在检测的节点名称 */
 .ws-ops {
   display: grid;
@@ -1077,7 +1077,7 @@ select {
   transition: width 0.18s ease-out;
 }
 
-/* 三大主按钮（获取节点 / 环境检查 / 测全部节点）：高与圆角继承 .btn，此处仅锁等宽 */
+/* 三大主按钮（刷新节点 / 环境检查 / 测全部节点）：高与圆角继承 .btn，此处仅锁等宽 */
 .action-btn {
   width: var(--action-btn-w);
   min-width: var(--action-btn-w);
