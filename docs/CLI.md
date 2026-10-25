@@ -178,7 +178,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 }
 ```
 
-`currentProxy` 与 GUI 同一判定（`src/lib/mihomo/currentProxy.ts` / Rust `nodes.rs::resolve_current_proxy`）：沿主选择组（Proxy / GLOBAL / 「🚀 节点选择」…）的 `now` 链走到真实节点。**规则模式**下 GLOBAL 常停在 DIRECT，会跳过它去看主选择组。（0.1.16 及以前 CLI 只用了 discover 阶段的值，规则模式下恒为 `null`；0.1.17 修复。）
+`currentProxy` 与 GUI 用的是**同一份实现**：`src/lib/mihomo/currentProxy.ts`。0.2.7 起 Rust 侧不再自己判定（原先两端各有一份并已漂移到挑出不同节点），只把策略组表（`name / type / now / all`）原样搬给前端；改这条规则时同步 `tests/fixtures/proxies/cases.json` 语料，Rust 与前端两侧测试会互相钉住。判定本身：沿主选择组（Proxy / GLOBAL / 「🚀 节点选择」…）的 `now` 链走到真实节点。**规则模式**下 GLOBAL 常停在 DIRECT，会跳过它去看主选择组。（0.1.16 及以前 CLI 只用了 discover 阶段的值，规则模式下恒为 `null`；0.1.17 修复。）
 
 ### nodes
 
