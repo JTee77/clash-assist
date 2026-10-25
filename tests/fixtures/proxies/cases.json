@@ -1,0 +1,2211 @@
+{
+  "comment": [
+    "双端共享语料：当前节点（使用中）判定的唯一 spec 在 TS src/lib/mihomo/currentProxy.ts。",
+    "TS 侧 src/lib/mihomo/currentProxyFixtures.test.ts 断言 expectedCurrent，并校验「Rust 搬运 → 前端重建字典」与原始 /proxies 同解；",
+    "Rust 侧 nodes.rs 用 include_str! 读同一份文件，只断言组表（type/now/all）搬运无损，不再自己判定。",
+    "expectedCurrent 是人工声明的期望值（不是任何一端算出来的），改判定规则前先想清楚这条订阅到底在用哪个节点。",
+    "加用例直接在 cases 里追加一条，proxies 用 mihomo /proxies 响应的原样形状。",
+    "不要用 fs 读盘、也不要拆成多文件——本项目不装 @types/node，测试里 import 'node:fs' 过不了 tsc；",
+    "TS 侧靠 resolveJsonModule 静态 import 本文件，Rust 侧靠 include_str! 编译期内嵌。"
+  ],
+  "cases": [
+    {
+      "name": "01-rule-global-direct",
+      "note": "规则模式：GLOBAL=DIRECT 时必须跳过它，取「🔰 节点选择」的真实叶子",
+      "expectedCurrent": "HK-01",
+      "proxies": {
+        "GLOBAL": {
+          "type": "Selector",
+          "now": "DIRECT",
+          "all": [
+            "DIRECT",
+            "🔰 节点选择",
+            "HK-01"
+          ],
+          "history": []
+        },
+        "🔰 节点选择": {
+          "type": "Selector",
+          "now": "HK-01",
+          "all": [
+            "HK-01",
+            "HK-02"
+          ],
+          "history": []
+        },
+        "HK-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "DIRECT": {
+          "type": "Direct"
+        },
+        "REJECT": {
+          "type": "Reject"
+        }
+      }
+    },
+    {
+      "name": "02-global-mode-real-leaf",
+      "note": "全局模式：GLOBAL 直接指向真叶时优先取它（PREFER 表第 2 位）",
+      "expectedCurrent": "US-05",
+      "proxies": {
+        "GLOBAL": {
+          "type": "Selector",
+          "now": "US-05",
+          "all": [
+            "DIRECT",
+            "US-05",
+            "US-06"
+          ],
+          "history": []
+        },
+        "🔰 节点选择": {
+          "type": "Selector",
+          "now": "US-06",
+          "all": [
+            "US-05",
+            "US-06"
+          ],
+          "history": []
+        },
+        "US-05": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-06": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "03-pure-direct",
+      "note": "纯直连模式：只有 GLOBAL→DIRECT，判 null（不许把 DIRECT 当节点）",
+      "expectedCurrent": null,
+      "proxies": {
+        "GLOBAL": {
+          "type": "Selector",
+          "now": "DIRECT",
+          "all": [
+            "DIRECT"
+          ],
+          "history": []
+        },
+        "DIRECT": {
+          "type": "Direct"
+        }
+      }
+    },
+    {
+      "name": "04-ambiguous-tie",
+      "note": "没有主选择组，两个策略组叶数并列但 now 不同 → null（诚实显示未知）",
+      "expectedCurrent": null,
+      "proxies": {
+        "🎥 NETFLIX": {
+          "type": "Selector",
+          "now": "SG-01",
+          "all": [
+            "SG-01",
+            "SG-02"
+          ],
+          "history": []
+        },
+        "🤖 人工智能": {
+          "type": "Selector",
+          "now": "SG-02",
+          "all": [
+            "SG-01",
+            "SG-02"
+          ],
+          "history": []
+        },
+        "SG-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "SG-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "05-custom-main-group",
+      "note": "换订阅后主组改名「节点选择」，叶数不如地区组多，仍按名字权威度取胜",
+      "expectedCurrent": "JP-01",
+      "proxies": {
+        "节点选择": {
+          "type": "Selector",
+          "now": "JP-01",
+          "all": [
+            "JP-01",
+            "HK-地区"
+          ],
+          "history": []
+        },
+        "HK-地区": {
+          "type": "Selector",
+          "now": "HK-09",
+          "all": [
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-09"
+          ],
+          "history": []
+        },
+        "JP-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-03": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-09": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "06-emoji-main-group",
+      "note": "「🚀 节点选择」带 emoji 前缀，策略组各自指别处时仍取主组的叶",
+      "expectedCurrent": "US-02",
+      "proxies": {
+        "🚀 节点选择": {
+          "type": "Selector",
+          "now": "US-02",
+          "all": [
+            "US-01",
+            "US-02"
+          ],
+          "history": []
+        },
+        "🌍 国外媒体": {
+          "type": "Selector",
+          "now": "US-01",
+          "all": [
+            "US-01",
+            "US-02"
+          ],
+          "history": []
+        },
+        "🐟 漏网之鱼": {
+          "type": "Selector",
+          "now": "US-01",
+          "all": [
+            "US-01",
+            "US-02"
+          ],
+          "history": []
+        },
+        "US-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "07-main-follows-subgroup",
+      "note": "主组 now 指向地区子组（两层链），跟到真叶；不因主组 all 里没有真叶就落空",
+      "expectedCurrent": "US-07",
+      "proxies": {
+        "🔰 节点选择": {
+          "type": "Selector",
+          "now": "🇺🇸 美国节点",
+          "all": [
+            "🇭🇰 香港节点",
+            "🇺🇸 美国节点"
+          ],
+          "history": []
+        },
+        "🇺🇸 美国节点": {
+          "type": "Selector",
+          "now": "US-07",
+          "all": [
+            "US-07",
+            "US-08"
+          ],
+          "history": []
+        },
+        "🇭🇰 香港节点": {
+          "type": "Selector",
+          "now": "HK-01",
+          "all": [
+            "HK-01",
+            "HK-02"
+          ],
+          "history": []
+        },
+        "US-07": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-08": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "08-main-on-direct-no-borrow",
+      "note": "主选择组自己停在 DIRECT：判 null，绝不借用策略组的节点当「使用中」",
+      "expectedCurrent": null,
+      "proxies": {
+        "🔰 节点选择": {
+          "type": "Selector",
+          "now": "DIRECT",
+          "all": [
+            "US-01",
+            "US-02"
+          ],
+          "history": []
+        },
+        "🐟 漏网之鱼": {
+          "type": "Selector",
+          "now": "US-01",
+          "all": [
+            "US-01",
+            "US-02"
+          ],
+          "history": []
+        },
+        "US-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "DIRECT": {
+          "type": "Direct"
+        }
+      }
+    },
+    {
+      "name": "09-two-equal-custom",
+      "note": "两个叶数相同、名字都不含关键字的自定义组指向不同节点 → null",
+      "expectedCurrent": null,
+      "proxies": {
+        "A组": {
+          "type": "Selector",
+          "now": "N1",
+          "all": [
+            "N1",
+            "N2",
+            "N3"
+          ],
+          "history": []
+        },
+        "B组": {
+          "type": "Selector",
+          "now": "N2",
+          "all": [
+            "N1",
+            "N2",
+            "N3"
+          ],
+          "history": []
+        },
+        "N1": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N2": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N3": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "10-junk-and-reject-never",
+      "note": "组 all 里混有「剩余流量」「官网」等营销条目与 REJECT：只能落真节点",
+      "expectedCurrent": "N1",
+      "proxies": {
+        "节点选择": {
+          "type": "Selector",
+          "now": "N1",
+          "all": [
+            "N1",
+            "剩余流量：12GB",
+            "官网",
+            "REJECT"
+          ],
+          "history": []
+        },
+        "N1": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "剩余流量：12GB": {
+          "type": "Unknown"
+        },
+        "官网": {
+          "type": "Unknown"
+        },
+        "REJECT": {
+          "type": "Reject"
+        }
+      }
+    },
+    {
+      "name": "11-urltest-auto",
+      "note": "主组是 URLTest「♻️ 自动选择」：跟它的 now 到真叶，不把组名当节点",
+      "expectedCurrent": "HK-03",
+      "proxies": {
+        "🔰 节点选择": {
+          "type": "Selector",
+          "now": "♻️ 自动选择",
+          "all": [
+            "♻️ 自动选择",
+            "HK-03"
+          ],
+          "history": []
+        },
+        "♻️ 自动选择": {
+          "type": "URLTest",
+          "now": "HK-03",
+          "all": [
+            "HK-03",
+            "HK-04"
+          ],
+          "history": []
+        },
+        "HK-03": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-04": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "12-group-named-Select",
+      "note": "组名恰好是 Select：按 spec（TS 的 lower===\"select\" 分支）算 rank 3 的主选择组",
+      "expectedCurrent": "N2",
+      "proxies": {
+        "Select": {
+          "type": "Selector",
+          "now": "N2",
+          "all": [
+            "N1",
+            "N2"
+          ],
+          "history": []
+        },
+        "🐟 漏网之鱼": {
+          "type": "Selector",
+          "now": "N1",
+          "all": [
+            "N1",
+            "N2",
+            "N3"
+          ],
+          "history": []
+        },
+        "N1": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N2": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N3": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "13-group-named-select",
+      "note": "组名恰好是 select：同上，rank 3 主组优先，取它的叶而不是策略组",
+      "expectedCurrent": "N2",
+      "proxies": {
+        "select": {
+          "type": "Selector",
+          "now": "N2",
+          "all": [
+            "N1",
+            "N2"
+          ],
+          "history": []
+        },
+        "🐟 漏网之鱼": {
+          "type": "Selector",
+          "now": "N1",
+          "all": [
+            "N1",
+            "N2",
+            "N3"
+          ],
+          "history": []
+        },
+        "N1": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N2": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N3": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "14-tie-same-leaf",
+      "note": "两个 rank 2 的「…选择」组 now 指向同一叶：并列也必须给出该叶，不得因遍历顺序翻车",
+      "expectedCurrent": "N2",
+      "proxies": {
+        "🎬 影视选择": {
+          "type": "Selector",
+          "now": "N2",
+          "all": [
+            "N1",
+            "N2"
+          ],
+          "history": []
+        },
+        "🎮 游戏选择": {
+          "type": "Selector",
+          "now": "N2",
+          "all": [
+            "N1",
+            "N2"
+          ],
+          "history": []
+        },
+        "N1": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "N2": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "15-real-subscription-shape",
+      "note": "真实订阅形态（脱敏）：主组 🔰 节点选择 → ♻️ 自动选择(URLTest) → HK-03；策略组只指向主组",
+      "expectedCurrent": "HK-03",
+      "proxies": {
+        "GLOBAL": {
+          "type": "Selector",
+          "now": "DIRECT",
+          "all": [
+            "DIRECT",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02",
+            "KR-01",
+            "UK-01"
+          ],
+          "history": []
+        },
+        "🔰 节点选择": {
+          "type": "Selector",
+          "now": "♻️ 自动选择",
+          "all": [
+            "♻️ 自动选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02",
+            "KR-01",
+            "UK-01"
+          ],
+          "history": []
+        },
+        "♻️ 自动选择": {
+          "type": "URLTest",
+          "now": "HK-03",
+          "all": [
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02",
+            "KR-01",
+            "UK-01"
+          ],
+          "history": []
+        },
+        "🌍 国外媒体": {
+          "type": "Selector",
+          "now": "🔰 节点选择",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🤖 人工智能": {
+          "type": "Selector",
+          "now": "🔰 节点选择",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🎥 NETFLIX": {
+          "type": "Selector",
+          "now": "🔰 节点选择",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🎮 游戏平台": {
+          "type": "Selector",
+          "now": "🎯 全球直连",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🐟 漏网之鱼": {
+          "type": "Selector",
+          "now": "🔰 节点选择",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "📲 电报信息": {
+          "type": "Selector",
+          "now": "🔰 节点选择",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🍎 苹果服务": {
+          "type": "Selector",
+          "now": "🎯 全球直连",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "Ⓜ️ 微软服务": {
+          "type": "Selector",
+          "now": "🎯 全球直连",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🌏 国内媒体": {
+          "type": "Selector",
+          "now": "🎯 全球直连",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "⛔️ 广告拦截": {
+          "type": "Selector",
+          "now": "🛑 全球拦截",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🚫 运营劫持": {
+          "type": "Selector",
+          "now": "🛑 全球拦截",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "GCP-VPN": {
+          "type": "Selector",
+          "now": "US-02",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🏷️ 自定义": {
+          "type": "Selector",
+          "now": "🔰 节点选择",
+          "all": [
+            "DIRECT",
+            "🛑 全球拦截",
+            "🎯 全球直连",
+            "🔰 节点选择",
+            "HK-01",
+            "HK-02",
+            "HK-03",
+            "HK-04",
+            "HK-05",
+            "HK-06",
+            "HK-07",
+            "HK-08",
+            "HK-09",
+            "HK-10",
+            "HK-11",
+            "US-01",
+            "US-02",
+            "US-03",
+            "US-04",
+            "US-05",
+            "US-06",
+            "US-07",
+            "US-08",
+            "US-09",
+            "US-10",
+            "JP-01",
+            "JP-02",
+            "JP-03",
+            "JP-04",
+            "JP-05",
+            "JP-06",
+            "SG-01",
+            "SG-02",
+            "SG-03",
+            "SG-04",
+            "TW-01",
+            "TW-02"
+          ],
+          "history": []
+        },
+        "🎯 全球直连": {
+          "type": "Selector",
+          "now": "DIRECT",
+          "all": [
+            "DIRECT"
+          ],
+          "history": []
+        },
+        "🛑 全球拦截": {
+          "type": "Selector",
+          "now": "REJECT",
+          "all": [
+            "REJECT"
+          ],
+          "history": []
+        },
+        "HK-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-03": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-04": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-05": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-06": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-07": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-08": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-09": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-10": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "HK-11": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-03": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-04": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-05": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-06": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-07": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-08": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-09": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "US-10": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "JP-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "JP-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "JP-03": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "JP-04": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "JP-05": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "JP-06": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "SG-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "SG-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "SG-03": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "SG-04": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "TW-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "TW-02": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "KR-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "UK-01": {
+          "type": "ss",
+          "udp": true,
+          "xudp": false,
+          "uot": false,
+          "tfo": false,
+          "smux": false,
+          "mptcp": false,
+          "alive": true,
+          "history": [
+            {
+              "time": "2026-10-25T00:00:00.000000Z",
+              "delay": 120
+            }
+          ]
+        },
+        "DIRECT": {
+          "type": "Direct"
+        },
+        "REJECT": {
+          "type": "Reject"
+        }
+      }
+    }
+  ]
+}

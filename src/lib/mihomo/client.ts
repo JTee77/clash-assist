@@ -19,8 +19,10 @@ import {
 import { detectRegion, detectRegions } from "./regions";
 import {
   resolveCurrentProxy,
+  resolveCurrentProxyFromSlim,
   resolveSelectorSnapshotFromMap,
   resolveSwitchPlanFromMap,
+  type SlimGroupLike,
   type SelectorSnapshot,
 } from "./currentProxy";
 export type { SelectorSnapshot };
@@ -631,7 +633,8 @@ async function getProxiesViaSlimCommand(
         lastDelay?: number | null;
         lastDelayAt?: string | null;
       }[];
-      currentProxy: string | null;
+      /** 策略组摘要表：当前节点判定唯一依赖它 + 上面的 nodes（Rust 不参与判定）。 */
+      groups?: SlimGroupLike[];
       status: number;
       error: string | null;
       unauthorized: boolean;
@@ -662,7 +665,7 @@ async function getProxiesViaSlimCommand(
     }));
     return {
       nodes,
-      currentProxy: res.currentProxy ?? null,
+      currentProxy: resolveCurrentProxyFromSlim(res.nodes ?? [], res.groups ?? []),
       usingMock: false,
       error: res.error ?? (nodes.length === 0 ? "节点列表为空" : null),
       unauthorized: !!res.unauthorized,

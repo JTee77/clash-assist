@@ -209,6 +209,53 @@ export function resolveCurrentProxy(
   return resolvePrimaryEntry(proxies)?.leaf ?? null;
 }
 
+/** Rust `mihomo_list_nodes` 返回的一条真实节点（只带 name + type 就够判定用）。 */
+export type SlimNodeLike = { name: string; type: string };
+
+/** Rust `mihomo_list_nodes` 返回的一条策略组摘要（`all` 原样搬运，不做计数）。 */
+export type SlimGroupLike = {
+  name: string;
+  type: string;
+  now?: string | null;
+  all?: string[] | null;
+};
+
+/**
+ * 把 Rust 的轻量返回（节点表 + 组表）拼回 `resolveCurrentProxy` 需要的 proxies 字典。
+ *
+ * 判定只用到三类信息：条目的 `type`、组的 `now`、组的 `all`。真实节点的能力位
+ * （udp / delay / alive）在这份字典里刻意不带，避免有人误以为可以在这里读它们。
+ *
+ * 语料对拍见 `tests/fixtures/proxies/` + `currentProxyFixtures.test.ts`：Rust 侧
+ * 只保证「组表搬运无损」，判定规则在这里（且只在这里）有一份实现。
+ */
+export function buildProxyMapFromSlim(
+  nodes: readonly SlimNodeLike[],
+  groups: readonly SlimGroupLike[],
+): Record<string, ProxyInfo> {
+  const map: Record<string, ProxyInfo> = {};
+  for (const n of nodes) {
+    map[n.name] = { name: n.name, type: n.type };
+  }
+  for (const g of groups) {
+    map[g.name] = {
+      name: g.name,
+      type: g.type,
+      now: g.now ?? undefined,
+      all: g.all ?? undefined,
+    };
+  }
+  return map;
+}
+
+/** 从 Rust 轻量返回里判定当前节点（GUI 主路径用；规则模式同样能识别主选择组）。 */
+export function resolveCurrentProxyFromSlim(
+  nodes: readonly SlimNodeLike[],
+  groups: readonly SlimGroupLike[],
+): string | null {
+  return resolveCurrentProxy(buildProxyMapFromSlim(nodes, groups));
+}
+
 export type SelectorSnapshot = {
   group: string;
   /** 该策略组当前选中的节点（或子组）名 */

@@ -1,12 +1,17 @@
 //! `/proxies` handling: slim the controller's proxy JSON down to real leaf
-//! nodes (dropping selector/urltest groups, junk names; keeping only the
-//! client's last delay result instead of full history arrays) and the
-//! TCP→Unix fallback that fetches it for the node list.
+//! nodes (dropping junk names and history arrays, keeping only the client's
+//! last delay result) plus a table of the policy groups, and the TCP→Unix
+//! fallback that fetches it for the node list.
+//!
+//! "Which node is currently in use" is decided by the frontend only
+//! (`src/lib/mihomo/currentProxy.ts`). Rust ships `now` + `all` for every
+//! group and does not resolve anything itself — the one implementation of that
+//! rule used to exist twice, and the two copies had already drifted.
 
 use serde_json::Value;
 
 use super::transport::{http_via_tcp_async, http_via_unix};
-use super::types::{ListNodesResult, SlimNode, IGNORE_PROXY_TYPES, JUNK_NAME_KEYWORDS};
+use super::types::{ListNodesResult, SlimGroup, SlimNode, IGNORE_PROXY_TYPES, JUNK_NAME_KEYWORDS};
 
 fn is_junk_name(name: &str) -> bool {
     if name.starts_with("PASS") || name.starts_with("REJECT") {
@@ -69,197 +74,56 @@ fn slim_node(name: String, node_type: String, p: &Value) -> SlimNode {
 /// Group types that route to a member via their `now` field.
 const GROUP_TYPES: &[&str] = &["Selector", "URLTest", "Fallback", "LoadBalance"];
 
-/// User-facing selector groups, most authoritative first. `GLOBAL` is the
-/// global-mode pseudo-group and often sits at `DIRECT` while the client is in
-/// rule mode, so it must not be trusted blindly — hence the ordered scan below
-/// that only accepts a chain ending at a real leaf node.
-const PREFER_GROUP_NAMES: &[&str] = &[
-    "Proxy",
-    "GLOBAL",
-    "proxy",
-    "SELECT",
-    "节点选择",
-    "手动选择",
-    "自动选择",
-];
-
-const MAX_HOPS: usize = 8;
-
-/// A name is a real leaf proxy iff it exists, is not a group/pseudo type
-/// (Direct/Reject/Pass/Selector… — i.e. not DIRECT), and is not a junk entry.
-fn is_real_leaf(proxies: &serde_json::Map<String, Value>, name: &str) -> bool {
-    let Some(p) = proxies.get(name) else {
-        return false;
-    };
-    let t = p.get("type").and_then(|x| x.as_str()).unwrap_or("");
-    if ignore_type(t) {
-        return false;
-    }
-    !is_junk_name(name)
+/// Mirror of TS `isGroupType`: the canonical spellings plus a case-insensitive
+/// fallback. mihomo emits CamelCase group types, but a third-party core that
+/// emitted `selector` would otherwise be dropped from the summary here while
+/// TS still treated it as a group — i.e. a fresh drift source.
+fn is_group_type(t: &str) -> bool {
+    GROUP_TYPES.contains(&t)
+        || matches!(
+            t.to_ascii_lowercase().as_str(),
+            "selector" | "urltest" | "fallback" | "loadbalance"
+        )
 }
 
-/// 3 = main picker (节点选择 / proxy / …), 2 = some other「选择」group,
-/// 1 = name mentions 节点 (often a region subgroup), 0 = neither.
-fn name_rank(name: &str) -> u8 {
-    let lower = name.to_lowercase();
-    if name.contains("节点选择")
-        || name.contains("手动选择")
-        || name.contains("选择节点")
-        || name.contains("代理选择")
-        || name.contains("选择代理")
-        || lower.contains("proxy")
-    {
-        3
-    } else if name.contains("选择") {
-        2
-    } else if name.contains("节点") {
-        1
-    } else {
-        0
-    }
-}
-
-/// Walk `now` through nested groups until a real leaf. Cycles and DIRECT stop as None.
-fn follow_to_leaf(proxies: &serde_json::Map<String, Value>, start: &str) -> Option<String> {
-    let mut seen = std::collections::BTreeSet::<String>::new();
-    let mut current = start.to_string();
-    for _ in 0..MAX_HOPS {
-        if !seen.insert(current.clone()) {
-            return None;
-        }
-        if is_real_leaf(proxies, &current) {
-            return Some(current);
-        }
-        let group = proxies.get(&current)?;
-        let t = group.get("type").and_then(|x| x.as_str()).unwrap_or("");
-        if !GROUP_TYPES.contains(&t) {
-            return None;
-        }
-        current = group.get("now").and_then(|n| n.as_str())?.to_string();
-    }
-    None
-}
-
-fn real_leaf_count(proxies: &serde_json::Map<String, Value>, group: &Value) -> usize {
-    group
-        .get("all")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter(|item| item.as_str().is_some_and(|n| is_real_leaf(proxies, n)))
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-struct Cand {
-    leaf: String,
-    leaves: usize,
-    rank: u8,
-    selector: bool,
-}
-
-/// Highest first key, then second. Different leaves at that peak → None.
-fn unique_by(cands: &[Cand], rank_first: bool) -> Option<String> {
-    let key = |c: &Cand| -> (usize, usize) {
-        if rank_first {
-            (c.rank as usize, c.leaves)
-        } else {
-            (c.leaves, c.rank as usize)
-        }
-    };
-    let best = cands.iter().map(key).max()?;
-    let top: Vec<&Cand> = cands.iter().filter(|c| key(c) == best).collect();
-    let leaf = &top[0].leaf;
-    if top.iter().all(|c| &c.leaf == leaf) {
-        Some(leaf.clone())
-    } else {
-        None
-    }
-}
-
-/// Resolve the node the user is actually on. Never surfaces DIRECT/PASS/REJECT
-/// or a group name.
+/// Ship every policy group (`name` / `type` / `now` / full `all`) to the frontend.
 ///
-/// Exact preferred names are followed through nested selector chains. When a
-/// subscription renames the main picker (「🚀 节点选择」) and policy groups
-/// disagree, that main-picker selector wins. Otherwise the selector with the
-/// most real leaves wins. None when still ambiguous, or when the main picker
-/// itself is on DIRECT.
-pub fn resolve_current_proxy(proxies: &serde_json::Map<String, Value>) -> Option<String> {
-    for g in PREFER_GROUP_NAMES {
-        if proxies.contains_key(*g) {
-            if let Some(n) = follow_to_leaf(proxies, g) {
-                return Some(n);
-            }
-        }
-    }
-
-    let mut strong: Vec<Cand> = Vec::new();
-    let mut saw_strong_selector = false;
-    let mut resolved: Vec<Cand> = Vec::new();
-
+/// This is the whole of Rust's remaining job for "which node is in use":
+/// **transport, not judgement**. The decision lives only in TS
+/// `src/lib/mihomo/currentProxy.ts`. `all` is deliberately not reduced to a
+/// leaf count — counting real leaves needs the leaf predicate, and holding that
+/// predicate in one place is exactly what prevents the two ends from picking
+/// different nodes (see the `Select` / `select` drift pinned by
+/// `tests/fixtures/proxies/manifest.json`).
+fn group_summaries(proxies: &serde_json::Map<String, Value>) -> Vec<SlimGroup> {
+    let mut groups = Vec::new();
     for (name, p) in proxies {
-        let t = p.get("type").and_then(|x| x.as_str()).unwrap_or("");
-        if !GROUP_TYPES.contains(&t) {
+        let group_type = p.get("type").and_then(Value::as_str).unwrap_or("");
+        if !is_group_type(group_type) {
             continue;
         }
-        let rank = name_rank(name);
-        let selector = t == "Selector";
-        if selector && rank >= 2 {
-            saw_strong_selector = true;
-        }
-        let Some(leaf) = follow_to_leaf(proxies, name) else {
-            continue;
-        };
-        let cand = Cand {
-            leaf,
-            leaves: real_leaf_count(proxies, p),
-            rank,
-            selector,
-        };
-        if selector && rank >= 2 {
-            strong.push(Cand {
-                leaf: cand.leaf.clone(),
-                leaves: cand.leaves,
-                rank: cand.rank,
-                selector: true,
-            });
-        }
-        resolved.push(cand);
+        let all = p
+            .get("all")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        groups.push(SlimGroup {
+            name: name.clone(),
+            group_type: group_type.to_string(),
+            now: p.get("now").and_then(Value::as_str).map(str::to_string),
+            all,
+        });
     }
-
-    if saw_strong_selector {
-        return unique_by(&strong, true);
-    }
-
-    if resolved.is_empty() {
-        return None;
-    }
-    let only = resolved[0].leaf.clone();
-    if resolved.iter().all(|c| c.leaf == only) {
-        return Some(only);
-    }
-
-    let selectors: Vec<Cand> = resolved
-        .iter()
-        .filter(|c| c.selector)
-        .map(|c| Cand {
-            leaf: c.leaf.clone(),
-            leaves: c.leaves,
-            rank: c.rank,
-            selector: c.selector,
-        })
-        .collect();
-    if selectors.is_empty() {
-        unique_by(&resolved, false)
-    } else {
-        unique_by(&selectors, false)
-    }
+    groups
 }
 
-/// Parse /proxies JSON into a slim node list (no history arrays; only the
-/// last delay result + alive flag are kept).
+/// Parse /proxies JSON into the frontend payload: a slim node list (no history
+/// arrays; only the last delay result + alive flag are kept) plus the group table.
 pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, String> {
     let root: Value = serde_json::from_str(body).map_err(|e| format!("json: {e}"))?;
     let proxies = root
@@ -267,7 +131,7 @@ pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, Strin
         .and_then(|v| v.as_object())
         .ok_or_else(|| "missing proxies object".to_string())?;
 
-    let current_proxy = resolve_current_proxy(proxies);
+    let groups = group_summaries(proxies);
 
     let mut nodes: Vec<SlimNode> = Vec::new();
     for (name, p) in proxies {
@@ -328,7 +192,7 @@ pub fn slim_nodes_from_proxies_json(body: &str) -> Result<ListNodesResult, Strin
 
     Ok(ListNodesResult {
         nodes,
-        current_proxy,
+        groups,
         status: 200,
         error: None,
         unauthorized: false,
@@ -452,7 +316,7 @@ async fn try_list_nodes_unix(
     match unix_attempt {
         Ok(res) if res.status == 401 || res.status == 403 => Ok(Some(ListNodesResult {
             nodes: vec![],
-            current_proxy: None,
+            groups: vec![],
             status: res.status,
             error: Some("API 返回未授权（401/403），请到设置检查 Secret".into()),
             unauthorized: true,
@@ -467,7 +331,7 @@ async fn try_list_nodes_unix(
                 }
                 Err(e) => Ok(Some(ListNodesResult {
                     nodes: vec![],
-                    current_proxy: None,
+                    groups: vec![],
                     status: res.status,
                     error: Some(format!(
                         "解析 /proxies JSON 失败（Unix）: {e}；body {} 字节",
@@ -509,7 +373,7 @@ pub async fn list_nodes_async(
         Ok(res) if res.status == 401 || res.status == 403 => {
             return Ok(ListNodesResult {
                 nodes: vec![],
-                current_proxy: None,
+                groups: vec![],
                 status: res.status,
                 error: Some("API 返回未授权（401/403），请到设置检查 Secret".into()),
                 unauthorized: true,
@@ -526,7 +390,7 @@ pub async fn list_nodes_async(
                 Err(e) => {
                     return Ok(ListNodesResult {
                         nodes: vec![],
-                        current_proxy: None,
+                        groups: vec![],
                         status: res.status,
                         error: Some(format!(
                             "解析 /proxies JSON 失败（TCP）: {e}；body {} 字节",
@@ -624,13 +488,18 @@ mod tests {
     }
 
     #[test]
-    fn list_nodes_includes_provider_leaves_and_resolves_current_without_switching() {
+    fn list_nodes_includes_provider_leaves_and_ships_the_group_table() {
         let controller = ProviderController::start(200, r#"{"providers":{"subscription":{"vehicleType":"File","proxies":[{"name":"provider-a","type":"Vless","udp":true}]}}}"#);
         let result = tauri::async_runtime::block_on(list_nodes_async("127.0.0.1", controller.port, "", 1500, None)).unwrap();
         let names: Vec<_> = result.nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names.len(), 2, "provider-only nodes must supplement existing static nodes");
         assert!(names.contains(&"provider-a") && names.contains(&"static-a"));
-        assert_eq!(result.current_proxy.as_deref(), Some("provider-a"));
+        // The merged provider node must be reachable through the group table too,
+        // otherwise the frontend cannot follow `now` to a real leaf.
+        assert_eq!(result.groups.len(), 1);
+        assert_eq!(result.groups[0].name, "Proxy");
+        assert_eq!(result.groups[0].now.as_deref(), Some("provider-a"));
+        assert_eq!(result.groups[0].all, vec!["static-a".to_string(), "provider-a".to_string()]);
         assert!(result.error.is_none());
         assert_eq!(*controller.requests.lock().unwrap(), vec!["GET /proxies HTTP/1.1", "GET /providers/proxies HTTP/1.1"]);
     }
@@ -641,7 +510,7 @@ mod tests {
         let result = tauri::async_runtime::block_on(list_nodes_async("127.0.0.1", controller.port, "", 1500, None)).unwrap();
         assert_eq!(result.nodes.len(), 1);
         assert_eq!(result.nodes[0].name, "static-a");
-        assert!(result.current_proxy.is_none());
+        assert_eq!(result.groups.len(), 1, "the group table must still ship when providers fail");
         assert!(result.error.as_deref().unwrap().contains("HTTP 403"));
         assert!(!result.unauthorized, "a provider error must not discard a working root controller");
     }
@@ -664,7 +533,6 @@ mod tests {
         assert!(!proxies.contains_key("duplicate"));
         assert!(!proxies.contains_key("invalid"));
         assert!(!proxies.contains_key("unused"));
-        assert!(resolve_current_proxy(proxies).is_none());
     }
 
     #[test]
@@ -686,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn slim_nodes_strips_groups_and_history_shape() {
+    fn slim_nodes_excludes_groups_from_nodes_but_ships_their_table() {
         let body = r#"{
           "proxies": {
             "Proxy": {"type":"Selector","now":"hk-1","all":["hk-1","jp-1"]},
@@ -696,11 +564,20 @@ mod tests {
           }
         }"#;
         let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy.as_deref(), Some("hk-1"));
         let names: Vec<_> = slim.nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"hk-1"));
         assert!(names.contains(&"jp-1"));
         assert!(!names.iter().any(|n| *n == "Proxy" || *n == "DIRECT"));
+        // The group itself is not a node, but the frontend still needs it
+        // verbatim — this table is the only input to "which node is in use".
+        assert_eq!(slim.groups.len(), 1);
+        assert_eq!(slim.groups[0].name, "Proxy");
+        assert_eq!(slim.groups[0].group_type, "Selector");
+        assert_eq!(slim.groups[0].now.as_deref(), Some("hk-1"));
+        assert_eq!(
+            slim.groups[0].all,
+            vec!["hk-1".to_string(), "jp-1".to_string()]
+        );
     }
 
     #[test]
@@ -769,167 +646,123 @@ mod tests {
         assert!(!b.udp && b.uot);
     }
 
+    /// 双端共享语料（`tests/fixtures/proxies/cases.json`）在 Rust 侧的契约：
+    /// **组表搬运无损**。
+    ///
+    /// 同一份文件也喂给 TS（`src/lib/mihomo/currentProxyFixtures.test.ts`），那边
+    /// 断言 `expectedCurrent`——当前节点判定的唯一 spec 在 TS 侧。Rust 不再参与判定，
+    /// 只核对交给前端的组表：`type` / `now` / 完整的 `all` 少一条，前端就跟不到真叶，
+    /// 「使用中」徽标落错卡、深测后也切不回原节点。
+    ///
+    /// 期望值按 `GROUP_TYPES` 的字面拼写从 `proxies` 里挑组（不借用被测的
+    /// `is_group_type`），否则这条测试就只是在跟自己对暗号。
+    ///
+    /// 历史背景：这套判定曾在 Rust / TS 各存一份且已漂移到挑出不同节点（组名恰好
+    /// `Select` / `select` 时 Rust 曾漏掉 rank 3），0.2.7 收敛为单份。
     #[test]
-    fn current_proxy_rule_mode_skips_direct_global_picks_节点选择() {
-        // Clash Verge in rule mode: GLOBAL pseudo-group sits at DIRECT while the
-        // user's real pick lives in the "节点选择" group. Must show HK17, not DIRECT.
-        let body = r#"{
-          "proxies": {
-            "GLOBAL": {"type":"Selector","now":"DIRECT","all":["DIRECT","HK17"]},
-            "节点选择": {"type":"Selector","now":"HK17","all":["HK17","SG2"]},
-            "NETFLIX": {"type":"Selector","now":"SG2","all":["HK17","SG2"]},
-            "HK17": {"type":"Hysteria2"},
-            "SG2": {"type":"Vmess"},
-            "DIRECT": {"type":"Direct"},
-            "REJECT": {"type":"Reject"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy.as_deref(), Some("HK17"));
+    fn fixture_group_table_is_transported_losslessly() {
+        let corpus: Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/proxies/cases.json"))
+                .expect("cases.json 必须是合法 JSON");
+        let cases = corpus
+            .get("cases")
+            .and_then(Value::as_array)
+            .expect("cases 必须是数组");
+        assert!(
+            cases.len() >= 15,
+            "共享语料不得少于 15 条（当前 {} 条），删用例等于让对拍空转",
+            cases.len()
+        );
+
+        type Table = std::collections::BTreeMap<String, (String, Option<String>, Vec<String>)>;
+        let mut failures = Vec::new();
+        for c in cases {
+            let name = c.get("name").and_then(Value::as_str).unwrap_or("?");
+            let note = c.get("note").and_then(Value::as_str).unwrap_or("");
+            let proxies = c
+                .get("proxies")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("用例 {name} 缺少 proxies 对象"));
+            let body = serde_json::to_string(&serde_json::json!({ "proxies": proxies })).unwrap();
+            let slim = slim_nodes_from_proxies_json(&body)
+                .unwrap_or_else(|e| panic!("用例 {name} 解析失败: {e}"));
+
+            let got: Table = slim
+                .groups
+                .iter()
+                .map(|g| {
+                    (
+                        g.name.clone(),
+                        (g.group_type.clone(), g.now.clone(), g.all.clone()),
+                    )
+                })
+                .collect();
+            let want: Table = proxies
+                .iter()
+                .filter(|(_, p)| GROUP_TYPES.contains(&p.get("type").and_then(Value::as_str).unwrap_or("")))
+                .map(|(gname, p)| {
+                    let all = p
+                        .get("all")
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter().filter_map(Value::as_str).map(str::to_string).collect()
+                        })
+                        .unwrap_or_default();
+                    (
+                        gname.clone(),
+                        (
+                            p.get("type").and_then(Value::as_str).unwrap_or("").to_string(),
+                            p.get("now").and_then(Value::as_str).map(str::to_string),
+                            all,
+                        ),
+                    )
+                })
+                .collect();
+            assert!(
+                !got.is_empty() || want.is_empty(),
+                "用例 {name}: 语料里有策略组，但 Rust 一条都没搬出去"
+            );
+            // 策略组绝不能同时出现在节点表里：它是判定的输入，不是候选节点。
+            for gname in want.keys() {
+                if slim.nodes.iter().any(|n| &n.name == gname) {
+                    failures.push(format!("{name}（{note}）: 组 {gname} 混进了 nodes"));
+                }
+            }
+            if got != want {
+                failures.push(format!(
+                    "{name}（{note}）: 组表不一致\n  Rust = {got:#?}\n  期望 = {want:#?}"
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} 条用例的组表搬运有误：\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
+    /// 前端只认 `groups` 这一份组表；Rust 侧不得再泄漏任何「已判定」的当前节点字段
+    /// ——那等于把刚退役的第二套判定又请回来。
     #[test]
-    fn current_proxy_global_mode_uses_global_real_leaf() {
+    fn list_nodes_payload_exposes_groups_not_a_resolved_current_proxy() {
         let body = r#"{
           "proxies": {
-            "GLOBAL": {"type":"Selector","now":"jp-2","all":["jp-2","hk-1"]},
-            "节点选择": {"type":"Selector","now":"hk-1","all":["jp-2","hk-1"]},
-            "jp-2": {"type":"Shadowsocks"},
-            "hk-1": {"type":"Vmess"},
-            "DIRECT": {"type":"Direct"}
+            "Proxy": {"type":"Selector","now":"hk-1","all":["hk-1"]},
+            "hk-1": {"type":"Shadowsocks"}
           }
         }"#;
         let slim = slim_nodes_from_proxies_json(body).unwrap();
-        // Proxy absent, GLOBAL present with a real leaf → GLOBAL wins first.
-        assert_eq!(slim.current_proxy.as_deref(), Some("jp-2"));
-    }
-
-    #[test]
-    fn current_proxy_ambiguous_rule_groups_returns_none() {
-        // No preferred group name matches and several sub-groups disagree →
-        // honest None (UI shows "—") rather than guessing a random group.
-        let body = r#"{
-          "proxies": {
-            "人工智能": {"type":"Selector","now":"us-1","all":["us-1"]},
-            "NETFLIX": {"type":"Selector","now":"sg-9","all":["sg-9"]},
-            "us-1": {"type":"Vmess"},
-            "sg-9": {"type":"Trojan"},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy, None);
-    }
-
-    #[test]
-    fn current_proxy_pure_direct_mode_returns_none() {
-        let body = r#"{
-          "proxies": {
-            "GLOBAL": {"type":"Selector","now":"DIRECT","all":["DIRECT"]},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy, None);
-    }
-
-    #[test]
-    fn current_proxy_custom_main_group_beats_policy_groups() {
-        let body = r#"{
-          "proxies": {
-            "GLOBAL": {"type":"Selector","now":"DIRECT","all":["DIRECT","n0","n1","n2","n3","n4","n5"]},
-            "机场": {"type":"Selector","now":"n3","all":["n0","n1","n2","n3","n4","n5"]},
-            "NETFLIX": {"type":"Selector","now":"n1","all":["n1","n2"]},
-            "AI": {"type":"Selector","now":"n2","all":["n2"]},
-            "Telegram": {"type":"Selector","now":"n0","all":["n0","n4"]},
-            "n0": {"type":"Vmess"},
-            "n1": {"type":"Vmess"},
-            "n2": {"type":"Vmess"},
-            "n3": {"type":"Vmess"},
-            "n4": {"type":"Vmess"},
-            "n5": {"type":"Vmess"},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy.as_deref(), Some("n3"));
-    }
-
-    #[test]
-    fn current_proxy_emoji_node_select_beats_policy_groups() {
-        let body = r#"{
-          "proxies": {
-            "GLOBAL": {"type":"Selector","now":"DIRECT","all":["DIRECT","HK-1"]},
-            "🚀 节点选择": {"type":"Selector","now":"HK-1","all":["♻️ 自动选择","HK-1","JP-1","US-1","SG-1","TW-1","DIRECT"]},
-            "♻️ 自动选择": {"type":"URLTest","now":"JP-1","all":["HK-1","JP-1","US-1","SG-1","TW-1"]},
-            "NETFLIX": {"type":"Selector","now":"US-1","all":["US-1","SG-1"]},
-            "🤖 AI": {"type":"Selector","now":"JP-1","all":["JP-1"]},
-            "Telegram": {"type":"Selector","now":"SG-1","all":["SG-1","HK-1"]},
-            "HK-1": {"type":"Hysteria2"},
-            "JP-1": {"type":"Hysteria2"},
-            "US-1": {"type":"Hysteria2"},
-            "SG-1": {"type":"Hysteria2"},
-            "TW-1": {"type":"Hysteria2"},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy.as_deref(), Some("HK-1"));
-    }
-
-    #[test]
-    fn current_proxy_nested_preferred_ignores_policy_groups() {
-        let body = r#"{
-          "proxies": {
-            "Proxy": {"type":"Selector","now":"内层","all":["内层"]},
-            "内层": {"type":"Selector","now":"再内层","all":["再内层"]},
-            "再内层": {"type":"Selector","now":"hk-1","all":["hk-1"]},
-            "NETFLIX": {"type":"Selector","now":"sg-9","all":["sg-9"]},
-            "hk-1": {"type":"Vmess"},
-            "sg-9": {"type":"Trojan"},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy.as_deref(), Some("hk-1"));
-    }
-
-    #[test]
-    fn current_proxy_main_group_follows_region_subgroup() {
-        let body = r#"{
-          "proxies": {
-            "GLOBAL": {"type":"Selector","now":"DIRECT","all":["DIRECT"]},
-            "🚀 节点选择": {"type":"Selector","now":"🇯🇵 日本节点","all":["🇭🇰 香港节点","🇯🇵 日本节点"]},
-            "🇭🇰 香港节点": {"type":"Selector","now":"hk-1","all":["hk-1","hk-2","hk-3"]},
-            "🇯🇵 日本节点": {"type":"Selector","now":"jp-9","all":["jp-9","jp-8"]},
-            "NETFLIX": {"type":"Selector","now":"hk-1","all":["hk-1","jp-9"]},
-            "hk-1": {"type":"Vmess"},
-            "hk-2": {"type":"Vmess"},
-            "hk-3": {"type":"Vmess"},
-            "jp-9": {"type":"Vmess"},
-            "jp-8": {"type":"Vmess"},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy.as_deref(), Some("jp-9"));
-    }
-
-    #[test]
-    fn current_proxy_main_group_on_direct_does_not_borrow_policy_node() {
-        let body = r#"{
-          "proxies": {
-            "GLOBAL": {"type":"Selector","now":"DIRECT","all":["DIRECT"]},
-            "🚀 节点选择": {"type":"Selector","now":"DIRECT","all":["DIRECT","HK-1","JP-1"]},
-            "NETFLIX": {"type":"Selector","now":"HK-1","all":["HK-1"]},
-            "AI": {"type":"Selector","now":"JP-1","all":["JP-1"]},
-            "HK-1": {"type":"Vmess"},
-            "JP-1": {"type":"Vmess"},
-            "DIRECT": {"type":"Direct"}
-          }
-        }"#;
-        let slim = slim_nodes_from_proxies_json(body).unwrap();
-        assert_eq!(slim.current_proxy, None);
+        let json = serde_json::to_string(&slim).unwrap();
+        assert!(json.contains("\"groups\""), "组表必须序列化出去：{json}");
+        assert!(!json.contains("currentProxy"), "Rust 不再判定当前节点：{json}");
+        // 键名必须就是前端 `SlimGroupLike` 的字段名。错一个 TS 侧静默读到
+        // undefined，判定退化成「认不出主组 → 使用中显示未知」：测试不炸，只有 UI 看得见。
+        assert!(json.contains("\"type\":\"Selector\""), "groupType 要序列化成 type：{json}");
+        assert!(json.contains("\"name\":\"Proxy\""), "组名键要是 name：{json}");
+        assert!(json.contains("\"now\":\"hk-1\""), "当前指向键要是 now：{json}");
+        assert!(json.contains("\"all\":[\"hk-1\"]"), "成员表键要是 all：{json}");
+        assert!(!json.contains("groupType"), "不得泄漏 Rust 侧内部字段名：{json}");
     }
 
     #[test]
