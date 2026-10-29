@@ -28,6 +28,8 @@ sys-locale = "0.3"
 url = "2"
 # 自更新：进程内计算 DMG SHA-256（不再依赖 /usr/bin/shasum）。
 sha2 = "0.10"
+# 打开 release 页面：macOS `/usr/bin/open --`、Windows ShellExecuteExW，不经 shell 解析。
+open = { version = "5", features = ["shellexecute-on-windows"] }
 
 [target.'cfg(unix)'.dependencies]
 # CLI：Ctrl+C / SIGTERM 时先切回原节点再退出（sigaction / write / _exit）。

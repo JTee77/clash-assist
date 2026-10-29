@@ -510,21 +510,12 @@ pub async fn check(current: &str) -> Result<UpdateInfo, String> {
 }
 
 /// 只允许打开本项目的 GitHub release 页面（防止前端被诱导打开任意 URL）。
+/// 用 `open` crate 交给系统：macOS 为 `/usr/bin/open -- <url>`、Windows 为 ShellExecuteExW，
+/// 均不经 shell 解析（旧实现在 Windows 上用 `cmd /C start`，URL 中的 `&` 等会被 cmd 解释）。
 pub fn open_release_page(url: &str) -> Result<(), String> {
-    if !url.starts_with(RELEASES_PAGE) {
-        return Err("只允许打开本项目的 release 页面".into());
-    }
-    #[cfg(target_os = "macos")]
-    let mut cmd = Command::new("open");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut cmd = Command::new("xdg-open");
-    #[cfg(windows)]
-    let mut cmd = {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    };
-    cmd.arg(url).spawn().map(|_| ()).map_err(|e| format!("打开浏览器失败：{e}"))
+    let url = url.trim();
+    validate_release_page_url(url)?;
+    open::that_detached(url).map_err(|e| format!("打开浏览器失败：{e}"))
 }
 
 /// 从当前可执行文件路径推导所在的 `.app` 包根目录（如 `/Applications/Clash Assist.app`）。
@@ -1006,6 +997,7 @@ mod tests {
             "javascript:alert(1)",
         ] {
             assert!(validate_release_page_url(bad).is_err(), "should reject: {bad}");
+            assert!(open_release_page(bad).is_err(), "open should reject: {bad}");
         }
     }
 
