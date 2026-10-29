@@ -579,16 +579,35 @@ async fn check_update() -> Result<update_check::UpdateInfo, String> {
 /// 系统首选语言标签（前端「跟随系统」时据此选 简体 / 繁體 / English）。
 #[tauri::command]
 fn system_locale() -> String {
-    app_menu::system_locale_tag()
+    #[cfg(target_os = "macos")]
+    {
+        app_menu::system_locale_tag()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        sys_locale::get_locales()
+            .next()
+            .or_else(sys_locale::get_locale)
+            .unwrap_or_else(|| "en".to_string())
+    }
 }
 
 /// 前端切换界面语言（"system" / "zh-Hans" / "zh-Hant" / "en"）：覆盖菜单语言并重建 macOS 菜单。
+/// 非 macOS 没有应用菜单（`app_menu` 只在 macOS 编译），直接返回成功。
 #[tauri::command]
 fn set_ui_language(app: tauri::AppHandle, lang: String) -> Result<(), String> {
-    let next = app_menu::parse_pref(&lang);
-    app_menu::set_override(next);
-    let menu = app_menu::build(&app).map_err(|e| e.to_string())?;
-    app.set_menu(menu).map(|_| ()).map_err(|e| e.to_string())
+    #[cfg(target_os = "macos")]
+    {
+        let next = app_menu::parse_pref(&lang);
+        app_menu::set_override(next);
+        let menu = app_menu::build(&app).map_err(|e| e.to_string())?;
+        app.set_menu(menu).map(|_| ()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, lang);
+        Ok(())
+    }
 }
 
 /// 用默认浏览器打开 release 页面（只接受本项目 GitHub releases 下的 URL）。

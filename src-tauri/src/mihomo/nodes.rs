@@ -892,6 +892,7 @@ mod tests {
     }
 
     /// TCP dead + live Unix sock → leaf nodes > 0, transport unix, no app demo names.
+    #[cfg(unix)]
     #[test]
     fn smoke_list_nodes_dead_tcp_live_sock_real_leaves() {
         use std::io::{Read, Write};
@@ -965,6 +966,7 @@ mod tests {
     }
 
     /// TCP dead + live Unix sock returning **chunked** body with Chinese names.
+    #[cfg(unix)]
     #[test]
     fn smoke_list_nodes_unix_chunked_chinese_names() {
         use std::io::{Read, Write};
@@ -1048,6 +1050,7 @@ mod tests {
         assert!(names.contains(&"日本 TY-4-HY2"), "{names:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn slim_parse_fail_returns_ok_with_error_via_list_nodes_unix() {
         use std::io::{Read, Write};
