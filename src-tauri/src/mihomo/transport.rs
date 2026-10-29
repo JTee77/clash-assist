@@ -169,7 +169,7 @@ async fn proxy_fetch_inner(
 ) -> Result<UnixHttpResult, String> {
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(super::guard::probe_redirect_policy(10))
         .danger_accept_invalid_certs(false);
 
     if let Some(port) = mixed_port {

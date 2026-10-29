@@ -45,7 +45,7 @@ async fn proxy_timed_transfer_inner(
     // mixed-port often surface as "error decoding response body" with 0 bytes.
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(super::guard::probe_redirect_policy(5))
         .danger_accept_invalid_certs(false)
         .gzip(false);
 

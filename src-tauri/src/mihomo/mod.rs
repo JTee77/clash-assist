@@ -9,6 +9,7 @@
 
 mod cancel;
 mod discovery;
+pub mod guard;
 mod http_parse;
 mod nodes;
 mod timed;

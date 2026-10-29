@@ -103,6 +103,10 @@ struct TcpHttpRequest {
 
 #[tauri::command]
 async fn mihomo_http(req: TcpHttpRequest) -> Result<UnixHttpResult, String> {
+    // 0.2.9：只允许回环控制器 + Mihomo API 路径（防被注入的前端借此访问内网 / 任意主机）。
+    mihomo::guard::check_controller_host(&req.host)?;
+    mihomo::guard::check_controller_method(&req.method)?;
+    mihomo::guard::check_controller_path(&req.path)?;
     http_via_tcp_async(
         &req.host,
         req.port,
@@ -127,6 +131,10 @@ struct ListNodesRequest {
 
 #[tauri::command]
 async fn mihomo_list_nodes(req: ListNodesRequest) -> Result<ListNodesResult, String> {
+    mihomo::guard::check_controller_host(&req.host)?;
+    if let Some(p) = req.sock_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        mihomo::guard::check_sock_path(p)?;
+    }
     list_nodes_async(
         &req.host,
         req.port,
@@ -150,6 +158,11 @@ struct UnixHttpRequest {
 
 #[tauri::command]
 async fn mihomo_unix_http(req: UnixHttpRequest) -> Result<UnixHttpResult, String> {
+    mihomo::guard::check_controller_method(&req.method)?;
+    mihomo::guard::check_controller_path(&req.path)?;
+    if let Some(p) = req.sock_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        mihomo::guard::check_sock_path(p)?;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         catch_disk(|| {
             http_via_unix(
@@ -179,6 +192,8 @@ struct ProxyFetchRequest {
 
 #[tauri::command]
 async fn egress_proxy_fetch(req: ProxyFetchRequest) -> Result<UnixHttpResult, String> {
+    // 0.2.9：只允许应用内置的 https 探针主机（见 mihomo::guard::EGRESS_FETCH_HOSTS）。
+    mihomo::guard::check_egress_fetch_url(&req.url)?;
     let cancel = match req.cancel_id.as_deref() {
         Some(id) => match arm_cancel(id) {
             Some(rx) => Some(rx),
@@ -226,6 +241,7 @@ struct TimedTransferRequest {
 async fn egress_proxy_timed_transfer(
     req: TimedTransferRequest,
 ) -> Result<TimedTransferResult, String> {
+    mihomo::guard::check_egress_timed_url(&req.url)?;
     let cancel = match req.cancel_id.as_deref() {
         Some(id) => match arm_cancel(id) {
             Some(rx) => Some(rx),
