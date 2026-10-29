@@ -97,6 +97,13 @@ pub fn http_via_unix(
     if !std::path::Path::new(sock).exists() {
         return Err(format!("unix socket not found: {sock}"));
     }
+    // 请求行是手写拼接的：方法 / 路径带 CR、LF 或空格会注入额外请求头。
+    super::guard::check_controller_method(method)?;
+    if !path.starts_with('/') || !path.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(format!("invalid request path: {path:?}"));
+    }
+    // 0.2.9：不把当前用户的 secret 发给其他用户拥有的套接字（仅允许本人或 root 拥有）。
+    crate::platform::ensure_sock_owner_trusted(sock)?;
 
     let timeout = Duration::from_millis(timeout_ms);
     let mut stream = UnixStream::connect(sock).map_err(|e| format!("connect {sock}: {e}"))?;

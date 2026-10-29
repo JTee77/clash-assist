@@ -54,6 +54,34 @@ pub fn current_uid() -> u32 {
     0
 }
 
+/// 套接字属主是否可信：本人（euid）或 root（Verge 系统服务）。
+/// 别的普通用户拥有的套接字一律拒绝，避免把当前用户的控制器 secret 发给他人进程。
+#[cfg(unix)]
+pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
+    owner_uid == current || owner_uid == 0
+}
+
+/// 在连接 Unix 套接字、发送 secret 之前检查其属主（跟随符号链接，检查最终目标）。
+#[cfg(unix)]
+pub fn ensure_sock_owner_trusted(sock: &str) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(sock).map_err(|e| format!("stat {sock}: {e}"))?;
+    let owner = meta.uid();
+    let me = current_uid();
+    if sock_owner_trusted(owner, me) {
+        Ok(())
+    } else {
+        Err(format!(
+            "拒绝连接其他用户拥有的套接字 {sock}（属主 uid {owner}，当前 uid {me}）"
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+pub fn ensure_sock_owner_trusted(_sock: &str) -> Result<(), String> {
+    Ok(())
+}
+
 /// `$TMPDIR/verge-mihomo.sock` (or `/tmp/...` when TMPDIR unset).
 pub fn verge_tmpdir_sock() -> String {
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
@@ -68,7 +96,7 @@ pub fn verge_service_sock_for_uid(uid: u32) -> String {
 
 /// Ordered Verge sock candidates (deduped). `yaml_unix_paths` are already expanded.
 ///
-/// Order: service (current uid → other uids under the service dir) → legacy
+/// Order: service (current uid only) → legacy
 /// `/tmp/verge/...` → `$TMPDIR/...` → yaml unix paths → optional extras.
 pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -85,24 +113,8 @@ pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> V
         let uid = current_uid();
         push(verge_service_sock_for_uid(uid));
 
-        // Sibling uids under the service dir (best-effort; ignore permission errors).
-        if let Ok(entries) = std::fs::read_dir(VERGE_SERVICE_USERS_DIR) {
-            let mut others: Vec<String> = entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let name = e.file_name().into_string().ok()?;
-                    let other_uid: u32 = name.parse().ok()?;
-                    if other_uid == uid {
-                        return None;
-                    }
-                    Some(verge_service_sock_for_uid(other_uid))
-                })
-                .collect();
-            others.sort();
-            for p in others {
-                push(p);
-            }
-        }
+        // 0.2.9：不再枚举 service 目录下其他 uid 的套接字——那是别的用户的 mihomo，
+        // 不应把当前用户的 secret 发过去（见 `ensure_sock_owner_trusted`）。
 
         push(VERGE_SOCK_PATH.to_string());
         push(verge_tmpdir_sock());
@@ -255,6 +267,35 @@ mod tests {
                 home.join("Library/Application Support").join(VERGE_REL_CONFIG),
                 "macOS Verge config path must be byte-identical to pre-seam code"
             );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sock_owner_policy() {
+        assert!(sock_owner_trusted(501, 501));
+        assert!(sock_owner_trusted(0, 501));
+        assert!(!sock_owner_trusted(502, 501));
+        assert!(sock_owner_trusted(0, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn own_socket_is_trusted_and_candidates_skip_other_uids() {
+        let dir = std::env::temp_dir().join(format!("ca-sock-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("m.sock");
+        let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(ensure_sock_owner_trusted(sock.to_str().unwrap()).is_ok());
+        assert!(ensure_sock_owner_trusted("/nonexistent/ca.sock").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let me = current_uid();
+        for c in verge_sock_candidates(&[], &[]) {
+            if let Some(rest) = c.strip_prefix(&format!("{VERGE_SERVICE_USERS_DIR}/")) {
+                assert!(rest.starts_with(&format!("{me}/")), "unexpected other-uid candidate {c}");
+            }
         }
     }
 

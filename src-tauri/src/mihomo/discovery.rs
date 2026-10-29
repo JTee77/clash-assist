@@ -215,7 +215,7 @@ fn sock_answers_version(sock: &str, secret: &str) -> bool {
     }
 }
 
-/// Pick first candidate that exists and answers /version; else first existing; else None.
+/// Pick first trusted-owner candidate that exists and answers /version; else first existing trusted one; else None.
 pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String> {
     let mut first_existing: Option<String> = None;
     for cand in candidates {
@@ -225,6 +225,10 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
         }
         let s = p.to_string_lossy().into_owned();
         if !Path::new(&s).exists() {
+            continue;
+        }
+        // 0.2.9：其他普通用户拥有的套接字不作候选（连回落候选也不当）。
+        if crate::platform::ensure_sock_owner_trusted(&s).is_err() {
             continue;
         }
         if first_existing.is_none() {
