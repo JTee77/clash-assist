@@ -24,6 +24,10 @@ futures-util = "0.3"
 # 流式下载的按块空闲超时（tauri 运行时即 tokio，这里只取 time 能力）
 tokio = { version = "1", default-features = false, features = ["time"] }
 sys-locale = "0.3"
+# 自更新：按 WHATWG 规则解析并精确比对 Release 下载地址（替代前缀匹配）。
+url = "2"
+# 自更新：进程内计算 DMG SHA-256（不再依赖 /usr/bin/shasum）。
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 # CLI：Ctrl+C / SIGTERM 时先切回原节点再退出（sigaction / write / _exit）。

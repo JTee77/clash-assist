@@ -617,17 +617,15 @@ fn open_release_page(url: String) -> Result<(), String> {
 }
 
 /// 应用内自更新阶段 1：流式下载最新 .dmg 到临时目录（进度经 update-download-progress 事件推送前端）并校验 SHA-256。
+///
+/// 0.2.9 起不再接受前端传入的下载地址与 SHA-256：Rust 侧自行查询 release 元数据并 fail closed。
 #[tauri::command]
-async fn download_update(
-    app: tauri::AppHandle,
-    dmg_url: Option<String>,
-    dmg_sha256: Option<String>,
-) -> Result<String, String> {
+async fn download_update(app: tauri::AppHandle) -> Result<String, String> {
     use tauri::Emitter;
     let emit = move |p: update_check::DownloadProgress| {
         let _ = app.emit(update_check::DOWNLOAD_PROGRESS_EVENT, p);
     };
-    update_check::download_to_staging(&emit, dmg_url, dmg_sha256).await
+    update_check::download_to_staging(&emit).await
 }
 
 /// 应用内自更新阶段 2：后台静默挂载 .dmg、清除隔离属性并替换当前 .app（不强行退出）。

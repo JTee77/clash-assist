@@ -79,39 +79,168 @@ fn normalize(v: &str) -> String {
     v.trim().trim_start_matches(['v', 'V']).to_string()
 }
 
-/// 校验 DMG 下载地址：只允许来自本项目 GitHub Releases 下载前缀且以 `.dmg` 结尾。
-pub fn validate_dmg_url(url: &str) -> Result<(), String> {
-    let trimmed = url.trim();
-    if !trimmed.starts_with(DOWNLOAD_PREFIX) || !trimmed.to_ascii_lowercase().ends_with(".dmg") {
-        return Err("只允许下载本项目 GitHub Releases 下的 .dmg 安装包".into());
+const REPO_OWNER: &str = "JTee77";
+const REPO_NAME: &str = "clash-assist";
+
+/// 原始字符串层面的预检：拒绝 `..`、反斜杠、控制字符与百分号编码的 `.` `/` `\\`。
+/// 必须在 URL 解析之前做——解析器会把 `%2e%2e` 之类的编码形式规范化掉，事后再查就晚了。
+fn reject_suspicious_raw(raw: &str) -> Result<(), String> {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("..")
+        || lower.contains('\\')
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+        || lower.contains("%00")
+        || raw.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err("地址包含不允许的字符或路径穿越片段".into());
     }
     Ok(())
 }
 
-/// 从 GitHub Release JSON 的 `assets` 数组中提取 `.dmg` 下载直链与可选的 `sha256:...` 摘要。
+/// 解析为 `https://github.com/...`：协议、主机、端口、用户信息、查询串、片段全部精确限定。
+fn parse_pinned_github_url(raw: &str) -> Result<url::Url, String> {
+    reject_suspicious_raw(raw)?;
+    let u = url::Url::parse(raw).map_err(|_| "地址无法解析".to_string())?;
+    if u.scheme() != "https"
+        || u.host_str() != Some("github.com")
+        || u.port().is_some()
+        || !u.username().is_empty()
+        || u.password().is_some()
+        || u.query().is_some()
+        || u.fragment().is_some()
+    {
+        return Err("只允许 https://github.com 下的本项目地址".into());
+    }
+    Ok(u)
+}
+
+/// 路径段（tag / 文件名）只允许 `[A-Za-z0-9._-]`，且不能是 `.` / `..` 或以 `.` 开头。
+fn is_safe_segment(seg: &str) -> bool {
+    !seg.is_empty()
+        && !seg.starts_with('.')
+        && seg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+/// 校验 DMG 下载地址：解析后精确比对，必须是
+/// `https://github.com/JTee77/clash-assist/releases/download/<tag>/<文件名>.dmg`
+/// （owner / repo 逐段精确相等，不接受前缀相似、编码绕过、`..` 或其他主机）。
+pub fn validate_dmg_url(url: &str) -> Result<(), String> {
+    const ERR: &str = "只允许下载本项目 GitHub Releases 下的 .dmg 安装包";
+    let u = parse_pinned_github_url(url.trim()).map_err(|_| ERR.to_string())?;
+    let segs: Vec<&str> = u.path().split('/').collect();
+    // path 以 "/" 开头，split 的第一段是空串。
+    match segs.as_slice() {
+        ["", owner, repo, "releases", "download", tag, file]
+            if *owner == REPO_OWNER
+                && *repo == REPO_NAME
+                && is_safe_segment(tag)
+                && is_safe_segment(file)
+                && file.to_ascii_lowercase().ends_with(".dmg") =>
+        {
+            Ok(())
+        }
+        _ => Err(ERR.into()),
+    }
+}
+
+/// 校验 release 页面地址：`https://github.com/JTee77/clash-assist/releases`、
+/// `.../releases/latest` 或 `.../releases/tag/<tag>`，其余一律拒绝。
+pub fn validate_release_page_url(url: &str) -> Result<(), String> {
+    const ERR: &str = "只允许打开本项目的 release 页面";
+    let u = parse_pinned_github_url(url.trim()).map_err(|_| ERR.to_string())?;
+    let path = u.path().trim_end_matches('/');
+    let segs: Vec<&str> = path.split('/').collect();
+    let ok = match segs.as_slice() {
+        ["", owner, repo, "releases"] => *owner == REPO_OWNER && *repo == REPO_NAME,
+        ["", owner, repo, "releases", "latest"] => *owner == REPO_OWNER && *repo == REPO_NAME,
+        ["", owner, repo, "releases", "tag", tag] => {
+            *owner == REPO_OWNER && *repo == REPO_NAME && is_safe_segment(tag)
+        }
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(ERR.into())
+    }
+}
+
+/// 规范化 GitHub asset `digest`：只接受 `sha256:<64 位十六进制>`（或裸 64 位十六进制），返回小写十六进制。
+pub fn normalize_sha256_digest(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let hex = raw
+        .strip_prefix("sha256:")
+        .or_else(|| raw.strip_prefix("SHA256:"))
+        .unwrap_or(raw)
+        .trim()
+        .to_ascii_lowercase();
+    if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(hex)
+    } else {
+        None
+    }
+}
+
+/// 从 GitHub Release JSON 的 `assets` 数组中提取 `.dmg` 下载直链与 `sha256:...` 摘要。
+/// 直链必须指向本项目、且 tag 段与 release `tag_name` 一致、文件名与 asset `name` 一致；
+/// 摘要格式不合法时视为缺失（下载阶段会因此拒绝，见 [`resolve_download_target`]）。
 pub fn parse_release_dmg_asset(v: &serde_json::Value) -> (Option<String>, Option<String>) {
     let Some(assets) = v["assets"].as_array() else {
         return (None, None);
     };
+    let tag = v["tag_name"].as_str().unwrap_or("");
     for asset in assets {
         let name = asset["name"].as_str().unwrap_or("");
         if !name.to_ascii_lowercase().ends_with(".dmg") {
             continue;
         }
-        let dl = asset["browser_download_url"]
-            .as_str()
-            .or_else(|| asset["url"].as_str())
-            .unwrap_or("");
-        if validate_dmg_url(dl).is_ok() {
-            let digest = asset["digest"]
-                .as_str()
-                .map(str::trim)
-                .filter(|d| !d.is_empty())
-                .map(str::to_string);
-            return (Some(dl.to_string()), digest);
+        let dl = asset["browser_download_url"].as_str().unwrap_or("");
+        if validate_dmg_url(dl).is_err() {
+            continue;
         }
+        if !tag.is_empty() {
+            let expected_suffix = format!("/releases/download/{tag}/{name}");
+            if !dl.ends_with(&expected_suffix) {
+                continue;
+            }
+        }
+        let digest = asset["digest"]
+            .as_str()
+            .and_then(normalize_sha256_digest)
+            .map(|hex| format!("sha256:{hex}"));
+        return (Some(dl.to_string()), digest);
     }
     (None, None)
+}
+
+/// 下载阶段的目标：由 Rust 侧自己从 release 元数据解析得到，不接受前端传入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadTarget {
+    pub url: String,
+    /// 小写 64 位十六进制
+    pub sha256: String,
+}
+
+/// 从一次 `check` 的结果确定下载目标。fail closed：没有更新、没有 .dmg、没有合法摘要都拒绝。
+pub fn resolve_download_target(info: &UpdateInfo) -> Result<DownloadTarget, String> {
+    if !info.update_available {
+        return Err("当前已是最新版本，无需下载".into());
+    }
+    let url = info
+        .dmg_url
+        .clone()
+        .ok_or_else(|| "最新 Release 中未找到 .dmg 安装包".to_string())?;
+    validate_dmg_url(&url)?;
+    let sha256 = info
+        .dmg_sha256
+        .as_deref()
+        .and_then(normalize_sha256_digest)
+        .ok_or_else(|| "最新 Release 未提供安装包 SHA-256 摘要，为安全起见已停止一键更新，请前往下载页手动更新".to_string())?;
+    Ok(DownloadTarget { url, sha256 })
 }
 
 /// 检测本机可能正在监听的代理混合端口（Verge 7897 / FlClash 7890），用于加速 GitHub API 与 Release 下载。
@@ -143,7 +272,17 @@ fn build_http_client(
 ) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(connect_ms))
-        .user_agent(format!("clash-assist/{current}"));
+        .user_agent(format!("clash-assist/{current}"))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            // Release 资产会从 github.com 302 到 *.githubusercontent.com；只跟随 https 且仍在 GitHub 域内的跳转。
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else if is_allowed_github_redirect(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error("redirect target not allowed")
+            }
+        }));
     if let Some(ms) = timeout_ms {
         builder = builder.timeout(Duration::from_millis(ms));
     }
@@ -153,6 +292,20 @@ fn build_http_client(
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(|e| format!("http client: {e}"))
+}
+
+/// 更新链路允许的跳转目标：https + github.com / api.github.com / *.githubusercontent.com，无自定义端口。
+fn is_allowed_github_redirect(u: &url::Url) -> bool {
+    if u.scheme() != "https" || u.port().is_some() {
+        return false;
+    }
+    match u.host_str() {
+        Some(h) => {
+            let h = h.to_ascii_lowercase();
+            h == "github.com" || h == "api.github.com" || h.ends_with(".githubusercontent.com")
+        }
+        None => false,
+    }
 }
 
 async fn get_bytes_with_proxy_fallback(
@@ -341,7 +494,7 @@ pub async fn check(current: &str) -> Result<UpdateInfo, String> {
     }
     let url = v["html_url"]
         .as_str()
-        .filter(|u| u.starts_with("https://github.com/"))
+        .filter(|u| validate_release_page_url(u).is_ok())
         .map(str::to_string)
         .unwrap_or_else(|| format!("{RELEASES_PAGE}/tag/{tag}"));
     let (dmg_url, dmg_sha256) = parse_release_dmg_asset(&v);
@@ -412,34 +565,32 @@ pub fn resolve_target_app_bundle(exe_path: &Path) -> Result<PathBuf, String> {
     Err("当前为开发模式运行（非 .app 应用包），无法原地替换；请前往下载页更新".into())
 }
 
-/// 使用系统 `/usr/bin/shasum -a 256` 校验下载的 DMG 文件完整性（若 GitHub Release 提供了 `sha256:...` 摘要）。
+/// 进程内计算并校验下载的 DMG 文件 SHA-256。fail closed：未提供摘要或摘要格式不合法时一律报错。
 pub fn verify_sha256_file(path: &Path, expected_digest: Option<&str>) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
     let Some(raw) = expected_digest.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(());
+        return Err("缺少安装包 SHA-256 摘要，拒绝安装未校验的更新包".into());
     };
-    let expected = raw
-        .strip_prefix("sha256:")
-        .or_else(|| raw.strip_prefix("SHA256:"))
-        .unwrap_or(raw)
-        .trim()
-        .to_ascii_lowercase();
-    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(format!("无效的 SHA-256 摘要格式：{raw}"));
+    let expected = normalize_sha256_digest(raw).ok_or_else(|| format!("无效的 SHA-256 摘要格式：{raw}"))?;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("打开安装包失败：{e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取安装包失败：{e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
     }
-    let out = Command::new("/usr/bin/shasum")
-        .args(["-a", "256"])
-        .arg(path)
-        .output()
-        .map_err(|e| format!("调用 shasum 失败：{e}"))?;
-    if !out.status.success() {
-        return Err("计算安装包 SHA-256 失败".into());
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let actual = stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if actual != expected {
         return Err(format!(
             "安装包 SHA-256 校验不匹配（期望 {expected}，实际 {actual}）"
@@ -614,26 +765,18 @@ fn staging_base_dir() -> PathBuf {
 }
 
 /// 阶段 1（下载）：流式下载最新 `.dmg` 到独立临时目录（进度经回调上报，lib.rs 负责 emit），完成后做 SHA-256 校验，返回临时工作目录路径。
-pub async fn download_to_staging(
-    on_progress: ProgressCallback<'_>,
-    dmg_url: Option<String>,
-    dmg_sha256: Option<String>,
-) -> Result<String, String> {
+///
+/// 下载地址与期望摘要只由 Rust 侧重新查询 GitHub release 元数据得到（[`resolve_download_target`]），
+/// 不接受前端传入；release 未提供摘要时 fail closed，引导用户去下载页手动更新。
+pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let _target_app = resolve_target_app_bundle(&exe)?;
 
-    let (resolved_url, resolved_sha) = match dmg_url.filter(|u| !u.trim().is_empty()) {
-        Some(u) => (u, dmg_sha256),
-        None => {
-            let info = check(env!("CARGO_PKG_VERSION")).await?;
-            let u = info
-                .dmg_url
-                .ok_or_else(|| "最新 Release 中未找到 .dmg 安装包".to_string())?;
-            (u, info.dmg_sha256)
-        }
-    };
-
-    validate_dmg_url(&resolved_url)?;
+    let info = check(env!("CARGO_PKG_VERSION")).await?;
+    let DownloadTarget {
+        url: resolved_url,
+        sha256: resolved_sha,
+    } = resolve_download_target(&info)?;
 
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -656,9 +799,8 @@ pub async fn download_to_staging(
     }
 
     let dmg_for_verify = dmg_path.clone();
-    let sha_for_verify = resolved_sha.clone();
     let verify_res = tauri::async_runtime::spawn_blocking(move || {
-        verify_sha256_file(&dmg_for_verify, sha_for_verify.as_deref())
+        verify_sha256_file(&dmg_for_verify, Some(&resolved_sha))
     })
     .await
     .map_err(|e| format!("校验任务异常终止：{e}"))?;
@@ -682,6 +824,17 @@ pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String>
         .and_then(|n| n.to_str())
         .unwrap_or("");
     if !file_name.starts_with("clash-assist-update-") || !work_dir.is_dir() {
+        return Err("无效的临时更新目录".into());
+    }
+    // 只接受 download_to_staging 建在临时目录根下的工作目录（防止前端指向别处同名目录）。
+    let parent_ok = match (
+        work_dir.parent().and_then(|p| p.canonicalize().ok()),
+        staging_base_dir().canonicalize().ok(),
+    ) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    if !parent_ok {
         return Err("无效的临时更新目录".into());
     }
     let dmg_path = work_dir.join("update.dmg");
@@ -778,6 +931,170 @@ mod tests {
             sha.as_deref(),
             Some("sha256:251112b7cd87706978a3ad57b15b3d4191dfacc65fefa8d9b5c36da01482dbdc")
         );
+    }
+
+    const GOOD_DMG: &str =
+        "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/Clash.Assist_0.2.9_aarch64.dmg";
+    const GOOD_SHA: &str = "sha256:251112b7cd87706978a3ad57b15b3d4191dfacc65fefa8d9b5c36da01482dbdc";
+
+    #[test]
+    fn dmg_url_rejects_traversal_and_encoded_variants() {
+        assert!(validate_dmg_url(GOOD_DMG).is_ok());
+        for bad in [
+            // 路径穿越：旧前缀匹配会放行，解析后实际落到其他仓库
+            "https://github.com/JTee77/clash-assist/releases/download/../../../../evil/repo/releases/download/v1/x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/../../../../../evil/x.dmg",
+            // 编码形式的 `.` / `/` / `\`
+            "https://github.com/JTee77/clash-assist/releases/download/%2e%2e/%2e%2e/evil/x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/%2E%2E%2Fevil/x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9%2f..%2fx/x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9%5cx/x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9\\..\\x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/.hidden/x.dmg",
+        ] {
+            assert!(validate_dmg_url(bad).is_err(), "should reject: {bad}");
+        }
+    }
+
+    #[test]
+    fn dmg_url_pins_scheme_host_owner_repo_and_shape() {
+        for bad in [
+            // 其他 owner / repo（含前缀相似）
+            "https://github.com/evil/clash-assist/releases/download/v0.2.9/x.dmg",
+            "https://github.com/JTee77/clash-assist-evil/releases/download/v0.2.9/x.dmg",
+            "https://github.com/jtee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            // http / 其他主机 / 端口 / 用户信息
+            "http://github.com/JTee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            "https://evil.example/JTee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            "https://github.com.evil.example/JTee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            "https://github.com:8443/JTee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            "https://user@github.com/JTee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            "https://github.com@evil.example/JTee77/clash-assist/releases/download/v0.2.9/x.dmg",
+            // 查询串 / 片段 / 额外段 / 非 dmg
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/x.dmg?x=1",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/x.dmg#frag",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/extra/x.dmg",
+            "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/x.sh",
+            "https://github.com/JTee77/clash-assist/archive/v0.2.9/x.dmg",
+            "",
+            "not a url",
+        ] {
+            assert!(validate_dmg_url(bad).is_err(), "should reject: {bad}");
+        }
+    }
+
+    #[test]
+    fn release_page_url_validation() {
+        for ok in [
+            "https://github.com/JTee77/clash-assist/releases",
+            "https://github.com/JTee77/clash-assist/releases/",
+            "https://github.com/JTee77/clash-assist/releases/latest",
+            "https://github.com/JTee77/clash-assist/releases/tag/v0.2.9",
+        ] {
+            assert!(validate_release_page_url(ok).is_ok(), "should accept: {ok}");
+        }
+        for bad in [
+            "https://github.com/JTee77/clash-assist/releasesX",
+            "https://github.com/JTee77/clash-assist/releases/../../evil/repo",
+            "https://github.com/JTee77/clash-assist/releases/%2e%2e/%2e%2e/evil",
+            "https://github.com/JTee77/clash-assist/releases/tag/v1&calc.exe",
+            "https://github.com/JTee77/clash-assist/releases?x=1",
+            "https://github.com/JTee77/clash-assist/releases.evil.example/",
+            "http://github.com/JTee77/clash-assist/releases",
+            "https://github.com/other/repo/releases",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+        ] {
+            assert!(validate_release_page_url(bad).is_err(), "should reject: {bad}");
+        }
+    }
+
+    #[test]
+    fn release_asset_must_match_tag_and_name() {
+        let mismatched_tag = serde_json::json!({
+            "tag_name": "v0.2.9",
+            "assets": [{
+                "name": "Clash.Assist_0.2.9_aarch64.dmg",
+                "browser_download_url": "https://github.com/JTee77/clash-assist/releases/download/v0.1.0/Clash.Assist_0.2.9_aarch64.dmg",
+                "digest": GOOD_SHA
+            }]
+        });
+        assert_eq!(parse_release_dmg_asset(&mismatched_tag), (None, None));
+
+        // 只有 API `url` 字段（非 browser_download_url）不再被当作下载直链
+        let api_url_only = serde_json::json!({
+            "tag_name": "v0.2.9",
+            "assets": [{ "name": "Clash.Assist_0.2.9_aarch64.dmg", "url": GOOD_DMG, "digest": GOOD_SHA }]
+        });
+        assert_eq!(parse_release_dmg_asset(&api_url_only), (None, None));
+
+        // 摘要格式不合法视为缺失
+        let bad_digest = serde_json::json!({
+            "tag_name": "v0.2.9",
+            "assets": [{ "name": "Clash.Assist_0.2.9_aarch64.dmg", "browser_download_url": GOOD_DMG, "digest": "md5:abc" }]
+        });
+        assert_eq!(parse_release_dmg_asset(&bad_digest), (Some(GOOD_DMG.into()), None));
+    }
+
+    fn info(update_available: bool, dmg_url: Option<&str>, sha: Option<&str>) -> UpdateInfo {
+        UpdateInfo {
+            current: "0.2.8".into(),
+            latest: "0.2.9".into(),
+            update_available,
+            url: format!("{RELEASES_PAGE}/tag/v0.2.9"),
+            fake: false,
+            dmg_url: dmg_url.map(str::to_string),
+            dmg_sha256: sha.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn download_target_fails_closed_without_digest() {
+        let ok = resolve_download_target(&info(true, Some(GOOD_DMG), Some(GOOD_SHA))).unwrap();
+        assert_eq!(ok.url, GOOD_DMG);
+        assert_eq!(ok.sha256, GOOD_SHA.trim_start_matches("sha256:"));
+
+        let no_digest = resolve_download_target(&info(true, Some(GOOD_DMG), None)).unwrap_err();
+        assert!(no_digest.contains("SHA-256"), "{no_digest}");
+        assert!(resolve_download_target(&info(true, Some(GOOD_DMG), Some(""))).is_err());
+        assert!(resolve_download_target(&info(true, Some(GOOD_DMG), Some("sha256:xyz"))).is_err());
+        assert!(resolve_download_target(&info(true, None, Some(GOOD_SHA))).is_err());
+        assert!(resolve_download_target(&info(false, Some(GOOD_DMG), Some(GOOD_SHA))).is_err());
+        assert!(resolve_download_target(&info(
+            true,
+            Some("https://evil.example/x.dmg"),
+            Some(GOOD_SHA)
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn verify_sha256_file_fails_closed_and_matches() {
+        let dir = std::env::temp_dir().join(format!("clash-assist-sha-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("x.bin");
+        std::fs::write(&f, b"abc").unwrap();
+        // sha256("abc")
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(verify_sha256_file(&f, None).is_err());
+        assert!(verify_sha256_file(&f, Some("")).is_err());
+        assert!(verify_sha256_file(&f, Some("sha256:nothex")).is_err());
+        assert!(verify_sha256_file(&f, Some(GOOD_SHA)).is_err());
+        assert!(verify_sha256_file(&f, Some(abc)).is_ok());
+        assert!(verify_sha256_file(&f, Some(&format!("sha256:{}", abc.to_uppercase()))).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redirect_targets_limited_to_github_https() {
+        let ok = |s: &str| is_allowed_github_redirect(&url::Url::parse(s).unwrap());
+        assert!(ok("https://release-assets.githubusercontent.com/x"));
+        assert!(ok("https://objects.githubusercontent.com/x"));
+        assert!(ok("https://github.com/x"));
+        assert!(!ok("http://objects.githubusercontent.com/x"));
+        assert!(!ok("https://evil.example/x"));
+        assert!(!ok("https://githubusercontent.com.evil.example/x"));
+        assert!(!ok("https://objects.githubusercontent.com:444/x"));
     }
 
     #[test]

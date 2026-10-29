@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   applyUpdate,
   checkUpdateOnce,
+  canOneClick,
   downloadUpdate,
   openReleasePage,
   relaunchUpdatedApp,
@@ -87,7 +88,7 @@ export function TitleBar() {
       }
       return;
     }
-    if (!update.dmg_url || stage === "fallback") {
+    if (!canOneClick(update) || stage === "fallback") {
       void openReleasePage(update.url);
       return;
     }
@@ -95,7 +96,7 @@ export function TitleBar() {
     setStage("downloading");
     setFallbackError(null);
     try {
-      const workDir = await downloadUpdate(update);
+      const workDir = await downloadUpdate();
       setStage("installing");
       await applyUpdate(workDir);
       setStage("ready");
@@ -150,7 +151,7 @@ export function TitleBar() {
             >
               {stage === "ready"
                 ? t("update.relaunch")
-                : update.dmg_url && stage !== "fallback"
+                : canOneClick(update) && stage !== "fallback"
                   ? t("update.install")
                   : t("update.go")}
             </button>
