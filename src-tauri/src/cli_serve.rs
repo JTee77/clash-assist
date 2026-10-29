@@ -358,6 +358,12 @@ fn accept_loop(listener: TcpListener, inner: Arc<ServeInner>) {
 }
 
 fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), String> {
+    // macOS/BSD 上 accept 出的连接继承监听 socket 的 O_NONBLOCK（accept_loop 需要
+    // 监听非阻塞来轮询 shutdown）。不清掉的话，下面的读写超时形同虚设：请求字节
+    // 未到时的首次 read 立即 EAGAIN，连接被误丢（CI 实测 os error 35）。
+    stream
+        .set_nonblocking(false)
+        .map_err(|e| format!("clear inherited nonblocking: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .ok();
@@ -713,6 +719,43 @@ mod tests {
             ),
         );
         assert_eq!(st, 405, "{body}");
+
+        serve_stop().unwrap();
+    }
+
+    /// 锁定 0.2.8 发布前 CI 抓到的生产缺陷：serve 的监听 socket 是非阻塞的
+    /// （accept_loop 靠它轮询 shutdown），而 macOS/BSD 上 accept 出的连接会
+    /// **继承** O_NONBLOCK——`handle_connection` 虽设了 30s 读超时，非阻塞 fd 下
+    /// 超时并不生效，请求字节尚未到达的首次 read 立即返回 EAGAIN（os error 35），
+    /// 连接被当作「读请求失败」丢弃，客户端拿到空响应（状态 0）。
+    /// 本测试用「握手后延迟 250ms 再发」的客户端确定性踩中该窗口：修复前必挂。
+    #[test]
+    fn live_request_after_connect_delay_is_answered() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = serve_stop();
+        let info = serve_start(0).expect("start");
+        let addr = format!("127.0.0.1:{}", info.port);
+
+        let mut client = StdTcpStream::connect(&addr).expect("connect");
+        std::thread::sleep(Duration::from_millis(250));
+        client
+            .write_all(
+                b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            )
+            .expect("write");
+        let mut buf = Vec::new();
+        client.read_to_end(&mut buf).expect("read");
+        let text = String::from_utf8_lossy(&buf).to_string();
+        let status: u16 = text
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            status, 401,
+            "延迟到达的请求也必须被应答，而不是被 EAGAIN 丢弃：{text:?}"
+        );
 
         serve_stop().unwrap();
     }
