@@ -363,8 +363,6 @@ export const EN_RULES: [string, string][] = [
   ["读取 /rules 未授权（401/403）", "Reading /rules unauthorized (401/403)"],
   ["读取 /rules 失败（HTTP {0}）", "Reading /rules failed (HTTP {0})"],
   ["选好后点刷新，按该软件自动连接", "After choosing, click Refresh nodes to connect automatically"],
-  ["FlClash（即将支持）", "FlClash (coming soon)"],
-  ["即将支持，暂不可选", "Coming soon, not selectable yet"],
   ["请先打开并连上【{0}】，再点「刷新节点」", "Open and connect “{0}” first, then click “Refresh nodes”"],
   ["尚未检测连接", "Connection not checked yet"],
   ["已启用 Mock 演示模式（未连接真实软件）", "Mock demo mode on (no real app connected)"],
