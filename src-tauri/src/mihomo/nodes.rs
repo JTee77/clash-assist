@@ -466,9 +466,46 @@ mod tests {
         worker: Option<std::thread::JoinHandle<()>>,
     }
 
+    /// Read one HTTP request from an accepted controller stream and return its
+    /// request line. The listener is nonblocking (so the accept loop can poll the
+    /// stop flag), and on macOS/BSD the accepted socket *inherits* that nonblocking
+    /// flag: a read issued before the request bytes arrive returns `WouldBlock`
+    /// immediately, which the loop below treats as fatal and breaks on — yielding an
+    /// empty request line and a spurious 405. That inherited flag is the CI flake.
+    /// Fix: explicitly put the accepted stream back into blocking mode; `WouldBlock`
+    /// then only surfaces at the 2s read timeout (a genuinely silent peer), which the
+    /// existing break-on-error path already handles without hanging teardown.
+    fn read_request_line(stream: &mut std::net::TcpStream) -> Option<String> {
+        use std::io::Read;
+        stream
+            .set_nonblocking(false)
+            .unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0; 1024];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => request.extend_from_slice(&buf[..n]),
+            }
+        }
+        let line = String::from_utf8_lossy(&request)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        if line.is_empty() {
+            None
+        } else {
+            Some(line)
+        }
+    }
+
     impl ProviderController {
         fn start(providers_status: u16, providers_body: &str) -> Self {
-            use std::io::{Read, Write};
+            use std::io::Write;
             use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -483,16 +520,7 @@ mod tests {
                         std::thread::sleep(std::time::Duration::from_millis(5));
                         continue;
                     };
-                    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
-                    let mut request = Vec::new();
-                    let mut buf = [0; 1024];
-                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                        match stream.read(&mut buf) {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => request.extend_from_slice(&buf[..n]),
-                        }
-                    }
-                    let line = String::from_utf8_lossy(&request).lines().next().unwrap_or("").to_string();
+                    let line = read_request_line(&mut stream).unwrap_or_default();
                     seen.lock().unwrap().push(line.clone());
                     let (status, body) = if line.starts_with("GET /proxies ") {
                         (200, r#"{"proxies":{"Proxy":{"type":"Selector","now":"provider-a","all":["static-a","provider-a"]},"static-a":{"type":"Shadowsocks"}}}"#)
@@ -531,6 +559,50 @@ mod tests {
         assert_eq!(result.groups[0].all, vec!["static-a".to_string(), "provider-a".to_string()]);
         assert!(result.error.is_none());
         assert_eq!(*controller.requests.lock().unwrap(), vec!["GET /proxies HTTP/1.1", "GET /providers/proxies HTTP/1.1"]);
+    }
+
+    /// 锁定 CI flaky 根因：夹具监听 socket 是非阻塞的，macOS/BSD 上 accept 出来的
+    /// 连接会**继承**这个非阻塞标志。若客户端 TCP 握手后延迟发送、worker 抢在请求字节
+    /// 到达前就 read()，读会立即返回 WouldBlock；旧逻辑把它当作致命错误 break，于是
+    /// 拿到空请求行 → 夹具回 405 → `list_nodes_async` 落 Unix 兜底 → 报「TCP 不可用」
+    /// 并 unwrap 炸——这正是「连接在数毫秒内立即失败、而非 1500ms 超时」的 CI 现象。
+    /// 本测试用一个「先连接、后延迟发送」的客户端确定性地复现这条竞态。
+    #[test]
+    fn read_request_line_survives_wouldblock_before_body_arrives() {
+        use std::io::Write;
+        use std::net::TcpStream;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let (tx, rx) = mpsc::channel::<Option<String>>();
+        let worker = std::thread::spawn(move || {
+            let mut accepted = loop {
+                match listener.accept() {
+                    Ok((s, _)) => break s,
+                    Err(_) => std::thread::sleep(Duration::from_millis(1)),
+                }
+            };
+            let _ = tx.send(read_request_line(&mut accepted));
+        });
+
+        // 先完成握手；worker 会 accept 并在数据到达前 read；延迟后才发出请求行。
+        let client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let mut client = client;
+        let _ = client.write_all(b"GET /proxies HTTP/1.1\r\n\r\n");
+
+        let line = rx.recv().unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            line.as_deref(),
+            Some("GET /proxies HTTP/1.1"),
+            "accept 后的连接继承了监听 socket 的非阻塞标志：请求字节尚未到达时首次 read \
+             返回 WouldBlock 被当作致命错误，导致夹具拿到空请求行并回 405（CI flaky 根因）"
+        );
     }
 
     #[test]
