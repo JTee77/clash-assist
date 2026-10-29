@@ -8,7 +8,7 @@ Ping numbers inside a proxy client often look great on paper, even when a node i
 
 - ⭐ **Instant Star Ratings (1–5 Stars)**: Automatically ranks tested nodes from best to worst so you can spot your most reliable daily-driver nodes at a glance.
 - 🤖 **AI & Streaming Unlock Checks**: Tests whether each node works with **ChatGPT** and **Gemini**, and checks unlock status + region for **Netflix, YouTube, Disney+, TikTok, Spotify**, and more.
-- 🚀 **Real Download Speed & IP Quality**: Measures actual download bandwidth and latency, and identifies the exit country and IP type (Residential vs. Hosting/Datacenter).
+- 🚀 **Real Download Speed & IP Quality**: Measures actual download bandwidth and latency, identifies the exit country, and infers the IP type from organization info — labeled honestly in the UI as “Likely datacenter (DCH)” or “Residential (ISP)”.
 - 🛡️ **Privacy & Leak Check**: One-click check to verify whether your setup is accidentally leaking your real IP or DNS, and whether domestic/overseas split routing works as expected.
 - 🔍 **Region Filter & Auto-Saved Results**: Filter by region (e.g., Japan, Hong Kong) or keyword to test only the nodes you care about. Test results are saved automatically so they are ready the next time you open the app.
 
@@ -34,7 +34,7 @@ Because the app is signed locally (ad-hoc) rather than notarized with a paid $99
 
 ### About the “Local Network” Permission Prompt
 
-The first time you run **Environment Leak Check**, macOS may ask for **Local Network** access. This is used by the DNS and WebRTC leak checks to inspect your local router/system DNS resolver. Node testing works even if you decline.
+The first time you run **Environment leak check**, macOS may ask for **Local Network** access. This is used by the DNS and WebRTC leak checks to inspect your local router/system DNS resolver. Node testing works even if you decline.
 
 ---
 
@@ -42,7 +42,7 @@ The first time you run **Environment Leak Check**, macOS may ask for **Local Net
 
 1. Open **Clash Verge** or **FlClash** and connect to a node as usual.
    - *If you use **FlClash**, first enable **“External Controller”** in FlClash under **Settings → General → Inbound**.*
-2. Open **Clash Assist**, pick your client at the top, and click **“Refresh nodes”**.
+2. Open **Clash Assist** — it automatically detects the client you're running and loads your nodes. If detection fails, choose your client under “Which app do you use?” at the top, then click **“Refresh nodes”**.
 3. From there, you can:
    - Click **“Test”** on any single node card to run a full check on that node; or
    - Filter by region/keyword and click **“Test filtered” / “Test all nodes”** — Clash Assist will test them one by one, rate each node, and automatically switch back to your original node when finished.
