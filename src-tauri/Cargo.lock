@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "clash-assist"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "dirs",
  "futures-util",
