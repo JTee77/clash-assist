@@ -155,6 +155,9 @@ $SidUsers = 'S-1-5-32-545'
 $TaskPrefix = 'ca-spike-'
 $BatchRight = 'SeBatchLogonRight'
 $StartWaitSec = 30
+# 新用户首次经计划任务登录要先建配置文件，windows-2022 上实测超过 30 秒（MUST-4 回放首跑）；
+# 等到 pid.txt 出现即返回，所以放宽上限不拖慢正常启动
+$TaskStartWaitSec = 120
 $TaskTimeLimitMin = 30
 
 if (-not $StateDir) {
@@ -631,8 +634,8 @@ function Invoke-Start {
 
   if (-not $used) {
     $taskName = Start-ViaScheduledTask $As $rec $jobDir $Label
-    if (-not (Wait-ForFile $pidFile $StartWaitSec)) {
-      throw "以 $As 身份启动失败（ScheduledTask，$StartWaitSec 秒内无 pid.txt）；任务状态：$((Get-ScheduledTask -TaskName $taskName).State)"
+    if (-not (Wait-ForFile $pidFile $TaskStartWaitSec)) {
+      throw "以 $As 身份启动失败（ScheduledTask，$TaskStartWaitSec 秒内无 pid.txt）；任务状态：$((Get-ScheduledTask -TaskName $taskName).State)"
     }
     $used = 'ScheduledTask'
   }
