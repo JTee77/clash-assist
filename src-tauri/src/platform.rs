@@ -428,7 +428,9 @@ mod tests {
             // legacy path appears only once even though also in yaml
             assert_eq!(c.iter().filter(|p| p.as_str() == VERGE_SOCK_PATH).count(), 1);
         } else {
-            assert_eq!(c, vec!["/custom/from-yaml.sock".to_string()]);
+            // 非 Unix：没有内置的 service / legacy / TMPDIR 候选，只原样透传 yaml 路径。
+            // （Windows 上这些候选随后在 select_working_sock 中一律判为不可用。）
+            assert_eq!(c, yaml);
         }
     }
 
