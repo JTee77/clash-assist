@@ -1,0 +1,39 @@
+# V5 pipe spike 探针（windows-plan r4 §4.1）。
+# 独立 crate：自带空 [workspace] 表，不属于 src-tauri，也不影响主应用的 cargo 构建与 Cargo.lock。
+# 该分支（win/v5-pipe-spike）永不合并到 main。
+[package]
+name = "pipe-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "V5 spike probe: records named-pipe / TCP-listener identity facts as JSON; never decides allow/deny"
+
+[workspace]
+
+[[bin]]
+name = "pipe-probe"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+# 与主仓库 src-tauri/Cargo.lock 中的版本完全一致（tokio 1.53.1、windows-sys 0.61.2），用 `=` 锁死。
+[target.'cfg(windows)'.dependencies]
+tokio = { version = "=1.53.1", default-features = false, features = ["rt", "net", "io-util", "time"] }
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",                       # HANDLE、错误码、LocalFree、UNICODE_STRING、NTSTATUS
+  "Win32_Security",                         # SID、TokenUser、TokenElevation、ACL/ACE、SECURITY_ATTRIBUTES
+  "Win32_Security_Authorization",           # GetSecurityInfo、SetSecurityInfo、SDDL 转换
+  "Win32_Storage_FileSystem",               # SECURITY_ANONYMOUS
+  "Win32_System_Pipes",                     # GetNamedPipeServerProcessId / ClientProcessId
+  "Win32_System_Threading",                 # OpenProcess、QueryFullProcessImageNameW、OpenProcessToken
+  "Win32_System_Diagnostics_ToolHelp",      # L2 ③ CreateToolhelp32Snapshot
+  "Win32_System_RemoteDesktop",             # WTSEnumerateProcessesExW（level 1）
+  "Win32_NetworkManagement_IpHelper",       # GetExtendedTcpTable
+  "Win32_Networking_WinSock",               # AF_INET / AF_INET6
+  "Wdk_System_SystemInformation",           # L2 ② NtQuerySystemInformation
+] }
+
+[profile.release]
+debug = false
+strip = "symbols"
