@@ -315,6 +315,7 @@ mod tests {
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
+                #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
                 if path.is_dir() {
                     stack.push(path);
                     continue;
@@ -323,6 +324,7 @@ mod tests {
                 if !name.ends_with(".ts") || name.contains(".test.") {
                     continue;
                 }
+                #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
                 let src = std::fs::read_to_string(&path).unwrap();
                 for cap in re.captures_iter(&src) {
                     let host = cap[1].to_ascii_lowercase();

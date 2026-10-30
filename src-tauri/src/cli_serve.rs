@@ -109,6 +109,7 @@ pub fn generate_token() -> Result<String, String> {
 fn fill_random(buf: &mut [u8]) -> Result<(), String> {
     use std::fs::File;
     use std::io::Read as _;
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
     let mut f = File::open("/dev/urandom").map_err(|e| format!("打开 /dev/urandom 失败：{e}"))?;
     f.read_exact(buf)
         .map_err(|e| format!("读取 /dev/urandom 失败：{e}"))?;

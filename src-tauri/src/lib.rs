@@ -356,6 +356,7 @@ fn append_app_log(msg: &str) {
         return;
     }
     let path = dir.join("app.log");
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 存量日志追加打开，M1 改用安全打开封装（S-R1）")]
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

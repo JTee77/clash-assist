@@ -120,6 +120,7 @@ pub fn http_via_unix(
     let sock = sock_path.ok_or_else(|| {
         "unix socket path not provided (refusing Verge default for non-Verge clients)".to_string()
     })?;
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
     if !std::path::Path::new(sock).exists() {
         return Err(format!("unix socket not found: {sock}"));
     }
