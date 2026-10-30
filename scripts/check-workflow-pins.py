@@ -10,8 +10,11 @@
      composite action 的 runs.steps）都必须是字符串，且为下列之一：
        - owner/repo[/path]@<40 位小写十六进制 commit SHA>
        - docker://image@sha256:<64 位十六进制 digest>
-       - 本地 action / workflow：以 `./` 开头，路径中不得含 `..` 段，
-         规范化（含符号链接解析）后必须仍在仓库根目录内
+       - 本地 action / workflow：必须以 `./.github/` 开头，路径中不得含 `..` 段，
+         用 realpath 解析符号链接后必须仍在仓库的 .github 目录内（PR #46 r2 MR-2）
+     本地引用会被递归检查：action 目录下的 action.yml / action.yaml、或被调用的
+     reusable workflow 文件，按同样规则再检查一遍（即使引用本身已违规，只要目标
+     仍在仓库内也会继续检查，以便一次报全）。找不到 action.yml / action.yaml 视为违规。
   2. workflow（位于 workflows/ 目录下或含 `jobs` 键的文档）的触发器中
      禁止 pull_request_target 与 workflow_run。PyYAML 按 YAML 1.1 会把键 `on`
      解析成布尔 True，两种形式都检查。
@@ -35,6 +38,7 @@ except ImportError:  # pragma: no cover - 环境问题直接失败，不静默�
 
 SHA_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[^@\s]+)?@[0-9a-f]{40}$")
 DOCKER_RE = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+LOCAL_PREFIX = "./.github/"
 BANNED_TRIGGERS = ("pull_request_target", "workflow_run")
 
 
@@ -80,26 +84,50 @@ def collect_files(paths):
     return sorted(files)
 
 
+def _inside(path, root):
+    return path == root or path.startswith(root + os.sep)
+
+
 def check_local(ref, repo_root):
+    """返回 (错误列表, 需要递归检查的文件 realpath 或 None)。"""
+    errs = []
     rel = ref[2:]
     segments = rel.replace("\\", "/").split("/")
     if not rel or ".." in segments:
-        return "本地路径不得为空或包含 `..` 段"
+        return ["本地路径不得为空或包含 `..` 段"], None
+    if not ref.startswith(LOCAL_PREFIX):
+        errs.append(f"本地 action / workflow 只允许位于 {LOCAL_PREFIX} 下")
     root = os.path.realpath(repo_root)
+    gh_root = os.path.join(root, ".github")
     target = os.path.realpath(os.path.join(root, rel))
-    if target != root and not target.startswith(root + os.sep):
-        return "本地路径解析后不在仓库内"
-    return None
+    if not _inside(target, root):
+        return errs + ["本地路径解析后不在仓库内"], None
+    if not _inside(target, gh_root):
+        errs.append("本地路径（解析符号链接后）不在仓库的 .github 目录内")
+    if os.path.isfile(target):
+        return errs, target
+    for name in ("action.yml", "action.yaml"):
+        cand = os.path.join(target, name)
+        if os.path.isfile(cand):
+            # action.yml 本身也可能是指向别处的符号链接
+            real = os.path.realpath(cand)
+            if not _inside(real, root):
+                return errs + [f"{name} 解析后不在仓库内"], None
+            if _inside(target, gh_root) and not _inside(real, gh_root):
+                errs.append(f"{name}（解析符号链接后）不在仓库的 .github 目录内")
+            return errs, real
+    return errs + ["找不到本地 action 的 action.yml / action.yaml，无法检查"], None
 
 
 def check_uses(value, repo_root):
+    """返回 (错误列表, 需要递归检查的本地文件或 None)。"""
     if not isinstance(value, str):
-        return f"uses 必须是字符串，实际为 {type(value).__name__}"
+        return [f"uses 必须是字符串，实际为 {type(value).__name__}"], None
     if value.startswith("./"):
         return check_local(value, repo_root)
     if value.startswith("docker://"):
-        return None if DOCKER_RE.match(value) else "docker:// 必须按 @sha256:<64 位十六进制> 固定"
-    return None if SHA_RE.match(value) else "未按 40 位 commit SHA 固定"
+        return ([] if DOCKER_RE.match(value) else ["docker:// 必须按 @sha256:<64 位十六进制> 固定"]), None
+    return ([] if SHA_RE.match(value) else ["未按 40 位 commit SHA 固定"]), None
 
 
 def walk_uses(node, path, out):
@@ -124,6 +152,37 @@ def trigger_names(on):
     return []
 
 
+def check_file(f, repo_root, state):
+    """检查单个 YAML 文件；本地引用指向的文件加入队列。返回 False 表示无法解析。"""
+    try:
+        with open(f, encoding="utf-8") as fh:
+            docs = list(yaml.load_all(fh, Loader=StrictLoader))
+    except DuplicateKeyError as e:
+        state["problems"].append(f"{f}: {e}")
+        return True
+    except (yaml.YAMLError, UnicodeDecodeError, OSError) as e:
+        print(f"check-workflow-pins: 无法解析 {f}：{e}", file=sys.stderr)
+        return False
+    in_workflows = os.sep + "workflows" + os.sep in os.sep + os.path.normpath(f)
+    for doc in docs:
+        found = []
+        walk_uses(doc, "", found)
+        state["uses"] += len(found)
+        for p, v in found:
+            errs, follow = check_uses(v, repo_root)
+            for err in errs:
+                state["problems"].append(f"{f}: {p}: {err}：{v!r}")
+            if follow:
+                state["queue"].append(follow)
+        if isinstance(doc, dict) and (in_workflows or "jobs" in doc):
+            for key in ("on", True):
+                if key in doc:
+                    for t in trigger_names(doc[key]):
+                        if t in BANNED_TRIGGERS:
+                            state["problems"].append(f"{f}: on: 禁止的触发器 {t}")
+    return True
+
+
 def main(argv):
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--repo-root", default=".")
@@ -135,40 +194,26 @@ def main(argv):
         print(f"check-workflow-pins: {' '.join(args.paths)} 下没有 YAML 文件", file=sys.stderr)
         return 2
 
-    problems = []
-    uses_count = 0
-    for f in files:
-        try:
-            with open(f, encoding="utf-8") as fh:
-                docs = list(yaml.load_all(fh, Loader=StrictLoader))
-        except DuplicateKeyError as e:
-            problems.append(f"{f}: {e}")
+    state = {"problems": [], "uses": 0, "queue": list(files)}
+    seen = set()
+    checked = 0
+    while state["queue"]:
+        f = state["queue"].pop(0)
+        real = os.path.realpath(f)
+        if real in seen:
             continue
-        except (yaml.YAMLError, UnicodeDecodeError) as e:
-            print(f"check-workflow-pins: 无法解析 {f}：{e}", file=sys.stderr)
+        seen.add(real)
+        checked += 1
+        if not check_file(f, args.repo_root, state):
             return 2
-        in_workflows = os.sep + "workflows" + os.sep in os.sep + os.path.normpath(f)
-        for doc in docs:
-            found = []
-            walk_uses(doc, "", found)
-            uses_count += len(found)
-            for p, v in found:
-                err = check_uses(v, args.repo_root)
-                if err:
-                    problems.append(f"{f}: {p}: {err}：{v!r}")
-            if isinstance(doc, dict) and (in_workflows or "jobs" in doc):
-                for key in ("on", True):
-                    if key in doc:
-                        for t in trigger_names(doc[key]):
-                            if t in BANNED_TRIGGERS:
-                                problems.append(f"{f}: on: 禁止的触发器 {t}")
 
+    problems = state["problems"]
     if problems:
         for p in problems:
             print(p)
         print("check-workflow-pins: 失败（见上方列表）")
         return 1
-    print(f"check-workflow-pins: 通过（{len(files)} 个文件，{uses_count} 处 uses）")
+    print(f"check-workflow-pins: 通过（{checked} 个文件，{state['uses']} 处 uses）")
     return 0
 
 
