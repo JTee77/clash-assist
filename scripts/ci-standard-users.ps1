@@ -155,6 +155,7 @@ $SidUsers = 'S-1-5-32-545'
 $TaskPrefix = 'ca-spike-'
 $BatchRight = 'SeBatchLogonRight'
 $StartWaitSec = 30
+$TaskTimeLimitMin = 30
 
 if (-not $StateDir) {
   $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
@@ -449,6 +450,9 @@ function Invoke-Create {
     New-LocalUser -Name $name -Password $password -AccountNeverExpires -PasswordNeverExpires `
       -UserMayNotChangePassword -Description 'clash-assist CI spike temporary user' | Out-Null
     $sid = Get-LocalSid $name
+    # New-LocalUser 在 Windows Server（runner）上不会像 `net user /add` 那样自动加入 Users 组，
+    # 这里按 SID 显式加入（避免本地化组名），随后照常断言组成员关系。
+    Add-LocalGroupMember -SID $SidUsers -Member $sid
     # 先记录用户（Cleanup 依据 users.json 删除），再写凭据
     $records.Add([pscustomobject]@{
         Name     = $name
@@ -555,8 +559,9 @@ function Start-ViaScheduledTask([string]$Identity, $Rec, [string]$JobDir, [strin
   $cmd = Get-WrapperCommandLine $JobDir
   $taskName = "$TaskPrefix$JobLabel"
   $taskAction = New-ScheduledTaskAction -Execute $cmd.Exe -Argument $cmd.Args -WorkingDirectory $JobDir
+  # 30 分钟，与 spike job 的 timeout-minutes 对齐（PR #46 评审 SR-11 / SR2-4）
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
+    -ExecutionTimeLimit (New-TimeSpan -Minutes $TaskTimeLimitMin) -MultipleInstances IgnoreNew
   if ($Identity -eq 'SYSTEM') {
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $principal -Settings $settings -Force | Out-Null
@@ -762,6 +767,8 @@ function Invoke-Cleanup {
     exit 1
   }
   Write-Info '清理完成'
+  # 显式退出码：否则 $LASTEXITCODE 可能残留上面 taskkill 的非零值，调用方（spike workflow）会误判
+  exit 0
 }
 
 # ---------------------------------------------------------------- main
