@@ -459,6 +459,7 @@ mod tests {
     use super::*;
 
     /// A local controller fixture; no real proxy process or network settings are touched.
+    #[cfg(not(windows))]
     struct ProviderController {
         port: u16,
         requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -503,6 +504,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     impl ProviderController {
         fn start(providers_status: u16, providers_body: &str) -> Self {
             use std::io::Write;
@@ -537,6 +539,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     impl Drop for ProviderController {
         fn drop(&mut self) {
             self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -544,6 +547,8 @@ mod tests {
         }
     }
 
+    // 依赖本地 TCP 控制器 fixture；Windows 上 TCP 出口 fail-closed（P-1），不适用。
+    #[cfg(not(windows))]
     #[test]
     fn list_nodes_includes_provider_leaves_and_ships_the_group_table() {
         let controller = ProviderController::start(200, r#"{"providers":{"subscription":{"vehicleType":"File","proxies":[{"name":"provider-a","type":"Vless","udp":true}]}}}"#);
@@ -605,6 +610,8 @@ mod tests {
         );
     }
 
+    // 依赖本地 TCP 控制器 fixture；Windows 上 TCP 出口 fail-closed（P-1），不适用。
+    #[cfg(not(windows))]
     #[test]
     fn provider_failure_keeps_static_nodes_and_reports_incomplete_list() {
         let controller = ProviderController::start(403, r#"{"message":"denied"}"#);
@@ -1102,5 +1109,34 @@ mod tests {
             err.contains("解析 /proxies JSON 失败"),
             "unexpected error: {err}"
         );
+    }
+}
+
+/// P-1：`list_nodes_async` 的 TCP 路径（直接走 TCP，以及 Unix 套接字不可用后的回落）
+/// 在 Windows 上同样不得建连。
+#[cfg(all(test, windows))]
+mod windows_tcp_fail_closed_tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn list_nodes_never_connects_on_windows_direct_or_fallback() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for sock in [None, Some("/tmp/verge-mihomo.sock")] {
+            let r = tauri::async_runtime::block_on(list_nodes_async(
+                "127.0.0.1",
+                port,
+                "s3cret-must-not-leave",
+                1000,
+                sock,
+            ));
+            // 结果必须是失败（Err，或 Ok 但无节点），且不能来自任何真实连接（见下方断言）。
+            match r {
+                Err(_) => {}
+                Ok(ok) => assert!(ok.nodes.is_empty() && ok.error.is_some(), "sock={sock:?}: unexpected success"),
+            }
+        }
+        crate::mihomo::transport::windows_tcp_fail_closed_tests::assert_never_accepted(&listener);
     }
 }

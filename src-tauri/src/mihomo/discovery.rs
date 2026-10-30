@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use super::transport::http_via_unix;
 use super::types::{DiscoverResult, DEFAULT_MIXED, DEFAULT_PORT};
 
+/// 原始 Verge `config.yaml`（含 secret）。Windows 上不编译：不把 secret 交给前端。
+#[cfg(not(windows))]
 pub fn read_verge_config() -> Result<String, String> {
     let path = platform::verge_config_path();
     std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))
@@ -258,6 +260,31 @@ fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
 /// Discover Verge controller: merge stale `config.yaml` + fresher `clash-verge.yaml`,
 /// then resolve a working unix sock across service / legacy / TMPDIR / yaml / cmdline.
 pub fn discover_controller() -> DiscoverResult {
+    withhold_secret_on_windows(discover_controller_inner())
+}
+
+/// Windows：发现结果里**不携带 secret**（方案 §2.1 规则 4，M-3 / C-1 / C-4）。
+///
+/// Windows 上还没有 `verify_tcp_listener`，任何 TCP 监听者都只能算
+/// `listener-unverified`（服务模式恒为 unverified，C-4），而 unverified 一律不发送 secret。
+/// 所以 secret 在离开发现阶段之前就被清空：不交给前端（`discover_mihomo*` 命令），
+/// 也不会被前端回传进 `mihomo_http` / `list_nodes`。TCP 出口本身另有 fail-closed 门控
+/// （`transport::http_via_tcp_async`）。
+///
+/// TODO(M1) verify_tcp_listener: 只有 listener-verified 时才保留 secret。
+#[cfg(windows)]
+fn withhold_secret_on_windows(mut d: DiscoverResult) -> DiscoverResult {
+    d.secret = String::new();
+    d
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn withhold_secret_on_windows(d: DiscoverResult) -> DiscoverResult {
+    d
+}
+
+fn discover_controller_inner() -> DiscoverResult {
     let config_path = platform::verge_config_path();
     let clash_verge_path = platform::verge_clash_verge_yaml_path();
 
@@ -336,17 +363,23 @@ pub fn read_controller_yaml(
     sock_candidates: &[String],
     source_prefix: &str,
 ) -> DiscoverResult {
-    let mut sock_path: Option<String> = None;
-    for cand in sock_candidates {
+    // Unix 套接字候选：只在 Unix 上做存在性检查。非 Unix（Windows）上一律为 None，
+    // 绝不对候选调用 `Path::exists`——候选若是管道名，`exists` 会以默认 QoS 打开管道（M-2）。
+    // Windows 的管道候选由 M1 的 `pipe::open_verified` 处理。
+    #[cfg(unix)]
+    let sock_path: Option<String> = sock_candidates.iter().find_map(|cand| {
         let p = expand_path_str(cand);
-        if p.as_os_str().is_empty() {
-            continue;
+        if !p.as_os_str().is_empty() && p.exists() {
+            Some(p.to_string_lossy().into_owned())
+        } else {
+            None
         }
-        if p.exists() {
-            sock_path = Some(p.to_string_lossy().into_owned());
-            break;
-        }
-    }
+    });
+    #[cfg(not(unix))]
+    let sock_path: Option<String> = {
+        let _ = sock_candidates;
+        None
+    };
 
     for raw in paths {
         let path = expand_path_str(raw);
@@ -594,6 +627,10 @@ pub fn discover_flclash_with_paths(
 }
 
 pub fn discover_for_client(client_id: &str) -> DiscoverResult {
+    withhold_secret_on_windows(discover_for_client_inner(client_id))
+}
+
+fn discover_for_client_inner(client_id: &str) -> DiscoverResult {
     if client_id == "verge" {
         return discover_controller();
     }
@@ -939,5 +976,51 @@ mixed-port: 7897
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// P-1：Windows 上发现结果不得携带 secret（§2.1 规则 4 / C-1 / C-4）。
+#[cfg(all(test, windows))]
+mod windows_secret_tests {
+    use super::*;
+
+    #[test]
+    fn withhold_secret_clears_secret_and_keeps_rest() {
+        let d = DiscoverResult {
+            host: "127.0.0.1".into(),
+            port: 9097,
+            secret: "s3cret".into(),
+            mixed_port: 7897,
+            source: "verge-config:x".into(),
+            sock_path: None,
+        };
+        let out = withhold_secret_on_windows(d);
+        assert!(out.secret.is_empty());
+        assert_eq!((out.port, out.mixed_port, out.source.as_str()), (9097, 7897, "verge-config:x"));
+    }
+
+    #[test]
+    fn discover_entrypoints_never_return_secret_on_windows() {
+        for id in ["verge", "flclash", "clashx_meta", "mihomo_party", "nope"] {
+            assert!(discover_for_client(id).secret.is_empty(), "{id}");
+        }
+        assert!(discover_controller().secret.is_empty());
+    }
+
+    #[test]
+    fn read_controller_yaml_never_probes_sock_candidates_on_windows() {
+        let dir = std::env::temp_dir().join(format!("ca-win-sock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("exists.sock");
+        std::fs::write(&existing, b"").unwrap();
+        let r = read_controller_yaml(
+            &[],
+            9090,
+            7890,
+            &[existing.to_string_lossy().into_owned()],
+            "t",
+        );
+        assert_eq!(r.sock_path, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

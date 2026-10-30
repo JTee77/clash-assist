@@ -88,11 +88,20 @@ async fn discover_mihomo_for_client(client_id: String) -> Result<ControllerConfi
 
 #[tauri::command]
 async fn read_verge_config_raw() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        catch_disk(|| mihomo::read_verge_config().map_err(|e| e.to_string()))
-    })
-    .await
-    .map_err(join_err)?
+    // Windows：原始 config.yaml 含 Verge 的 secret，不交给前端（§2.1 规则 4 / C-1 / C-4，
+    // 与 discovery 里的 withhold_secret_on_windows 同理）。TODO(M1) verify_tcp_listener。
+    #[cfg(windows)]
+    {
+        Err("Windows 版暂不读取 Verge 原始配置（含 secret，缺少监听者校验，M1）".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            catch_disk(|| mihomo::read_verge_config().map_err(|e| e.to_string()))
+        })
+        .await
+        .map_err(join_err)?
+    }
 }
 
 #[derive(Debug, Deserialize)]

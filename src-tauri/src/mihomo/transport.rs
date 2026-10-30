@@ -31,8 +31,43 @@ async fn read_body_capped_with(
     Ok((status, body))
 }
 
+/// Windows 上控制器 TCP 通道被关闭时返回的错误（M0 fail-closed）。
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const WINDOWS_TCP_CONTROLLER_UNAVAILABLE: &str =
+    "Windows 版控制器连接尚未启用（缺少监听者校验，M1）";
+
 /// Async HTTP to Mihomo controller over TCP (preferred path from Tauri commands).
+///
+/// 这是控制器 TCP 请求的唯一出口：`mihomo_http` 命令、`list_nodes_async` 的 TCP
+/// 路径（含 Unix 套接字失败后的回落）和 `/providers/proxies` 请求都经过这里。
+///
+/// Windows：一律不建立连接、不发送任何字节（更不会带 `Authorization: Bearer`），
+/// 直接返回 [`WINDOWS_TCP_CONTROLLER_UNAVAILABLE`]。方案 §2.1 规则 4（M-3 / C-1 / C-4）
+/// 要求只有 `listener-verified` 才能发送 secret，而 M0 还没有监听者校验。
 pub async fn http_via_tcp_async(
+    host: &str,
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    secret: &str,
+    timeout_ms: u64,
+) -> Result<UnixHttpResult, String> {
+    #[cfg(windows)]
+    {
+        // TODO(M1) verify_tcp_listener: 换成 `platform::verify_tcp_listener(addr)` 判定，
+        // 只有 listener-verified 才发送 Bearer；listener-unverified 不发 secret（§2.1 规则 4、C-4）。
+        let _ = (host, port, method, path, body, secret, timeout_ms);
+        Err(WINDOWS_TCP_CONTROLLER_UNAVAILABLE.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        http_via_tcp_inner(host, port, method, path, body, secret, timeout_ms).await
+    }
+}
+
+#[cfg(not(windows))]
+async fn http_via_tcp_inner(
     host: &str,
     port: u16,
     method: &str,
@@ -141,8 +176,11 @@ pub fn http_via_unix(
     parse_http_response_bytes(&raw)
 }
 
-/// Non-unix targets (e.g. Windows): local IPC would use a named pipe — not
-/// implemented yet. TCP (`http_via_tcp_async`) remains the supported transport.
+/// Non-unix targets (e.g. Windows): no Unix-domain sockets. Local IPC on Windows
+/// will be the verified named-pipe transport (M1, `pipe::open_verified`); until then
+/// there is **no** working controller transport on Windows — the TCP path
+/// (`http_via_tcp_async`) is also closed there (fail-closed until M1's
+/// `verify_tcp_listener`, plan §2.1 rule 4). This stub does no I/O.
 #[cfg(not(unix))]
 pub fn http_via_unix(
     _method: &str,
@@ -153,8 +191,7 @@ pub fn http_via_unix(
     _timeout_ms: u64,
 ) -> Result<UnixHttpResult, String> {
     Err(
-        "unix socket transport unavailable on this platform (use TCP external-controller)"
-            .into(),
+        "unix socket transport unavailable on this platform".into(),
     )
 }
 
@@ -309,6 +346,9 @@ mod tests {
     ///
     /// 这条测试是 0.2.7 性能核查顺手补的：曾考虑改成共享 Client，实测后回退，
     /// 但「超时到底有没有生效」原本没有任何测试覆盖。
+    // Windows 上控制器 TCP 通道是 fail-closed 的（不建连），超时语义不适用；
+    // 对应的 Windows 断言见 `windows_tcp_fail_closed_tests`。
+    #[cfg(not(windows))]
     #[test]
     fn http_via_tcp_times_out_on_silent_server() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -376,5 +416,47 @@ mod tests {
         assert!(result.is_ok(), "proxy_fetch_async (no_proxy) panicked");
         // Ok or Err both acceptable; panic is not.
         let _ = result.unwrap();
+    }
+}
+
+/// P-1（PR #45 评审）：Windows 上控制器 TCP 出口必须 fail-closed——不建连、不发 secret。
+/// 判据：本地监听端口上**从未出现过**待 accept 的连接（连接即使随后被关闭，也会留在
+/// backlog 里被 accept 到，所以“accept 一直 WouldBlock”能证明从未尝试连接）。
+#[cfg(all(test, windows))]
+pub(crate) mod windows_tcp_fail_closed_tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    pub(crate) fn assert_never_accepted(listener: &TcpListener) {
+        listener.set_nonblocking(true).unwrap();
+        // 给可能存在的异步连接留出时间落入 backlog。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            match listener.accept() {
+                Ok((_, peer)) => panic!("Windows 上不应向控制器建立 TCP 连接，却 accept 到了 {peer}"),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("accept: {e}"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    #[test]
+    fn http_via_tcp_never_connects_or_sends_secret_on_windows() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for method in ["GET", "PUT", "POST", "DELETE"] {
+            let r = tauri::async_runtime::block_on(http_via_tcp_async(
+                "127.0.0.1",
+                port,
+                method,
+                "/proxies",
+                Some("{}"),
+                "s3cret-must-not-leave",
+                1000,
+            ));
+            assert_eq!(r.unwrap_err(), WINDOWS_TCP_CONTROLLER_UNAVAILABLE, "{method}");
+        }
+        assert_never_accepted(&listener);
     }
 }
