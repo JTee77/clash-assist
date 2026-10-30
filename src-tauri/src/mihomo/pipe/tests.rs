@@ -176,7 +176,9 @@ fn spawn_server(
             // 留出时间让客户端读完再断开。
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        let _ = server.disconnect();
+        // 不调用 DisconnectNamedPipe：它会丢弃客户端尚未读取的响应（客户端读到 233）。
+        // 直接 drop 关闭句柄，客户端读完剩余数据后得到 EOF（BROKEN_PIPE），与 go-winio 一致。
+        drop(server);
         rep
     })
 }
@@ -251,7 +253,8 @@ fn f3_prime_real_pipe_dacls() {
         format!("O:{me}D:P(A;;GA;;;{me})(A;;GA;;;SY)(A;;GW;;;AU)"),
         format!("O:{me}D:P(A;;GA;;;{me})(A;;0x4;;;IU)"),
         format!("O:{me}D:P(A;;GA;;;{me})(A;;WD;;;WD)"),
-        format!("O:{me}D:P(A;;GA;;;{me})(A;;MA;;;BU)"),
+        // MAXIMUM_ALLOWED（SDDL 没有缩写）
+        format!("O:{me}D:P(A;;GA;;;{me})(A;;0x2000000;;;BU)"),
     ] {
         assert_rejected_zero_bytes(&sddl, &p, "dacl-allows-foreign-instance", true);
     }
