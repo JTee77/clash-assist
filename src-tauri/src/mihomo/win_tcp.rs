@@ -8,7 +8,8 @@
 //!    闸门在 M1 恒为关闭——有 secret 时直接拒绝、不建连（M0 fail-closed 延续，等待 V5 复跑
 //!    S-F2 / S-D′ 结论写入 PR，Ellie 时序条件）；
 //! 4. 建连后按 (本端, 对端) 在连接表里找到服务端那一行，PID 必须等于校验通过的 PID（Ellie S1），
-//!    通过之后才写第一个字节。
+//!    通过之后才写第一个字节。L2 ① / L3 用过的进程句柄一直持有到这一步完成（Ellie PR50 Q3），
+//!    防止校验与建连之间 PID 被复用。
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
@@ -17,32 +18,71 @@ use std::time::{Duration, Instant};
 use super::trust::{tcp_send_plan, ListenerCheck, TcpFallback, TcpPlan, TrustPolicy};
 use super::types::UnixHttpResult;
 use crate::win::facts::OsProcessFacts;
+use crate::win::process::ProcessProbe;
 use crate::win::{identity, tcp};
 
 /// **secret 经 TCP 发送的闸门。M1 恒为 `false`。**
 ///
 /// 打开条件（Ellie 时序条件 d）：V5 复跑（S-F2 / S-D′）结论写入 PR 并经评审同意。
 /// 判定逻辑（`trust::tcp_send_plan`）已完整实现并测试；这里只是开关。
+///
+/// 开闸前置条件（Ellie PR50 Q3，已实现）：`http_via_tcp_with` 持有监听进程句柄直到 post-connect
+/// 校验完成；拿不到句柄时拒绝发送。改动这条路径时不得回退该约束。
 pub const WINDOWS_TCP_SECRET_GATE_OPEN: bool = false;
 
 /// M-3 管道结果的有效期：过期后 TCP 请求会重新探测管道候选。
 const PIPE_OUTCOME_TTL: Duration = Duration::from_secs(30);
 
-static LAST_PIPE_OUTCOME: Mutex<Option<(Instant, TcpFallback)>> = Mutex::new(None);
+/// M-3 回落状态缓存。Ellie PR50 M-a：只有完整的候选探测能覆盖（包括放宽）；单次管道请求
+/// 只能收紧（见 [`trust::tighten_fallback`](super::trust::tighten_fallback)）。
+#[derive(Debug, Default)]
+pub(crate) struct PipeOutcomeCache {
+    slot: Option<(Instant, TcpFallback)>,
+}
 
-/// 记录最近一次命名管道尝试的 M-3 结论（discovery 探测与每次管道请求都会写入）。
-pub fn record_pipe_outcome(f: TcpFallback) {
+impl PipeOutcomeCache {
+    pub(crate) const fn new() -> Self {
+        PipeOutcomeCache { slot: None }
+    }
+    fn valid(&self, now: Instant) -> Option<&TcpFallback> {
+        match &self.slot {
+            Some((at, f)) if now.saturating_duration_since(*at) < PIPE_OUTCOME_TTL => Some(f),
+            _ => None,
+        }
+    }
+    /// 完整探测的结论：直接覆盖。
+    pub(crate) fn record_probe(&mut self, f: TcpFallback, now: Instant) {
+        self.slot = Some((now, f));
+    }
+    /// 单次请求的结论：只在更严格时写入。
+    pub(crate) fn tighten(&mut self, f: TcpFallback, now: Instant) {
+        if let Some(f) = super::trust::tighten_fallback(self.valid(now), f) {
+            self.slot = Some((now, f));
+        }
+    }
+    pub(crate) fn get(&self, now: Instant) -> Option<TcpFallback> {
+        self.valid(now).cloned()
+    }
+}
+
+static LAST_PIPE_OUTCOME: Mutex<PipeOutcomeCache> = Mutex::new(PipeOutcomeCache::new());
+
+/// 一轮完整管道候选探测（discovery）的 M-3 结论：覆盖缓存。
+pub fn record_probe_outcome(f: TcpFallback) {
     if let Ok(mut g) = LAST_PIPE_OUTCOME.lock() {
-        *g = Some((Instant::now(), f));
+        g.record_probe(f, Instant::now());
+    }
+}
+
+/// 单次管道请求的 M-3 结论：只能收紧（成功 / NotFound 不会把 Blocked 放宽为 Allowed）。
+pub fn tighten_pipe_outcome(f: TcpFallback) {
+    if let Ok(mut g) = LAST_PIPE_OUTCOME.lock() {
+        g.tighten(f, Instant::now());
     }
 }
 
 fn cached_pipe_outcome() -> Option<TcpFallback> {
-    let g = LAST_PIPE_OUTCOME.lock().ok()?;
-    match &*g {
-        Some((at, f)) if at.elapsed() < PIPE_OUTCOME_TTL => Some(f.clone()),
-        _ => None,
-    }
+    LAST_PIPE_OUTCOME.lock().ok()?.get(Instant::now())
 }
 
 /// 当前的 M-3 回落状态：缓存有效则用缓存，否则重新探测管道候选。
@@ -75,20 +115,34 @@ pub(crate) fn loopback_addr(host: &str, port: u16) -> Result<SocketAddr, String>
 
 /// 规则 4 的监听者校验（同步，FFI）。
 pub fn check_listener(policy: &TrustPolicy, addr: SocketAddr) -> ListenerCheck {
+    check_listener_held(policy, addr).0
+}
+
+/// 同 [`check_listener`]，并在 Verified 时交出 L2 ① / L3 用过的进程句柄（Ellie PR50 Q3）。
+fn check_listener_held(
+    policy: &TrustPolicy,
+    addr: SocketAddr,
+) -> (ListenerCheck, Option<ProcessProbe>) {
     let known = match identity::known() {
         Ok(k) => k,
         Err(e) => {
-            return ListenerCheck::Unverified {
+            let c = ListenerCheck::Unverified {
                 pid: None,
                 reasons: vec![format!("读不到当前用户身份：{e}")],
                 service_mode: false,
-            }
+            };
+            return (c, None);
         }
     };
     let v4 = tcp::listeners_v4(addr.port());
     let v6 = tcp::listeners_v6(addr.port());
     let mut facts = OsProcessFacts::new(known);
-    policy.decide_tcp(addr, v4, v6, &mut facts)
+    let check = policy.decide_tcp(addr, v4, v6, &mut facts);
+    let held = match &check {
+        ListenerCheck::Verified { pid, .. } => facts.into_held(*pid),
+        _ => None,
+    };
+    (check, held)
 }
 
 /// 生产入口（`transport::http_via_tcp_async` 在 Windows 上的实现）。
@@ -149,7 +203,8 @@ pub(crate) async fn http_via_tcp_with(
     #[cfg(test)]
     let fallback = policy.overrides.fallback.clone().unwrap_or(fallback);
 
-    let check = check_listener(policy, addr);
+    // `held`：一直存活到函数结束（post-connect 校验与整个请求之后才关闭句柄）。
+    let (check, held) = check_listener_held(policy, addr);
     let has_secret = secret.is_some_and(|s| !s.is_empty());
     let plan = tcp_send_plan(&check, has_secret, gate_open, &fallback);
     let (pid, label) = match (&plan, &check) {
@@ -157,7 +212,14 @@ pub(crate) async fn http_via_tcp_with(
             crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
             return Err(why.clone());
         }
-        (_, ListenerCheck::Verified { pid, .. }) => (*pid, "verge-tcp(listener-verified)"),
+        (_, ListenerCheck::Verified { pid, .. }) => {
+            if held.is_none() {
+                let why = format!("监听进程 {pid} 的句柄未能保持到建连之后（防 PID 复用），拒绝");
+                crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
+                return Err(why);
+            }
+            (*pid, "verge-tcp(listener-verified)")
+        }
         // tcp_send_plan 只对 Verified 返回发送计划。
         _ => return Err("内部错误：未验证的监听者不应进入发送路径".to_string()),
     };

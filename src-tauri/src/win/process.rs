@@ -55,6 +55,11 @@ impl ProcessProbe {
         self.pid
     }
 
+    /// 进程句柄是否已成功打开（并仍由本对象持有）。
+    pub fn is_open(&self) -> bool {
+        matches!(self.handle, Some(Ok(_)))
+    }
+
     fn handle(&mut self) -> Result<HANDLE, FactErr> {
         let pid = self.pid;
         let h = self.handle.get_or_insert_with(|| {

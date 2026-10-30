@@ -73,6 +73,11 @@ impl<'a> OsProcessFacts<'a> {
     pub fn new(known: &'a Known) -> Self {
         OsProcessFacts { known, proc_: None }
     }
+    /// Ellie PR50 Q3：取出 L2 ① / L3 用过的进程句柄，让调用方一直持有到 post-connect 校验完成
+    /// （句柄在手期间 PID 不会被系统复用）。只有句柄确实打开过、且 PID 一致时才返回。
+    pub fn into_held(self, pid: u32) -> Option<ProcessProbe> {
+        self.proc_.filter(|p| p.pid() == pid && p.is_open())
+    }
     fn probe(&mut self, pid: u32) -> &mut ProcessProbe {
         if self.proc_.as_ref().map(|p| p.pid()) != Some(pid) {
             self.proc_ = Some(ProcessProbe::new(pid));

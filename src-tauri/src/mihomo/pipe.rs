@@ -111,8 +111,8 @@ pub async fn http_via_pipe_with(
     Ok((res, trust))
 }
 
-/// 生产入口（同步，供 `spawn_blocking` 中的调用方使用）：生产 TrustPolicy，并把结果记入
-/// M-3 回落状态。
+/// 生产入口（同步，供 `spawn_blocking` 中的调用方使用）：生产 TrustPolicy，失败时把结果
+/// **收紧**进 M-3 回落状态（Ellie PR50 M-a：单次请求的成功 / NotFound 不放宽缓存）。
 pub fn http_via_pipe_blocking(
     name: &PipeName,
     kind: PipeKind,
@@ -125,13 +125,8 @@ pub fn http_via_pipe_blocking(
     let r = tauri::async_runtime::block_on(http_via_pipe_with(
         name, kind, &policy, method, path, body, timeout_ms,
     ));
-    match &r {
-        Ok(_) => super::win_tcp::record_pipe_outcome(super::trust::TcpFallback::Allowed {
-            denied_seen: false,
-        }),
-        Err(e) => {
-            super::win_tcp::record_pipe_outcome(tcp_fallback_after_pipes(std::slice::from_ref(e)))
-        }
+    if let Err(e) = &r {
+        super::win_tcp::tighten_pipe_outcome(tcp_fallback_after_pipes(std::slice::from_ref(e)));
     }
     r
 }

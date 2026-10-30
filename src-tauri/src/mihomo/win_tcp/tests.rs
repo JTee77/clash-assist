@@ -1,7 +1,7 @@
 //! 规则 4 + secret 闸门 + 连接后绑定的端到端测试（Windows CI，进程内 TCP 服务端）。
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -225,4 +225,49 @@ fn loopback_only_hosts() {
     for bad in ["192.168.1.2", "0.0.0.0", "example.com", "", "::"] {
         assert!(loopback_addr(bad, 1).is_err(), "{bad}");
     }
+}
+
+/// Ellie PR50 Q3：Verified 但没能持有监听进程句柄（这里 L2 ① / L3 都被注入，真实句柄从未打开）
+/// ⇒ 拒绝且不建连。正常路径（上面的 verified 测试）证明真实句柄会被持有到请求结束。
+#[test]
+fn verified_without_held_process_handle_is_refused_without_connecting() {
+    let (addr, h) = server();
+    let mut p = test_policy();
+    let exe = std::env::current_exe().unwrap();
+    p.overrides.l2_1 = Some(Ok(exe.to_string_lossy().into_owned()));
+    let me = identity::known().unwrap().me_str.clone();
+    p.overrides.l3 = Some(Ok(Ident::new(Who::Me, me)));
+    let e = call(&p, true, ok_fallback(), addr, None).unwrap_err();
+    assert!(e.contains("句柄"), "{e}");
+    assert_never_connected(h);
+}
+
+/// Ellie PR50 M-a：单次管道请求不能放宽缓存；完整探测可以。
+#[test]
+fn pipe_outcome_cache_single_requests_only_tighten() {
+    let t0 = Instant::now();
+    let allowed = || TcpFallback::Allowed { denied_seen: false };
+    let blocked = || TcpFallback::Blocked("untrusted".into());
+    let mut c = PipeOutcomeCache::new();
+
+    // 空缓存：单次成功 / NotFound 不写（下一次 TCP 请求仍会做完整探测）
+    c.tighten(allowed(), t0);
+    assert_eq!(c.get(t0), None);
+
+    // 探测得出 Blocked 后，单次成功 / NotFound / VerifiedOnly 都不能放宽，也不延长 TTL
+    c.record_probe(blocked(), t0);
+    let t1 = t0 + Duration::from_secs(10);
+    c.tighten(allowed(), t1);
+    c.tighten(TcpFallback::VerifiedOnly("v".into()), t1);
+    assert_eq!(c.get(t1), Some(blocked()));
+    assert_eq!(c.get(t0 + PIPE_OUTCOME_TTL), None, "TTL 仍从探测时刻起算");
+
+    // Allowed 之后单次 Untrusted 收紧为 Blocked（并刷新时间戳）
+    c.record_probe(allowed(), t0);
+    c.tighten(blocked(), t1);
+    assert_eq!(c.get(t1 + Duration::from_secs(25)), Some(blocked()));
+
+    // 只有完整探测能放宽
+    c.record_probe(allowed(), t1);
+    assert_eq!(c.get(t1), Some(allowed()));
 }
