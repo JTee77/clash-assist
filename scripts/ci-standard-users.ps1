@@ -450,6 +450,9 @@ function Invoke-Create {
     New-LocalUser -Name $name -Password $password -AccountNeverExpires -PasswordNeverExpires `
       -UserMayNotChangePassword -Description 'clash-assist CI spike temporary user' | Out-Null
     $sid = Get-LocalSid $name
+    # New-LocalUser 在 Windows Server（runner）上不会像 `net user /add` 那样自动加入 Users 组，
+    # 这里按 SID 显式加入（避免本地化组名），随后照常断言组成员关系。
+    Add-LocalGroupMember -SID $SidUsers -Member $sid
     # 先记录用户（Cleanup 依据 users.json 删除），再写凭据
     $records.Add([pscustomobject]@{
         Name     = $name
