@@ -12,7 +12,17 @@ mod dns_query;
 mod http_body;
 mod mihomo;
 mod platform;
+mod safe_fs;
 mod update_check;
+#[cfg(windows)]
+mod win;
+
+/// S-R1 的 compile_fail 文档测试入口（见 `mihomo::guard::PipeName`）；不是公开 API。
+#[cfg(windows)]
+#[doc(hidden)]
+pub mod s_r1 {
+    pub use crate::mihomo::guard::PipeName;
+}
 
 use dns::DnsResolversResult;
 use mihomo::{
@@ -88,11 +98,13 @@ async fn discover_mihomo_for_client(client_id: String) -> Result<ControllerConfi
 
 #[tauri::command]
 async fn read_verge_config_raw() -> Result<String, String> {
-    // Windows：原始 config.yaml 含 Verge 的 secret，不交给前端（§2.1 规则 4 / C-1 / C-4，
-    // 与 discovery 里的 withhold_secret_on_windows 同理）。TODO(M1) verify_tcp_listener。
+    // Windows（M1）：经 safe_fs 的受信路径读取，`secret:` 行打码后再交给前端——secret 只在
+    // Rust 侧使用（§2.1 规则 4 / C-1 / C-4；与 discovery 的 withhold_secret_on_windows 同理）。
     #[cfg(windows)]
     {
-        Err("Windows 版暂不读取 Verge 原始配置（含 secret，缺少监听者校验，M1）".to_string())
+        tauri::async_runtime::spawn_blocking(|| catch_disk(mihomo::read_verge_config_redacted))
+            .await
+            .map_err(join_err)?
     }
     #[cfg(not(windows))]
     {
@@ -353,15 +365,7 @@ fn append_app_log(msg: &str) {
         return;
     }
     let path = dir.join("app.log");
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "TODO(M1): 存量日志追加打开，M1 改用安全打开封装（S-R1）"
-    )]
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    else {
+    let Ok(mut f) = safe_fs::open_append(&path) else {
         return;
     };
     let secs = std::time::SystemTime::now()

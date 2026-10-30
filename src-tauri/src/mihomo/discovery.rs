@@ -63,6 +63,21 @@ pub struct ParsedControllerYaml {
     pub unix_path: Option<String>,
     /// True when `external-controller:` exists but is blank (`''` / `""` / empty).
     pub tcp_ec_blank: bool,
+    /// Raw `external-controller-pipe` value (Windows named pipe, quotes removed).
+    pub pipe_path: Option<String>,
+}
+
+/// 去掉 YAML 标量的引号：双引号里 `\\` → `\`；单引号里 `''` → `'`；裸标量原样。
+fn unquote_yaml_scalar(raw: &str) -> Option<String> {
+    let r = raw.trim();
+    let v = if r.len() >= 2 && r.starts_with('"') && r.ends_with('"') {
+        r[1..r.len() - 1].replace("\\\\", "\\")
+    } else if r.len() >= 2 && r.starts_with('\'') && r.ends_with('\'') {
+        r[1..r.len() - 1].replace("''", "'")
+    } else {
+        r.to_string()
+    };
+    (!v.is_empty()).then_some(v)
 }
 
 /// Parse external-controller / unix / secret / mixed-port from yaml text.
@@ -97,6 +112,12 @@ pub fn parse_controller_yaml_rich(content: &str) -> ParsedControllerYaml {
             if !raw.is_empty() {
                 out.unix_path = Some(raw.to_string());
             }
+        }
+    }
+
+    if let Ok(re) = Regex::new(r#"(?m)^external-controller-pipe:[ \t]*(.*?)[ \t]*(?:#.*)?$"#) {
+        if let Some(c) = re.captures(content) {
+            out.pipe_path = unquote_yaml_scalar(&c[1]);
         }
     }
 
@@ -154,6 +175,9 @@ fn merge_parsed(into: &mut ParsedControllerYaml, other: ParsedControllerYaml) {
     if into.unix_path.is_none() {
         into.unix_path = other.unix_path;
     }
+    if into.pipe_path.is_none() {
+        into.pipe_path = other.pipe_path;
+    }
 }
 
 /// Best-effort: parse `-ext-ctl-unix <path>` from a running verge-mihomo cmdline.
@@ -179,11 +203,6 @@ fn sock_from_verge_cmdline() -> Option<String> {
             }
         }
     }
-    None
-}
-
-#[cfg(not(unix))]
-fn sock_from_verge_cmdline() -> Option<String> {
     None
 }
 
@@ -253,21 +272,12 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
     first_existing
 }
 
-/// 非 Unix 平台（Windows）：没有 Unix 套接字，也没有路径信任校验
-/// （`platform::ensure_sock_path_trusted` 只在 Unix 编译）。所有候选一律判为不可用，
-/// 不做任何探测、不发送 secret——绝不在缺少信任校验时静默放行。
-/// Windows 的本机 IPC 由 M1 的命名管道路径（`pipe::open_verified`）接管。
-#[cfg(not(unix))]
-pub fn select_working_sock(_candidates: &[String], _secret: &str) -> Option<String> {
-    None
-}
+// Windows 没有 Unix 套接字候选：`select_working_sock` 只在 Unix 编译，Windows 的本机 IPC
+// 走 `windows_probe_pipes`（经 `pipe::open_verified` 校验的命名管道）。
 
+/// 读配置文件一律经 `safe_fs`（Windows：盘符路径 + SECURITY_ANONYMOUS + 不跟随重解析点）。
 fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-    )]
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = crate::safe_fs::read_to_string(path).ok()?;
     Some(parse_controller_yaml_rich(&content))
 }
 
@@ -277,15 +287,11 @@ pub fn discover_controller() -> DiscoverResult {
     withhold_secret_on_windows(discover_controller_inner())
 }
 
-/// Windows：发现结果里**不携带 secret**（方案 §2.1 规则 4，M-3 / C-1 / C-4）。
+/// Windows：发现结果里**永远不携带 secret**（方案 §2.1 规则 4，M-3 / C-1 / C-4）。
 ///
-/// Windows 上还没有 `verify_tcp_listener`，任何 TCP 监听者都只能算
-/// `listener-unverified`（服务模式恒为 unverified，C-4），而 unverified 一律不发送 secret。
-/// 所以 secret 在离开发现阶段之前就被清空：不交给前端（`discover_mihomo*` 命令），
-/// 也不会被前端回传进 `mihomo_http` / `list_nodes`。TCP 出口本身另有 fail-closed 门控
-/// （`transport::http_via_tcp_async`）。
-///
-/// TODO(M1) verify_tcp_listener: 只有 listener-verified 时才保留 secret。
+/// M1 起这是长期设计：secret 只在 Rust 侧使用——命名管道不需要 secret；TCP 出口
+/// （`win_tcp::http_via_tcp`）在 listener-verified 且 secret 闸门打开时自己从 yaml 取
+/// secret 注入 `Authorization`。前端既拿不到也回传不了 secret。
 #[cfg(windows)]
 fn withhold_secret_on_windows(mut d: DiscoverResult) -> DiscoverResult {
     d.secret = String::new();
@@ -298,7 +304,8 @@ fn withhold_secret_on_windows(d: DiscoverResult) -> DiscoverResult {
     d
 }
 
-fn discover_controller_inner() -> DiscoverResult {
+/// 依次读 `clash-verge.yaml`（新鲜）与 `config.yaml`（可能过期）并合并。
+fn read_verge_parsed() -> (ParsedControllerYaml, Vec<String>) {
     let config_path = platform::verge_config_path();
     let clash_verge_path = platform::verge_clash_verge_yaml_path();
 
@@ -312,6 +319,12 @@ fn discover_controller_inner() -> DiscoverResult {
             merge_parsed(&mut parsed, p);
         }
     }
+    (parsed, source_files)
+}
+
+#[cfg(not(windows))]
+fn discover_controller_inner() -> DiscoverResult {
+    let (parsed, source_files) = read_verge_parsed();
 
     let yaml_unix: Vec<String> = parsed
         .unix_path
@@ -373,6 +386,199 @@ fn discover_controller_inner() -> DiscoverResult {
     }
 }
 
+// ---- Windows：命名管道候选与探测（§2.2，M1） ----------------------------------------------
+
+/// 管道候选（顺序即优先级）：yaml 的 `external-controller-pipe` → 带 owner key 的
+/// `-production-{key}`（服务模式）→ `-sidecar-release-{key}`。不带 key 的旧名字只在 yaml
+/// 显式写出时才会出现（N-2）。
+#[cfg(any(windows, test))]
+pub(crate) fn windows_pipe_candidates(yaml_pipe: Option<&str>, owner_key: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        if !s.is_empty() && !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    if let Some(p) = yaml_pipe {
+        push(p.trim().to_string());
+    }
+    push(format!(r"\\.\pipe\verge-mihomo-production-{owner_key}"));
+    push(format!(
+        r"\\.\pipe\verge-mihomo-sidecar-release-{owner_key}"
+    ));
+    out
+}
+
+/// 一轮管道探测的结果。
+#[cfg(windows)]
+pub(crate) struct WinPipeProbe {
+    /// 第一个通过校验并回应 `GET /version` 的管道名。
+    pub selected: Option<String>,
+    /// 每个失败候选的原因（只用于日志 / 来源标签）。
+    pub tried: Vec<(String, String)>,
+    /// M-3：TCP 能否回落。
+    pub fallback: super::trust::TcpFallback,
+}
+
+#[cfg(windows)]
+fn windows_probe_pipes(
+    yaml_pipe: Option<&str>,
+    policy: &super::trust::TrustPolicy,
+) -> WinPipeProbe {
+    use super::trust::{tcp_fallback_after_pipes, PipeErr, TcpFallback};
+
+    let key = match crate::win::identity::owner_key() {
+        Ok(k) => k,
+        Err(e) => {
+            return WinPipeProbe {
+                selected: None,
+                tried: vec![],
+                fallback: TcpFallback::Blocked(format!("读不到当前用户 SID，不回落 TCP：{e}")),
+            }
+        }
+    };
+    let mut tried = Vec::new();
+    let mut errs: Vec<PipeErr> = Vec::new();
+    for cand in windows_pipe_candidates(yaml_pipe, &key) {
+        let (name, kind) = match super::guard::check_pipe_name_with_key(&cand, &key) {
+            Ok(x) => x,
+            Err(e) => {
+                // yaml 写了不在命名契约里的名字：不打开（S-R1），也不算管道结果。
+                tried.push((cand, e));
+                continue;
+            }
+        };
+        let r = tauri::async_runtime::block_on(super::pipe::http_via_pipe_with(
+            &name, kind, policy, "GET", "/version", None, 800,
+        ));
+        match r {
+            // 校验通过的管道只要回应了 HTTP 就选用（401/403 也说明内核在线）。
+            Ok(_) => {
+                return WinPipeProbe {
+                    selected: Some(cand),
+                    tried,
+                    fallback: TcpFallback::Allowed { denied_seen: false },
+                }
+            }
+            Err(e) => {
+                let stop = matches!(e, PipeErr::Untrusted(_));
+                tried.push((cand, e.to_string()));
+                errs.push(e);
+                if stop {
+                    // M-3：出现不可信的管道即停止，既不再试其他候选，也不回落 TCP。
+                    break;
+                }
+            }
+        }
+    }
+    WinPipeProbe {
+        selected: None,
+        tried,
+        fallback: tcp_fallback_after_pipes(&errs),
+    }
+}
+
+/// 生产入口：读 Verge yaml，探测管道候选，并记入 M-3 状态。
+#[cfg(windows)]
+pub(crate) fn windows_probe_verge_pipes() -> WinPipeProbe {
+    let (parsed, _) = read_verge_parsed();
+    let policy = super::trust::TrustPolicy::production();
+    let probe = windows_probe_pipes(parsed.pipe_path.as_deref(), &policy);
+    for (c, why) in &probe.tried {
+        crate::append_app_log(&format!("[discover] 管道候选 {c:?} 不可用：{why}"));
+    }
+    super::win_tcp::record_pipe_outcome(probe.fallback.clone());
+    probe
+}
+
+/// Windows TCP 出口使用的 yaml secret（只在 Rust 内部使用，不交给前端）。
+#[cfg(windows)]
+pub(crate) fn windows_yaml_secret() -> Option<String> {
+    let (parsed, _) = read_verge_parsed();
+    (!parsed.secret.is_empty()).then_some(parsed.secret)
+}
+
+/// 把 `secret:` 行的值替换为占位符（任意缩进）。
+#[cfg(any(windows, test))]
+fn redact_secret_lines(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\r', '\n']);
+        let eol = &line[body.len()..];
+        let indent = body.len() - body.trim_start().len();
+        if body.trim_start().starts_with("secret:") {
+            out.push_str(&body[..indent]);
+            out.push_str("secret: '<redacted>'");
+            out.push_str(eol);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// Windows 的 `read_verge_config_raw`：经 safe_fs 读取 Verge `config.yaml`，secret 打码。
+#[cfg(windows)]
+pub fn read_verge_config_redacted() -> Result<String, String> {
+    let path = platform::verge_config_path();
+    let content = crate::safe_fs::read_to_string(&path)
+        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+    Ok(redact_secret_lines(&content))
+}
+
+#[cfg(windows)]
+fn discover_controller_inner() -> DiscoverResult {
+    use super::trust::{ListenerCheck, TcpFallback, TrustPolicy};
+
+    let (parsed, source_files) = read_verge_parsed();
+    let policy = TrustPolicy::production();
+    let probe = windows_probe_pipes(parsed.pipe_path.as_deref(), &policy);
+    for (c, why) in &probe.tried {
+        crate::append_app_log(&format!("[discover] 管道候选 {c:?} 不可用：{why}"));
+    }
+    super::win_tcp::record_pipe_outcome(probe.fallback.clone());
+
+    let mixed = parsed.mixed_port.unwrap_or(DEFAULT_MIXED);
+    let (port, tcp_from_yaml) = match parsed.port {
+        Some(p) => (p, true),
+        None => (DEFAULT_PORT, false),
+    };
+    let files = source_files.join(",");
+
+    let source = if let Some(pipe) = &probe.selected {
+        format!("verge-pipe:{pipe}")
+    } else if let TcpFallback::Blocked(why) = &probe.fallback {
+        crate::append_app_log(&format!("[discover] M-3：{why}"));
+        format!("verge-pipe-untrusted:{files}")
+    } else if source_files.is_empty() {
+        "defaults".into()
+    } else if tcp_from_yaml {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let check = super::win_tcp::check_listener(&policy, addr);
+        match (&check, check.source_label()) {
+            (_, Some(label)) => format!("{label}:{files}"),
+            (ListenerCheck::Rejected(r), None) => {
+                format!("verge-tcp(rejected:{}):{files}", r.code())
+            }
+            _ => format!("verge-config:{files}"),
+        }
+    } else if parsed.tcp_ec_blank {
+        format!("verge-ec-blank:{files}")
+    } else {
+        format!("verge-config:{files}")
+    };
+
+    DiscoverResult {
+        host: "127.0.0.1".into(),
+        port,
+        // 随后被 withhold_secret_on_windows 清空。
+        secret: parsed.secret,
+        mixed_port: mixed,
+        source,
+        sock_path: probe.selected,
+    }
+}
+
 /// Read first readable yaml among `paths`; set sock_path only from sock_candidates that exist.
 /// Never injects Verge DEFAULT_SOCK unless that path is explicitly in sock_candidates.
 pub fn read_controller_yaml(
@@ -406,19 +612,10 @@ pub fn read_controller_yaml(
 
     for raw in paths {
         let path = expand_path_str(raw);
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-        )]
-        let exists = path.exists();
-        if !exists {
+        if !crate::safe_fs::exists(&path) {
             continue;
         }
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-        )]
-        let read = std::fs::read_to_string(&path);
+        let read = crate::safe_fs::read_to_string(&path);
         if let Ok(content) = read {
             let (port, secret, mixed) =
                 parse_controller_yaml(&content, default_port, default_mixed);
@@ -436,13 +633,8 @@ pub fn read_controller_yaml(
     // Also try scanning directories for any *.yaml / *.yml (FlClash / Nyanpasu)
     for raw in paths {
         let path = expand_path_str(raw);
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-        )]
-        let is_dir = path.is_dir();
-        if is_dir {
-            if let Ok(entries) = std::fs::read_dir(&path) {
+        if crate::safe_fs::is_dir(&path) {
+            if let Ok(entries) = crate::safe_fs::read_dir(&path) {
                 let mut yamls: Vec<PathBuf> = entries
                     .filter_map(|e| e.ok().map(|e| e.path()))
                     .filter(|p| {
@@ -454,11 +646,7 @@ pub fn read_controller_yaml(
                     .collect();
                 yamls.sort();
                 for y in yamls {
-                    #[allow(
-                        clippy::disallowed_methods,
-                        reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-                    )]
-                    let read = std::fs::read_to_string(&y);
+                    let read = crate::safe_fs::read_to_string(&y);
                     if let Ok(content) = read {
                         let (port, secret, mixed) =
                             parse_controller_yaml(&content, default_port, default_mixed);
@@ -578,11 +766,7 @@ pub fn parse_flclash_json_str(raw_json: &str) -> Option<ParsedControllerYaml> {
 /// Read a FlClash preference file (`.plist` via `plutil -convert json -o -` on macOS,
 /// or direct `.json`) and extract `ParsedControllerYaml`.
 fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-    )]
-    let is_existing_file = path.exists() && path.is_file();
+    let is_existing_file = crate::safe_fs::is_file(path);
     if !is_existing_file {
         return None;
     }
@@ -608,11 +792,7 @@ fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
         }
     }
 
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-    )]
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = crate::safe_fs::read_to_string(path).ok()?;
     parse_flclash_json_str(&content)
 }
 
@@ -637,17 +817,9 @@ pub fn discover_flclash_with_paths(
 
     for raw in yaml_paths {
         let path = expand_path_str(raw);
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-        )]
-        let is_file = path.is_file();
+        let is_file = crate::safe_fs::is_file(&path);
         // 与原来的 `if is_file { … } else if path.is_dir() { … }` 等价：只有不是文件时才查 is_dir
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-        )]
-        let is_dir = !is_file && path.is_dir();
+        let is_dir = !is_file && crate::safe_fs::is_dir(&path);
         if is_file {
             if let Some(p) = read_and_parse(&path) {
                 sources.push(path.display().to_string());
@@ -655,11 +827,7 @@ pub fn discover_flclash_with_paths(
             }
         } else if is_dir {
             let cfg_yaml = path.join("config.yaml");
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）"
-            )]
-            let cfg_is_file = cfg_yaml.is_file();
+            let cfg_is_file = crate::safe_fs::is_file(&cfg_yaml);
             if cfg_is_file {
                 let disp = cfg_yaml.display().to_string();
                 if !sources.contains(&disp) {
@@ -797,6 +965,68 @@ mixed-port: 7897
     }
 
     #[test]
+    fn external_controller_pipe_is_parsed_and_unquoted() {
+        let y = "external-controller-pipe: \"\\\\\\\\.\\\\pipe\\\\verge-mihomo-sidecar-release-ab\"  # c\n";
+        assert_eq!(
+            parse_controller_yaml_rich(y).pipe_path.as_deref(),
+            Some(r"\\.\pipe\verge-mihomo-sidecar-release-ab")
+        );
+        let y = "external-controller-pipe: '\\\\.\\pipe\\verge-mihomo'\n";
+        assert_eq!(
+            parse_controller_yaml_rich(y).pipe_path.as_deref(),
+            Some(r"\\.\pipe\verge-mihomo")
+        );
+        let y = "external-controller-pipe: \\\\.\\pipe\\x\n";
+        assert_eq!(
+            parse_controller_yaml_rich(y).pipe_path.as_deref(),
+            Some(r"\\.\pipe\x")
+        );
+        assert_eq!(
+            parse_controller_yaml_rich("external-controller-pipe: ''\n").pipe_path,
+            None
+        );
+        assert_eq!(
+            parse_controller_yaml_rich("  external-controller-pipe: x\n").pipe_path,
+            None
+        );
+    }
+
+    /// N-2：不带 key 的旧名字只来自 yaml；带 key 的名字固定在后。
+    #[test]
+    fn windows_pipe_candidates_order() {
+        let k = "ab12";
+        assert_eq!(
+            windows_pipe_candidates(None, k),
+            vec![
+                r"\\.\pipe\verge-mihomo-production-ab12".to_string(),
+                r"\\.\pipe\verge-mihomo-sidecar-release-ab12".to_string(),
+            ]
+        );
+        let c = windows_pipe_candidates(Some(r"\\.\pipe\verge-mihomo"), k);
+        assert_eq!(c[0], r"\\.\pipe\verge-mihomo");
+        assert_eq!(c.len(), 3);
+        // yaml 与内置名字重复时去重
+        let c = windows_pipe_candidates(Some(r"\\.\pipe\verge-mihomo-production-ab12"), k);
+        assert_eq!(c.len(), 2);
+        assert!(!windows_pipe_candidates(Some(""), k)
+            .iter()
+            .any(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn redact_secret_lines_hides_all_secrets() {
+        let y = "mixed-port: 7897\nsecret: abc\r\nproxies:\n  - name: x\n    secret: def\nsecretive: ok\n";
+        let r = redact_secret_lines(y);
+        assert!(!r.contains("abc") && !r.contains("def"), "{r}");
+        assert!(r.contains("secret: '<redacted>'\r\n"), "{r}");
+        assert!(r.contains("    secret: '<redacted>'\n"), "{r}");
+        assert!(
+            r.contains("mixed-port: 7897\n") && r.contains("secretive: ok\n"),
+            "{r}"
+        );
+    }
+
+    #[test]
     fn expand_path_str_tmpdir_and_home() {
         let prev = std::env::var("TMPDIR").ok();
         std::env::set_var("TMPDIR", "/tmp/clash-assist-test-tmpdir");
@@ -815,6 +1045,7 @@ mixed-port: 7897
         assert_eq!(p2, home.join("Library/foo.sock"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn select_working_sock_prefers_existing() {
         let missing = format!("/tmp/clash-assist-no-sock-{}.sock", std::process::id());
@@ -824,11 +1055,10 @@ mixed-port: 7897
         assert!(r.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn verge_candidates_include_service_and_legacy() {
-        #[cfg_attr(not(unix), allow(unused_variables))]
         let c = platform::verge_sock_candidates(&[], &[]);
-        #[cfg(unix)]
         {
             assert!(
                 c.iter()
@@ -866,8 +1096,7 @@ mixed-port: 7897
         let party = discover_for_client("mihomo_party");
         if let Some(ref s) = party.sock_path {
             assert_ne!(
-                s,
-                platform::VERGE_SOCK_PATH,
+                s, "/tmp/verge/verge-mihomo.sock",
                 "party must never use Verge sock"
             );
             assert!(s.contains("mihomo-party"), "party sock unexpected: {s}");
@@ -880,7 +1109,7 @@ mixed-port: 7897
         let _ = std::fs::remove_file(&missing);
         let r = read_controller_yaml(&[], 9090, 7890, &[missing], "test");
         assert!(r.sock_path.is_none());
-        assert_ne!(r.sock_path.as_deref(), Some(platform::VERGE_SOCK_PATH));
+        assert_ne!(r.sock_path.as_deref(), Some("/tmp/verge/verge-mihomo.sock"));
     }
 
     #[test]
@@ -923,14 +1152,11 @@ mixed-port: 7897
         assert_eq!(mixed, 7897);
     }
 
+    #[cfg(unix)]
     #[test]
     fn live_verge_discover_resolves_service_sock_when_present() {
         let expected = platform::verge_service_sock_for_uid(platform::current_uid());
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）"
-        )]
-        let present = std::path::Path::new(&expected).exists();
+        let present = crate::safe_fs::exists(std::path::Path::new(&expected));
         if !present {
             eprintln!("skip live: service sock absent ({expected})");
             return;
@@ -977,10 +1203,8 @@ mixed-port: 7897
 
     #[test]
     fn discover_flclash_merges_prefs_and_yaml_and_flags_ec_disabled() {
-        let tmp = PathBuf::from(format!(
-            "/tmp/clash-assist-flclash-test-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("clash-assist-flclash-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).expect("mkdir");
 
@@ -988,10 +1212,9 @@ mixed-port: 7897
         let yaml_file = tmp.join("config.yaml");
 
         // Case A: EC disabled in prefs
-        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
-        std::fs::write(
+        crate::safe_fs::write_for_test(
             &pref_file,
-            r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7895,\"external-controller\":\"\",\"secret\":\"\"}}"}"#,
+            br#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7895,\"external-controller\":\"\",\"secret\":\"\"}}"}"#,
         ).expect("write pref");
 
         let res_disabled = discover_flclash_with_paths(
@@ -1030,10 +1253,9 @@ mixed-port: 7897
         }
 
         // Case B: EC enabled in prefs with 32-char secret
-        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
-        std::fs::write(
+        crate::safe_fs::write_for_test(
             &pref_file,
-            r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7896,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"my-flclash-secret\"}}"}"#,
+            br#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7896,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"my-flclash-secret\"}}"}"#,
         ).expect("write pref 2");
         let res_enabled = discover_flclash_with_paths(
             &[pref_file.display().to_string()],
@@ -1090,11 +1312,7 @@ mod windows_secret_tests {
         let dir = std::env::temp_dir().join(format!("ca-win-sock-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let existing = dir.join("exists.sock");
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）"
-        )]
-        std::fs::write(&existing, b"").unwrap();
+        crate::safe_fs::write_for_test(&existing, b"").unwrap();
         let r = read_controller_yaml(
             &[],
             9090,

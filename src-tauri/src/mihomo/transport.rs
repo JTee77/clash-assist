@@ -5,7 +5,6 @@
 
 use std::time::Duration;
 
-#[cfg(unix)]
 use super::http_parse::parse_http_response_bytes;
 use super::types::{UnixHttpResult, MAX_BODY_BYTES};
 
@@ -33,19 +32,14 @@ async fn read_body_capped_with(
     Ok((status, body))
 }
 
-/// Windows 上控制器 TCP 通道被关闭时返回的错误（M0 fail-closed）。
-#[cfg_attr(not(windows), allow(dead_code))]
-pub const WINDOWS_TCP_CONTROLLER_UNAVAILABLE: &str =
-    "Windows 版控制器连接尚未启用（缺少监听者校验，M1）";
-
 /// Async HTTP to Mihomo controller over TCP (preferred path from Tauri commands).
 ///
 /// 这是控制器 TCP 请求的唯一出口：`mihomo_http` 命令、`list_nodes_async` 的 TCP
-/// 路径（含 Unix 套接字失败后的回落）和 `/providers/proxies` 请求都经过这里。
+/// 路径（含本机 IPC 失败后的回落）和 `/providers/proxies` 请求都经过这里。
 ///
-/// Windows：一律不建立连接、不发送任何字节（更不会带 `Authorization: Bearer`），
-/// 直接返回 [`WINDOWS_TCP_CONTROLLER_UNAVAILABLE`]。方案 §2.1 规则 4（M-3 / C-1 / C-4）
-/// 要求只有 `listener-verified` 才能发送 secret，而 M0 还没有监听者校验。
+/// Windows（M1）：交给 [`super::win_tcp::http_via_tcp`]——§2.1 规则 4 监听者校验、M-3 回落
+/// 状态、连接后 PID 绑定都通过之后才写第一个字节；secret 经 TCP 发送仍被
+/// [`super::win_tcp::WINDOWS_TCP_SECRET_GATE_OPEN`] 关闭（等待 V5 复跑）。
 pub async fn http_via_tcp_async(
     host: &str,
     port: u16,
@@ -57,15 +51,91 @@ pub async fn http_via_tcp_async(
 ) -> Result<UnixHttpResult, String> {
     #[cfg(windows)]
     {
-        // TODO(M1) verify_tcp_listener: 换成 `platform::verify_tcp_listener(addr)` 判定，
-        // 只有 listener-verified 才发送 Bearer；listener-unverified 不发 secret（§2.1 规则 4、C-4）。
-        let _ = (host, port, method, path, body, secret, timeout_ms);
-        Err(WINDOWS_TCP_CONTROLLER_UNAVAILABLE.to_string())
+        super::win_tcp::http_via_tcp(host, port, method, path, body, secret, timeout_ms).await
     }
     #[cfg(not(windows))]
     {
         http_via_tcp_inner(host, port, method, path, body, secret, timeout_ms).await
     }
+}
+
+/// 手写请求行 / 头之前的校验：方法白名单，路径只允许可见 ASCII 且以 `/` 开头（防 CRLF 注入）。
+pub(crate) fn check_raw_request(method: &str, path: &str) -> Result<(), String> {
+    super::guard::check_controller_method(method)?;
+    if !path.starts_with('/') || !path.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(format!("invalid request path: {path:?}"));
+    }
+    Ok(())
+}
+
+fn raw_request(method: &str, path: &str, body: &[u8], bearer: Option<&str>) -> String {
+    let auth = match bearer {
+        Some(s) if !s.is_empty() => format!("Authorization: Bearer {s}\r\n"),
+        _ => String::new(),
+    };
+    // Accept-Encoding: identity — 原始流不会像 reqwest 那样自动解 gzip。
+    format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Type: application/json\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+}
+
+/// 在一条**已通过信任校验**的流（命名管道 / 已绑定 PID 的 TCP）上发一个 HTTP/1.1 请求。
+///
+/// 调用方负责：只有信任判定通过之后才调用（F5：判定前零字节）。`bearer` 为 `None` 时不发
+/// `Authorization`。读取上限 `MAX_BODY_BYTES`；读到 `ERROR_BROKEN_PIPE`（服务端关闭管道）
+/// 视作 EOF。
+#[cfg(any(windows, test))]
+pub(crate) async fn http_over_stream<S>(
+    mut stream: S,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    bearer: Option<&str>,
+    timeout_ms: u64,
+) -> Result<UnixHttpResult, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    check_raw_request(method, path)?;
+    let body_bytes = body.unwrap_or("").as_bytes();
+    let req = raw_request(method, path, body_bytes, bearer);
+    let work = async {
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .map_err(|e| format!("write headers: {e}"))?;
+        if !body_bytes.is_empty() {
+            stream
+                .write_all(body_bytes)
+                .await
+                .map_err(|e| format!("write body: {e}"))?;
+        }
+        stream.flush().await.map_err(|e| format!("flush: {e}"))?;
+        let mut raw = Vec::new();
+        let mut chunk = vec![0u8; 16 * 1024];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    raw.extend_from_slice(&chunk[..n]);
+                    if raw.len() > MAX_BODY_BYTES {
+                        return Err(format!("response too large (> {MAX_BODY_BYTES} bytes max)"));
+                    }
+                }
+                // ERROR_BROKEN_PIPE：管道服务端写完后关闭。
+                Err(e) if e.raw_os_error() == Some(109) => break,
+                Err(e) => return Err(format!("read: {e}")),
+            }
+        }
+        Ok::<_, String>(raw)
+    };
+    let raw = tokio::time::timeout(Duration::from_millis(timeout_ms), work)
+        .await
+        .map_err(|_| format!("timed out after {timeout_ms} ms"))??;
+    parse_http_response_bytes(&raw)
 }
 
 #[cfg(not(windows))]
@@ -131,10 +201,7 @@ pub fn http_via_unix(
         return Err(format!("unix socket not found: {sock}"));
     }
     // 请求行是手写拼接的：方法 / 路径带 CR、LF 或空格会注入额外请求头。
-    super::guard::check_controller_method(method)?;
-    if !path.starts_with('/') || !path.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(format!("invalid request path: {path:?}"));
-    }
+    check_raw_request(method, path)?;
     // 0.2.9：拒绝符号链接路径；连接后用对端凭证（peer uid）判定可信，避免 path TOCTOU。
     crate::platform::ensure_sock_path_trusted(sock)?;
 
@@ -145,17 +212,7 @@ pub fn http_via_unix(
     let _ = stream.set_write_timeout(Some(timeout));
 
     let body_bytes = body.unwrap_or("").as_bytes();
-    let auth = if secret.is_empty() {
-        String::new()
-    } else {
-        format!("Authorization: Bearer {secret}\r\n")
-    };
-
-    // Accept-Encoding: identity — raw UnixStream does not auto-decode gzip like curl.
-    let req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Type: application/json\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body_bytes.len()
-    );
+    let req = raw_request(method, path, body_bytes, Some(secret));
 
     stream
         .write_all(req.as_bytes())
@@ -183,12 +240,30 @@ pub fn http_via_unix(
     parse_http_response_bytes(&raw)
 }
 
-/// Non-unix targets (e.g. Windows): no Unix-domain sockets. Local IPC on Windows
-/// will be the verified named-pipe transport (M1, `pipe::open_verified`); until then
-/// there is **no** working controller transport on Windows — the TCP path
-/// (`http_via_tcp_async`) is also closed there (fail-closed until M1's
-/// `verify_tcp_listener`, plan §2.1 rule 4). This stub does no I/O.
-#[cfg(not(unix))]
+/// Windows：本机 IPC 是**经过校验的命名管道**（M1）。`sock_path` 必须通过
+/// `guard::check_pipe_name`（S-R1，Unix 风格路径一律拒绝），然后交给
+/// [`super::pipe::http_via_pipe_blocking`]：§2.2 L1–L3 判定通过之前不写任何字节（F5）；
+/// 管道上不发送 `Authorization`（mihomo 的管道 / Unix 套接字控制器不校验 secret）。
+/// 结果写入 M-3 回落状态（不可信 ⇒ TCP 不回落）。
+#[cfg(windows)]
+pub fn http_via_unix(
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    _secret: &str,
+    sock_path: Option<&str>,
+    timeout_ms: u64,
+) -> Result<UnixHttpResult, String> {
+    let sock = sock_path.ok_or_else(|| "命名管道名未提供".to_string())?;
+    let (name, kind) = super::guard::check_pipe_name(sock)?;
+    check_raw_request(method, path)?;
+    super::pipe::http_via_pipe_blocking(&name, kind, method, path, body, timeout_ms)
+        .map(|(res, _trust)| res)
+        .map_err(|e| e.to_string())
+}
+
+/// 其他非 Unix 平台：没有本机 IPC。
+#[cfg(not(any(unix, windows)))]
 pub fn http_via_unix(
     _method: &str,
     _path: &str,
@@ -197,7 +272,7 @@ pub fn http_via_unix(
     _sock_path: Option<&str>,
     _timeout_ms: u64,
 ) -> Result<UnixHttpResult, String> {
-    Err("unix socket transport unavailable on this platform".into())
+    Err("local IPC transport unavailable on this platform".into())
 }
 
 /// Async fetch a URL optionally via local mixed-port HTTP proxy.
@@ -403,6 +478,60 @@ mod tests {
         worker.join().unwrap();
     }
 
+    /// `http_over_stream`：请求格式、无 secret 时不发 Authorization、带 bearer 时发送、
+    /// 拒绝 CRLF 注入（在写任何字节之前）、响应上限。
+    #[test]
+    fn http_over_stream_roundtrip_and_guards() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tauri::async_runtime::block_on(async {
+            for bearer in [None, Some("tok")] {
+                let (client, mut server) = tokio::io::duplex(64 * 1024);
+                let srv = async move {
+                    let mut got = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let n = server.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            break;
+                        }
+                        got.extend_from_slice(&buf[..n]);
+                    }
+                    server
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .await
+                        .unwrap();
+                    drop(server);
+                    String::from_utf8(got).unwrap()
+                };
+                let srv = tauri::async_runtime::spawn(srv);
+                let res = http_over_stream(client, "GET", "/version", None, bearer, 2000)
+                    .await
+                    .unwrap();
+                let req = srv.await.unwrap();
+                assert_eq!((res.status, res.body.as_str()), (200, "ok"));
+                assert!(req.starts_with("GET /version HTTP/1.1\r\n"), "{req}");
+                assert_eq!(
+                    req.contains("Authorization: Bearer tok"),
+                    bearer.is_some(),
+                    "{req}"
+                );
+                if bearer.is_none() {
+                    assert!(!req.contains("Authorization"), "{req}");
+                }
+            }
+
+            // 注入：在写任何字节之前拒绝。
+            let (client, mut server) = tokio::io::duplex(1024);
+            let r = http_over_stream(client, "GET", "/x\r\nX: y", None, None, 500).await;
+            assert!(r.is_err());
+            let mut sink = Vec::new();
+            server.read_to_end(&mut sink).await.unwrap();
+            assert!(sink.is_empty(), "rejected request must write 0 bytes");
+        });
+    }
+
     #[test]
     fn smoke_proxy_fetch_invalid_port_no_panic() {
         let result = std::panic::catch_unwind(|| {
@@ -438,7 +567,7 @@ mod tests {
     }
 }
 
-/// P-1（PR #45 评审）：Windows 上控制器 TCP 出口必须 fail-closed——不建连、不发 secret。
+/// Windows TCP 出口的「从未建连」断言工具（M1 的拒绝用例共用）。
 /// 判据：本地监听端口上**从未出现过**待 accept 的连接（连接即使随后被关闭，也会留在
 /// backlog 里被 accept 到，所以“accept 一直 WouldBlock”能证明从未尝试连接）。
 #[cfg(all(test, windows))]
@@ -452,9 +581,7 @@ pub(crate) mod windows_tcp_fail_closed_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while std::time::Instant::now() < deadline {
             match listener.accept() {
-                Ok((_, peer)) => {
-                    panic!("Windows 上不应向控制器建立 TCP 连接，却 accept 到了 {peer}")
-                }
+                Ok((_, peer)) => panic!("不应向控制器建立 TCP 连接，却 accept 到了 {peer}"),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => panic!("accept: {e}"),
             }
@@ -462,25 +589,25 @@ pub(crate) mod windows_tcp_fail_closed_tests {
         }
     }
 
+    /// 生产白名单下，测试进程自己的监听者是 image-mismatch：任何方法、带不带 secret 都不建连。
     #[test]
-    fn http_via_tcp_never_connects_or_sends_secret_on_windows() {
+    fn http_via_tcp_never_connects_to_unlisted_image_on_windows() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         for method in ["GET", "PUT", "POST", "DELETE"] {
-            let r = tauri::async_runtime::block_on(http_via_tcp_async(
-                "127.0.0.1",
-                port,
-                method,
-                "/proxies",
-                Some("{}"),
-                "s3cret-must-not-leave",
-                1000,
-            ));
-            assert_eq!(
-                r.unwrap_err(),
-                WINDOWS_TCP_CONTROLLER_UNAVAILABLE,
-                "{method}"
-            );
+            for secret in ["", "s3cret-must-not-leave"] {
+                let r = tauri::async_runtime::block_on(http_via_tcp_async(
+                    "127.0.0.1",
+                    port,
+                    method,
+                    "/proxies",
+                    Some("{}"),
+                    secret,
+                    1000,
+                ));
+                let e = r.unwrap_err();
+                assert!(e.contains("image-mismatch"), "{method}: {e}");
+            }
         }
         assert_never_accepted(&listener);
     }
