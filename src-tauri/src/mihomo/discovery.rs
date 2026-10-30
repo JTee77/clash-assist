@@ -951,7 +951,7 @@ mixed-port: 7897
         {
             let plist_file = tmp.join("com.follow.clash.plist");
             #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix）测试，不在 S-R1 的 Windows 风险面")]
-            std::fs::write(&plist_file, &std::fs::read(&pref_file).unwrap()).expect("copy json");
+            std::fs::write(&plist_file, std::fs::read(&pref_file).unwrap()).expect("copy json");
             let status = std::process::Command::new("/usr/bin/plutil")
                 .args(["-convert", "binary1"])
                 .arg(&plist_file)
