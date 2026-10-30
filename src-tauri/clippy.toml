@@ -1,0 +1,40 @@
+# clippy 配置骨架（windows-plan r4 §2.1「强制手段（M-2）」，清单按 S-R1 补全）。
+#
+# 背景（V3）：对命名管道名调用下列按路径打开 / 探测的 API，会经 CreateFileW 以默认 QoS
+#（不带 SQOS，可被模拟）真正打开管道。主要手段是 `PipeName` newtype 类型约束（M1，S-R1），
+# 这里是补充手段。
+#
+# allow 规则：
+# - 只允许在**模块级**加 `#![allow(clippy::disallowed_methods)]`（`update_check/`、yaml 读取模块），
+#   并写明理由；不在单个调用处散布。
+# - `mihomo/pipe.rs`、`mihomo/discovery.rs`、`mihomo/transport.rs` 的 Windows 分支不得添加 allow。
+# - 第三方 crate 内部的调用 clippy 管不到，由类型约束兜底。
+#
+# CI 在 Windows 上执行 `cargo clippy -- -D warnings`。
+
+disallowed-methods = [
+  # std::path::Path::{exists, try_exists, metadata, symlink_metadata, is_file, is_dir}
+  { path = "std::path::Path::exists", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::try_exists", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::metadata", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::symlink_metadata", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::is_file", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::is_dir", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+
+  # std::fs::{metadata, symlink_metadata, read, read_to_string, File::open, OpenOptions::open}
+  { path = "std::fs::metadata", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::fs::symlink_metadata", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::fs::read", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::fs::read_to_string", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::fs::File::open", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::fs::OpenOptions::open", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+
+  # tokio::fs::{metadata, symlink_metadata, read, read_to_string, try_exists, File::open, OpenOptions::open}
+  { path = "tokio::fs::metadata", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::symlink_metadata", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::read", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::read_to_string", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::try_exists", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::File::open", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::OpenOptions::open", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+]
