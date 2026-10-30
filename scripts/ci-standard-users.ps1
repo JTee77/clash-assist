@@ -755,9 +755,20 @@ function Invoke-Cleanup {
       if ($known) { $sid = $known.Sid }
     }
     if ($sid) {
-      try {
-        Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Remove-CimInstance
-      } catch { $failures.Add("删除 $name 的配置文件：$($_.Exception.Message)") }
+      # 进程刚被结束时，用户配置单元（NTUSER.DAT 等）要等用户配置文件服务在登录会话结束后异步卸载，
+      # 立即删除会报“文件正被另一进程使用”（MUST-4 回放 run 41145959660）；最多重试约 30 秒
+      $profileErr = $null
+      for ($i = 0; $i -lt 15; $i++) {
+        try {
+          Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Remove-CimInstance -ErrorAction Stop
+          $profileErr = $null
+          break
+        } catch {
+          $profileErr = $_.Exception.Message
+          Start-Sleep -Seconds 2
+        }
+      }
+      if ($profileErr) { $failures.Add("删除 $name 的配置文件：$profileErr") }
     }
   }
 
