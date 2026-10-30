@@ -21,8 +21,9 @@ regex = "1"
 dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"] }
 futures-util = "0.3"
-# 流式下载的按块空闲超时（tauri 运行时即 tokio，这里只取 time 能力）
-tokio = { version = "1", default-features = false, features = ["time"] }
+# 流式下载的按块空闲超时（tauri 运行时即 tokio）。io-util：命名管道 / Windows TCP 共用的
+# `http_over_stream`（M1；在所有平台上用 tokio::io::duplex 做单元测试）。
+tokio = { version = "1", default-features = false, features = ["time", "io-util"] }
 sys-locale = "0.3"
 # 自更新：按 WHATWG 规则解析并精确比对 Release 下载地址（替代前缀匹配）。
 url = "2"
@@ -39,6 +40,8 @@ libc = "0.2"
 # Windows 移植（windows-plan r4 §3）：复用 Cargo.lock 中已有的 windows-sys 0.61.2。
 # M0 只引入依赖与 feature 清单；各 API 在 M1（管道 L1–L3、TCP 监听者校验）、
 # M2（DNS 网卡发现）、M5（更新器）中使用。
+# M1：tokio `net` 提供 named_pipe::ClientOptions（security_qos_flags）与 TcpStream。
+tokio = { version = "1", default-features = false, features = ["net", "io-util", "time"] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",                  # HANDLE、CloseHandle、LocalFree、UNICODE_STRING、错误码
   "Win32_Security",                    # GetTokenInformation、TokenUser、EqualSid、IsWellKnownSid、CopySid、GetAce、GetAclInformation、SECURITY_ATTRIBUTES
@@ -54,6 +57,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_NetworkManagement_IpHelper",  # GetAdaptersAddresses、GetBestRoute2、GetExtendedTcpTable、TCP_TABLE_OWNER_PID_LISTENER
   "Win32_NetworkManagement_Ndis",      # IF_OPER_STATUS、NET_LUID_LH（IpHelper 结构体依赖）
   "Win32_Networking_WinSock",          # SOCKADDR_INET、AF_INET/AF_INET6/AF_UNSPEC
+  "Win32_System_RemoteDesktop",        # WTSEnumerateProcessesExW（规则 4 的 foreign-user 判定，C-4 / F4）
 ] }
 
 [profile.release]

@@ -19,9 +19,11 @@ pub const VERGE_REL_CLASH_VERGE_YAML: &str =
     "io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml";
 
 /// Legacy Verge mihomo controller Unix socket (pre-2.5.6; unix targets only).
+#[cfg(not(windows))]
 pub const VERGE_SOCK_PATH: &str = "/tmp/verge/verge-mihomo.sock";
 
 /// Clash Verge service base dir for per-uid controller socks (2.5.6+).
+#[cfg(not(windows))]
 pub const VERGE_SERVICE_USERS_DIR: &str = "/var/run/clash-verge-service/users";
 
 /// Mihomo Party controller sock (unix only) — consumed via the client table.
@@ -50,7 +52,7 @@ pub fn current_uid() -> u32 {
     unsafe { geteuid() }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 pub fn current_uid() -> u32 {
     0
 }
@@ -94,8 +96,8 @@ pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
 
 // 非 Unix 平台（Windows）不编译 `ensure_sock_path_trusted`：那里没有 Unix 套接字，
 // 旧版的 `Ok(())` 桩等于静默放行。删除后任何调用点在 Windows 上都会编译失败，
-// 必须显式处理成「不可用」（见 `mihomo::discovery::select_working_sock`）。
-// Windows 的本机 IPC 信任校验走命名管道（M1：`ensure_pipe_server_trusted`）。
+// 必须显式处理成「不可用」。
+// Windows 的本机 IPC 信任校验走命名管道（M1：`mihomo::pipe::open_verified`）。
 
 /// 连接后检查对端进程凭证：peer uid 必须是本人或 root。
 /// Verge service 模式下 sock 文件属主可能是当前用户，但 mihomo 以 root 运行——peer uid=0 应被接受。
@@ -171,6 +173,7 @@ fn peer_uid(fd: std::os::fd::RawFd) -> Result<u32, String> {
 }
 
 /// `$TMPDIR/verge-mihomo.sock` (or `/tmp/...` when TMPDIR unset).
+#[cfg(not(windows))]
 pub fn verge_tmpdir_sock() -> String {
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
     let tmp = tmp.trim_end_matches('/');
@@ -178,6 +181,7 @@ pub fn verge_tmpdir_sock() -> String {
 }
 
 /// Service sock for the current user: `/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`.
+#[cfg(not(windows))]
 pub fn verge_service_sock_for_uid(uid: u32) -> String {
     format!("{VERGE_SERVICE_USERS_DIR}/{uid}/verge-mihomo.sock")
 }
@@ -186,6 +190,9 @@ pub fn verge_service_sock_for_uid(uid: u32) -> String {
 ///
 /// Order: service (current uid only) → legacy
 /// `/tmp/verge/...` → `$TMPDIR/...` → yaml unix paths → optional extras.
+///
+/// Windows 不编译：那里没有 Unix 套接字候选，管道候选见 `discovery::windows_pipe_candidates`。
+#[cfg(not(windows))]
 pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |s: String| {
@@ -432,6 +439,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn verge_sock_candidates_order_and_dedupe() {
         let yaml = vec![
@@ -450,8 +458,7 @@ mod tests {
                 1
             );
         } else {
-            // 非 Unix：没有内置的 service / legacy / TMPDIR 候选，只原样透传 yaml 路径。
-            // （Windows 上这些候选随后在 select_working_sock 中一律判为不可用。）
+            // 其他非 Unix、非 Windows 平台：只原样透传 yaml 路径。
             assert_eq!(c, yaml);
         }
     }
