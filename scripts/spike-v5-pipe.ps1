@@ -15,9 +15,12 @@
   同名目录下；汇总写到 <ResultsDir>\summary.json。ResultsDir 会作为 artifact 上传，
   因此只从作业目录复制这些输出文件，不复制 spec.json（其中有 S-F 的 secret 环境变量）与 secrets\。
 
-  探针的 CLI 约定尚未发布：所有探针调用集中在“探针调用层”的三个函数中，
-  标有 TODO(probe-cli)，约定确定后只改这三个函数。探针不存在时，探针步骤记为 probe-missing，
-  mihomo 与身份部分照常运行（可先验证 runner 能否以其他用户 / SYSTEM 运行），脚本最终以 1 退出。
+  探针 CLI 以 spike/pipe-probe/README.md 为准，调用集中在“探针调用层”。每次调用都带 --out，
+  写进该作业自己的目录（ACL 仅 SYSTEM、Administrators 与运行身份），由本脚本读取并复制到 ResultsDir；
+  判定只看 JSON，退出码照样记录。每条探针记录附 context 自检（self.sid / elevated /
+  builtin_admins_enabled）与按 README“用例映射”摘出的 evidence；verdict 一律留空，由人工判定。
+  S-E 之前先以 ca_b 做一次环境自检，不满足（非本人 SID、提权或启用 BA）则记错误并跳过 S-E。
+  探针不存在时，探针步骤记为 probe-missing，mihomo 与身份部分照常运行，脚本最终以 1 退出。
 
 .PARAMETER ResultsDir
   结果目录（artifact）。不得位于 ci-standard-users 的状态目录内。
@@ -61,6 +64,7 @@ $PortForeignCtl = 19097   # S-F：ca_b 核心的外部控制器
 $ListenWaitSec = 30
 $ProbeTimeoutSec = 60
 $PipeGoneWaitSec = 10
+$SquatHoldSec = 30         # README“P7 备选”：squat --hold 的秒数
 
 $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
 if (-not $WorkDir) { $WorkDir = Join-Path $base 'v5-pipe-spike' }
@@ -87,7 +91,7 @@ function Add-SpikeError([string]$Message) {
 function Write-Json([string]$Path, $Value) {
   $dir = Split-Path -Parent $Path
   if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
-  ConvertTo-Json -InputObject $Value -Depth 10 | Set-Content -LiteralPath $Path -Encoding UTF8
+  ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function Get-Sha256Hex([byte[]]$Bytes) {
@@ -142,7 +146,7 @@ function Save-JobOutput([string]$Label, [string]$Dest) {
   # 只复制输出文件；spec.json（含环境变量）、conf\、可执行文件一律不复制
   $jobDir = Get-JobDir $Label
   if (-not (Test-Path -LiteralPath $Dest)) { New-Item -ItemType Directory -Path $Dest | Out-Null }
-  foreach ($f in @('identity.txt', 'stdout.txt', 'stderr.txt', 'exitcode.txt', 'wrapper-error.txt', 'job.json')) {
+  foreach ($f in @('identity.txt', 'stdout.txt', 'stderr.txt', 'exitcode.txt', 'wrapper-error.txt', 'job.json', 'probe.json', 'ready.json')) {
     $text = Read-SharedText (Join-Path $jobDir $f)
     if ($null -ne $text) { Set-Content -LiteralPath (Join-Path $Dest $f) -Value (Hide-Secret $text) -Encoding UTF8 -NoNewline }
   }
@@ -339,16 +343,122 @@ function Add-Step([string]$CaseId, [string]$Step, $Record) {
   $script:Steps.Add([ordered]@{ case = $CaseId; step = $Step; status = $status; file = "$CaseId/$Step.json" })
 }
 
+# ---------------------------------------------------------------- 探针 JSON 读取
+# 探针省略缺省字段（README“Step”表），StrictMode 下不能直接点属性，统一经 Get-Field 读取。
+
+function Get-Field($Obj, [string]$Path) {
+  $cur = $Obj
+  foreach ($seg in $Path.Split('.')) {
+    if ($null -eq $cur) { return $null }
+    $p = $cur.PSObject.Properties[$seg]
+    if ($null -eq $p) { return $null }
+    $cur = $p.Value
+  }
+  if ($cur -is [array]) { return , $cur }   # 不让单元素 / 空数组在返回时被展开
+  return $cur
+}
+
+function Get-ProbeSteps($Report, [string]$Name) {
+  $steps = Get-Field $Report 'steps'
+  if ($null -eq $steps) { return @() }
+  return @($steps | Where-Object { (Get-Field $_ 'step') -eq $Name })
+}
+
+function Get-ProbeStep($Report, [string]$Name) {
+  $all = @(Get-ProbeSteps $Report $Name)
+  if ($all.Count -eq 0) { return $null }
+  return $all[0]
+}
+
+function Get-StepBrief($Step) {
+  # 只摘调用结果；完整内容在同一份记录的 output 中
+  if ($null -eq $Step) { return $null }
+  return [ordered]@{
+    ok               = Get-Field $Step 'ok'
+    win32_error      = Get-Field $Step 'win32_error'
+    win32_error_name = Get-Field $Step 'win32_error_name'
+    api              = Get-Field $Step 'api'
+    error            = Get-Field $Step 'error'
+  }
+}
+
+function Test-ProbeContext($Report, [string]$As) {
+  # README“环境自检”：ca_a/ca_b 运行的 JSON 中 self.sid 为本人，elevated 与 builtin_admins_enabled 均为 false
+  $expected = if ($script:Users.ContainsKey($As)) { $script:Users[$As].Sid } else { $null }
+  $selfSid = Get-Field $Report 'context.self.sid'
+  $elevated = Get-Field $Report 'context.elevated'
+  $admins = Get-Field $Report 'context.builtin_admins_enabled'
+  $sidOk = ($null -ne $expected) -and ($selfSid -eq $expected)
+  return [ordered]@{
+    selfSid              = $selfSid
+    expectedSid          = $expected
+    selfSidMatches       = $sidOk
+    elevated             = $elevated
+    builtinAdminsEnabled = $admins
+    ok                   = ($sidOk -and ($elevated -eq $false) -and ($admins -eq $false))
+  }
+}
+
 # ---------------------------------------------------------------- 探针（通用执行）
 
-function Invoke-Probe {
-  param([string]$CaseId, [string]$Step, [string]$As, [string[]]$ProbeArgs, [string]$Expect)
-  $rec = [ordered]@{
+function Get-ProbeOutPath([string]$Label) {
+  # --out 写进该作业自己的目录：ci-standard-users 已把它的 ACL 设为仅 SYSTEM、Administrators
+  # 与运行身份可写（最小权限，另一个标准用户无权访问），runner 负责收集
+  return (Join-Path (Get-JobDir $Label) 'probe.json')
+}
+
+function New-ProbeRecord([string]$CaseId, [string]$Step, [string]$As, [string[]]$ProbeArgs, [string]$Expect) {
+  return [ordered]@{
     case = $CaseId; step = $Step; kind = 'probe'; as = $As; args = $ProbeArgs; expect = $Expect
     status = $null; method = $null; exitCode = $null; timedOut = $false
-    output = $null; outputFormat = $null; identity = $null; error = $null
+    output = $null; outputSource = $null; context = $null; evidence = $null; identity = $null; error = $null
     verdict = $null   # 只记录；P1 ~ P7 由人工判定
   }
+}
+
+function Complete-ProbeRecord($Rec, [scriptblock]$Evidence) {
+  # 判定只看 JSON，不看退出码（README）；退出码照样记录。优先读 --out，拿不到再看 stdout。
+  $step = $Rec.step
+  $rec.method = Remember-Method $Rec.as $step
+  $Rec.identity = Get-IdentityInfo $step
+  $report = $null
+  foreach ($src in @(@{ n = 'out-file'; p = (Get-ProbeOutPath $step) }, @{ n = 'stdout'; p = (Join-Path (Get-JobDir $step) 'stdout.txt') })) {
+    $text = Read-SharedText $src.p
+    if (-not $text) { continue }
+    try {
+      $report = $text | ConvertFrom-Json
+      $Rec.outputSource = $src.n
+      break
+    } catch {
+      $Rec.error = "$($src.n) 不是合法 JSON"
+    }
+  }
+  switch ($Rec.exitCode) {
+    1 { $Rec.error = '探针退出码 1：写 --out 失败（JSON 只在 stdout）' }
+    2 { $Rec.status = 'usage-error'; $Rec.error = '探针退出码 2：命令行错误（CLI 接线有误）' }
+    3 { $Rec.status = 'error'; $Rec.error = '探针退出码 3：非 Windows 平台' }
+  }
+  if ($null -ne $report) {
+    $Rec.output = $report
+    $Rec.context = Test-ProbeContext $report $Rec.as
+    if (-not $Rec.context.ok) { Add-SpikeError "$($Rec.case)/$step：环境自检不满足（self.sid / elevated / builtin_admins_enabled），结果不具代表性" }
+    if ($Evidence) {
+      try { $Rec.evidence = & $Evidence $report } catch { $Rec.evidence = [ordered]@{ error = $_.Exception.Message } }
+    }
+  } elseif ($Rec.status -eq 'ran' -or $Rec.status -eq 'timeout') {
+    $Rec.status = 'no-json'
+    if (-not $Rec.error) { $Rec.error = '探针未产生 JSON（--out 与 stdout 均为空）' }
+  }
+  Save-JobOutput $step (Join-Path $ResultsDir "$($Rec.case)\$step")
+  Add-Step $Rec.case $step $Rec
+  if ($Rec.status -in @('error', 'usage-error', 'no-json')) { Add-SpikeError "$($Rec.case)/$step：$($Rec.error)" }
+  return $Rec
+}
+
+function Invoke-Probe {
+  param([string]$CaseId, [string]$Step, [string]$As, [string[]]$ProbeArgs, [string]$Expect, [scriptblock]$Evidence)
+  $fullArgs = @($ProbeArgs) + @('--out', (Get-ProbeOutPath $Step))
+  $rec = New-ProbeRecord $CaseId $Step $As $fullArgs $Expect
   if (-not $ProbePath -or -not (Test-Path -LiteralPath $ProbePath)) {
     $rec.status = 'probe-missing'
     Add-Step $CaseId $Step $rec
@@ -357,7 +467,7 @@ function Invoke-Probe {
   $params = @{
     Action = 'Run'; As = $As; Label = $Step
     StagePath = @($ProbePath); FilePath = (Split-Path -Leaf $ProbePath)
-    ArgumentList = $ProbeArgs; TimeoutSec = $ProbeTimeoutSec
+    ArgumentList = $fullArgs; TimeoutSec = $ProbeTimeoutSec
   } + (Get-MethodParam $As)
   try {
     Invoke-Users $params | Out-Null
@@ -368,49 +478,79 @@ function Invoke-Probe {
     $rec.status = 'error'
     $rec.error = $_.Exception.Message
   }
-  $rec.method = Remember-Method $As $Step
-  $rec.identity = Get-IdentityInfo $Step
-  # TODO(probe-cli): 输出格式待定；目前假设 stdout 为一个 JSON 文档，解析失败则保留原文
-  $out = Read-SharedText (Join-Path (Get-JobDir $Step) 'stdout.txt')
-  if ($out) {
-    try {
-      $rec.output = $out | ConvertFrom-Json
-      $rec.outputFormat = 'json'
-    } catch {
-      $rec.output = Hide-Secret $out
-      $rec.outputFormat = 'raw'
-    }
-  }
-  Save-JobOutput $Step (Join-Path $ResultsDir "$CaseId\$Step")
-  Add-Step $CaseId $Step $rec
-  if ($rec.status -eq 'error') { Add-SpikeError "$CaseId/$Step：$($rec.error)" }
-  return $rec
+  return (Complete-ProbeRecord $rec $Evidence)
 }
 
-# ---------------------------------------------------------------- 探针调用层
-# TODO(probe-cli): fill once Pit publishes the CLI contract
-# 下面三个函数是探针 CLI 的唯一接入点；参数形式目前按 §4.1 第 4 步的描述占位。
+# ---------------------------------------------------------------- 探针调用层（CLI 契约：spike/pipe-probe/README.md）
 
-function Invoke-ProbePipe([string]$CaseId, [string]$Step, [string]$As, [string]$PipeName, [string]$Expect) {
-  # TODO(probe-cli): fill once Pit publishes the CLI contract（§4.1：pipe <name>，SECURITY_ANONYMOUS 打开，
-  # 记录属主 SID、服务端 PID、L2 ①②③、L3、WTS、GET /version）
-  return (Invoke-Probe -CaseId $CaseId -Step $Step -As $As -ProbeArgs @('pipe', $PipeName) -Expect $Expect)
+function Invoke-ProbePipe {
+  # pipe-probe pipe <name> [--timeout-ms <ms>] [--out <file>]
+  param([string]$CaseId, [string]$Step, [string]$As, [string]$PipeName, [string]$Expect, [scriptblock]$Evidence, [int]$TimeoutMs = 5000)
+  return (Invoke-Probe -CaseId $CaseId -Step $Step -As $As -Expect $Expect -Evidence $Evidence `
+      -ProbeArgs @('pipe', $PipeName, '--timeout-ms', [string]$TimeoutMs))
 }
 
-function Invoke-ProbeTcp([string]$CaseId, [string]$Step, [string]$As, [int]$Port, [string]$Expect) {
-  # TODO(probe-cli): fill once Pit publishes the CLI contract（§4.1：tcp-probe <port>，
-  # GetExtendedTcpTable、L2 ①②③、L3、WTS，不发送请求）
-  return (Invoke-Probe -CaseId $CaseId -Step $Step -As $As -ProbeArgs @('tcp-probe', [string]$Port) -Expect $Expect)
+function Invoke-ProbeTcp {
+  # pipe-probe tcp-probe <port> [--out <file>]（不建立连接、不发请求）
+  param([string]$CaseId, [string]$Step, [string]$As, [int]$Port, [string]$Expect, [scriptblock]$Evidence)
+  return (Invoke-Probe -CaseId $CaseId -Step $Step -As $As -Expect $Expect -Evidence $Evidence `
+      -ProbeArgs @('tcp-probe', [string]$Port))
 }
 
 function Invoke-ProbeSquat {
-  param([string]$CaseId, [string]$Step, [string]$As, [string]$PipeName, [string]$Sddl, [string]$SetOwnerSid, [string]$Expect)
-  # TODO(probe-cli): fill once Pit publishes the CLI contract（§4.1 / S-R9：squat <name> <sddl>；
-  # ⑥ 直接以含 O: 的 SDDL 创建；⑤ 正常创建后 SetSecurityInfo(OWNER) 改为 SetOwnerSid——
-  # ⑤ 的参数形式未定，这里暂用 `--set-owner <sid>` 占位）
+  # pipe-probe squat <name> <sddl|-> [--set-owner <sid|SY|BA>]... [--out <file>]（不 hold：创建 / 改属主后立即退出）
+  param([string]$CaseId, [string]$Step, [string]$As, [string]$PipeName, [string]$Sddl, [string[]]$SetOwner = @(), [string]$Expect, [scriptblock]$Evidence)
   $probeArgs = @('squat', $PipeName, $Sddl)
-  if ($SetOwnerSid) { $probeArgs += @('--set-owner', $SetOwnerSid) }
-  return (Invoke-Probe -CaseId $CaseId -Step $Step -As $As -ProbeArgs $probeArgs -Expect $Expect)
+  foreach ($o in $SetOwner) { $probeArgs += @('--set-owner', $o) }
+  return (Invoke-Probe -CaseId $CaseId -Step $Step -As $As -Expect $Expect -Evidence $Evidence -ProbeArgs $probeArgs)
+}
+
+function Start-ProbeSquatHold {
+  # pipe-probe squat <name> <sddl> --hold <secs> --ready-file <file> --out <file>：后台运行，返回 ready 文件路径
+  param([string]$Step, [string]$As, [string]$PipeName, [string]$Sddl, [int]$HoldSec)
+  $ready = Join-Path (Get-JobDir $Step) 'ready.json'
+  $probeArgs = @('squat', $PipeName, $Sddl, '--hold', [string]$HoldSec, '--ready-file', $ready, '--out', (Get-ProbeOutPath $Step))
+  $params = @{
+    Action = 'Start'; As = $As; Label = $Step
+    StagePath = @($ProbePath); FilePath = (Split-Path -Leaf $ProbePath)
+    ArgumentList = $probeArgs
+  } + (Get-MethodParam $As)
+  Invoke-Users $params | Out-Null
+  return [ordered]@{ args = $probeArgs; ready = $ready }
+}
+
+# ---------------------------------------------------------------- 证据摘录（事实，不是判定）
+
+function Get-PipeOwnerSid($Report) { return (Get-Field (Get-ProbeStep $Report 'owner') 'value.owner.sid') }
+
+function Get-ForgeTargets {
+  return @($script:Users['ca_a'].Sid, $SidSystem, $SidAdmins)
+}
+
+function Get-TcpEvidence($Report) {
+  $pidValue = Get-Field (Get-ProbeStep $Report 'listener_pids') 'value'
+  $pids = @()
+  if ($null -ne $pidValue) { $pids = @($pidValue) }
+  $perPid = foreach ($procId in $pids) {
+    $pick = { param($name) @(Get-ProbeSteps $Report $name | Where-Object { (Get-Field $_ 'pid') -eq $procId }) | Select-Object -First 1 }
+    [ordered]@{
+      pid          = $procId
+      l2_1         = Get-StepBrief (& $pick 'l2_1')
+      l2_1_file    = Get-Field (& $pick 'l2_1') 'value.file_name'
+      l2_2         = Get-StepBrief (& $pick 'l2_2')
+      l2_3         = Get-StepBrief (& $pick 'l2_3')
+      l2_3_exe     = Get-Field (& $pick 'l2_3') 'value.exe_file'
+      l3           = Get-StepBrief (& $pick 'l3')
+      l3_user_sid  = Get-Field (& $pick 'l3') 'value.token_user.sid'
+      wts_user_sid = Get-Field (& $pick 'wts') 'value.user_sid.sid'
+    }
+  }
+  return [ordered]@{
+    tcp_v4_entries = Get-Field (Get-ProbeStep $Report 'tcp_table_v4') 'value.entries'
+    tcp_v6_entries = Get-Field (Get-ProbeStep $Report 'tcp_table_v6') 'value.entries'
+    listener_pids  = $pids
+    per_pid        = @($perPid)
+  }
 }
 
 # ---------------------------------------------------------------- 用例
@@ -442,8 +582,24 @@ function Invoke-CaseAB {
   $a = $script:Users['ca_a']
   $pipe = "${PipePrefix}verge-mihomo-sidecar-release-$($a.OwnerKey)"
   Invoke-WithMihomo 'S-A' @{ Label = 'sa-mihomo'; As = 'ca_a'; PipeName = $pipe; Sddl = (Get-VergeSddl $a.Sid) } {
-    Invoke-ProbePipe 'S-A' 'sa-probe' 'ca_a' $pipe 'P1 /version 200；P2 属主可读且 = ca_a SID；P3 L2 ① 成功、映像名 verge-mihomo.exe' | Out-Null
-    Invoke-ProbePipe 'S-B' 'sb-probe' 'ca_b' $pipe 'P4 打开失败，ERROR_ACCESS_DENIED' | Out-Null
+    Invoke-ProbePipe -CaseId 'S-A' -Step 'sa-probe' -As 'ca_a' -PipeName $pipe `
+      -Expect 'P1 http_version.status == 200；P2 owner.sid == ca_a；P3 l2_1.file_name == verge-mihomo.exe' -Evidence {
+      param($r)
+      $l21 = Get-ProbeStep $r 'l2_1'
+      [ordered]@{
+        P1_http_status     = Get-Field (Get-ProbeStep $r 'http_version') 'value.status'
+        P2_owner_sid       = Get-PipeOwnerSid $r
+        P2_owner_is_ca_a   = ((Get-PipeOwnerSid $r) -eq $script:Users['ca_a'].Sid)
+        P3_l2_1            = Get-StepBrief $l21
+        P3_l2_1_file_match = ([string](Get-Field $l21 'value.file_name') -ieq 'verge-mihomo.exe')
+      }
+    } | Out-Null
+    Invoke-ProbePipe -CaseId 'S-B' -Step 'sb-probe' -As 'ca_b' -PipeName $pipe `
+      -Expect 'P4 open.ok == false && open.win32_error == 5' -Evidence {
+      param($r)
+      $open = Get-ProbeStep $r 'open'
+      [ordered]@{ P4_open = Get-StepBrief $open; P4_access_denied = ((Get-Field $open 'ok') -eq $false -and (Get-Field $open 'win32_error') -eq 5) }
+    } | Out-Null
   }
 }
 
@@ -452,8 +608,26 @@ function Invoke-CaseC {
   $pipe = "${PipePrefix}verge-mihomo-production-$($a.OwnerKey)"
   $mihomo = @{ Label = 'sc-mihomo'; As = 'SYSTEM'; PipeName = $pipe; Sddl = (Get-VergeSddl $a.Sid); ExtCtl = "127.0.0.1:$PortServiceCtl" }
   Invoke-WithMihomo 'S-C' $mihomo {
-    Invoke-ProbePipe 'S-C' 'sc-probe-pipe' 'ca_a' $pipe 'P5 /version 200，属主为 SYSTEM 或 BA；记录 L2 ①②③（预期 ① ACCESS_DENIED，② 或 ③ 成功）、L3、WTS pUserSid' | Out-Null
-    Invoke-ProbeTcp 'S-C' 'sc-probe-tcp' 'ca_a' $PortServiceCtl '按 2.1 规则 4 应为 listener-unverified（C-4）；WTS 只记录' | Out-Null
+    Invoke-ProbePipe -CaseId 'S-C' -Step 'sc-probe-pipe' -As 'ca_a' -PipeName $pipe `
+      -Expect 'P5 http_version.status == 200 且 owner 为 SYSTEM 或 BA；记录 l2_1/l2_2/l2_3/l3/wts（预期 l2_1 = 5，② 或 ③ ok）' -Evidence {
+      param($r)
+      $owner = Get-ProbeStep $r 'owner'
+      [ordered]@{
+        P5_http_status          = Get-Field (Get-ProbeStep $r 'http_version') 'value.status'
+        P5_owner_sid            = Get-PipeOwnerSid $r
+        P5_owner_is_system      = Get-Field $owner 'value.owner.is_system'
+        P5_owner_is_builtin_admins = Get-Field $owner 'value.owner.is_builtin_admins'
+        l2_1                    = Get-StepBrief (Get-ProbeStep $r 'l2_1')
+        l2_2                    = Get-StepBrief (Get-ProbeStep $r 'l2_2')
+        l2_3                    = Get-StepBrief (Get-ProbeStep $r 'l2_3')
+        l3                      = Get-StepBrief (Get-ProbeStep $r 'l3')
+        wts_user_sid            = Get-Field (Get-ProbeStep $r 'wts') 'value.user_sid.sid'
+      }
+    } | Out-Null
+    Invoke-ProbeTcp -CaseId 'S-C' -Step 'sc-probe-tcp' -As 'ca_a' -Port $PortServiceCtl `
+      -Expect '按 2.1 规则 4 应为 listener-unverified（C-4，如 l3.win32_error == 5）；WTS 只记录' -Evidence {
+      param($r) Get-TcpEvidence $r
+    } | Out-Null
   }
 }
 
@@ -462,7 +636,12 @@ function Invoke-CaseD {
   $pipe = "${PipePrefix}verge-mihomo-sidecar-release-$($a.OwnerKey)"
   # 不设 LISTEN_NAMEDPIPE_SDDL：mihomo 默认 D:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)
   Invoke-WithMihomo 'S-D' @{ Label = 'sd-mihomo'; As = 'ca_a'; PipeName = $pipe } {
-    Invoke-ProbePipe 'S-D' 'sd-probe' 'ca_b' $pipe '仅记录：ca_b 能否连上、S-2 的 ACE 遍历结果' | Out-Null
+    Invoke-ProbePipe -CaseId 'S-D' -Step 'sd-probe' -As 'ca_b' -PipeName $pipe `
+      -Expect '仅记录：open 结果；连上时 dacl.aces（预期 BU 的 ACE has_write_bits == true）与 dacl.sddl' -Evidence {
+      param($r)
+      $dacl = Get-ProbeStep $r 'dacl'
+      [ordered]@{ open = Get-StepBrief (Get-ProbeStep $r 'open'); dacl_sddl = Get-Field $dacl 'value.sddl'; dacl_aces = Get-Field $dacl 'value.aces' }
+    } | Out-Null
   }
 }
 
@@ -470,40 +649,144 @@ function Invoke-CaseE {
   $a = $script:Users['ca_a']
   $pipe = "${PipePrefix}verge-mihomo-sidecar-release-$($a.OwnerKey)"
   $dacl = 'D:(A;;GA;;;WD)'
-  $owners = [ordered]@{ ca_a = $a.Sid; sy = 'SY'; ba = 'BA' }
 
-  # ①②③：ca_b 用真实 mihomo 以伪造属主抢注；④：不带 O:（P7 对照）
+  # P7 / S-E 前提：ca_b 的令牌不得提权、不得启用 BA（README“环境自检”）。用一个不存在的管道名取 context。
+  $envPipe = "${PipePrefix}verge-mihomo-spike-envcheck-$(New-RandomHex 8)"
+  $envRec = Invoke-ProbePipe -CaseId 'S-E' -Step 'se-env-cab' -As 'ca_b' -PipeName $envPipe -TimeoutMs 1000 `
+    -Expect '环境自检：context.self.sid == ca_b，elevated == false，builtin_admins_enabled == false'
+  if ($null -eq $envRec.context -or -not $envRec.context.ok) {
+    Add-SpikeError "S-E 环境自检失败（ca_b 的 context：$(ConvertTo-Json -InputObject $envRec.context -Compress)），S-E 结果不具代表性，跳过 S-E"
+    return
+  }
+
+  # ①②③：ca_b 用真实 mihomo 以伪造属主抢注；④：不带 O:（P7）。不论 mihomo 是否监听成功都让 ca_a 探测（README）。
   $mihomoTries = @(
-    @{ n = 'e1'; sddl = "O:$($a.Sid)$dacl"; expect = 'P6 伪造失败：mihomo 记录 listen error，或 ca_a 读到的属主不是 ca_a/SYSTEM/BA' }
-    @{ n = 'e2'; sddl = "O:SY$dacl"; expect = 'P6 伪造失败（同 ①，目标 SYSTEM）' }
-    @{ n = 'e3'; sddl = "O:BA$dacl"; expect = 'P6 伪造失败（同 ①，目标 BA）' }
-    @{ n = 'e4'; sddl = $dacl; expect = 'P7 ca_a 能连上，读到的属主 = ca_b SID' }
+    @{ n = 'e1'; sddl = "O:$($a.Sid)$dacl"; p7 = $false }
+    @{ n = 'e2'; sddl = "O:SY$dacl"; p7 = $false }
+    @{ n = 'e3'; sddl = "O:BA$dacl"; p7 = $false }
+    @{ n = 'e4'; sddl = $dacl; p7 = $true }
   )
   foreach ($t in $mihomoTries) {
-    $label = "se-$($t.n)-mihomo"
-    $expect = $t.expect
-    Invoke-WithMihomo 'S-E' @{ Label = $label; As = 'ca_b'; PipeName = $pipe; Sddl = $t.sddl } {
+    Invoke-WithMihomo 'S-E' @{ Label = "se-$($t.n)-mihomo"; As = 'ca_b'; PipeName = $pipe; Sddl = $t.sddl } {
       param($m)
-      if ($m.pipeStatus -eq 'listening') {
-        Invoke-ProbePipe 'S-E' "se-$($t.n)-probe" 'ca_a' $pipe $expect | Out-Null
+      if ($t.p7) {
+        Invoke-ProbePipe -CaseId 'S-E' -Step "se-$($t.n)-probe" -As 'ca_a' -PipeName $pipe `
+          -Expect 'P7 open.ok && owner.sid == ca_b' -Evidence {
+          param($r)
+          [ordered]@{ P7_open = Get-StepBrief (Get-ProbeStep $r 'open'); P7_owner_sid = Get-PipeOwnerSid $r; P7_owner_is_ca_b = ((Get-PipeOwnerSid $r) -eq $script:Users['ca_b'].Sid) }
+        } | Out-Null
       } else {
-        Write-Info "S-E $($t.n)：mihomo 未监听管道（$($m.pipeStatus)），以日志与 ⑥ 的错误码为证据，跳过探针"
+        Invoke-ProbePipe -CaseId 'S-E' -Step "se-$($t.n)-probe" -As 'ca_a' -PipeName $pipe `
+          -Expect 'P6（旁证）：open 失败，或 owner.sid 不在 {ca_a, SYSTEM, BA}' -Evidence {
+          param($r)
+          $owner = Get-PipeOwnerSid $r
+          [ordered]@{
+            mihomo_pipe_status = $m.pipeStatus
+            P6_open            = Get-StepBrief (Get-ProbeStep $r 'open')
+            P6_owner_sid       = $owner
+            P6_owner_forged    = (($null -ne $owner) -and ((Get-ForgeTargets) -contains $owner))
+          }
+        } | Out-Null
       }
     }
   }
 
-  # ⑤：ca_b 正常创建后 SetSecurityInfo(OWNER) 改属主
-  foreach ($k in $owners.Keys) {
-    $sid = if ($owners[$k] -eq 'SY') { $SidSystem } elseif ($owners[$k] -eq 'BA') { $SidAdmins } else { $owners[$k] }
-    Invoke-ProbeSquat -CaseId 'S-E' -Step "se-e5-$($k.Replace('_', ''))" -As 'ca_b' -PipeName $pipe -Sddl $dacl `
-      -SetOwnerSid $sid -Expect 'P6 SetSecurityInfo(OWNER) 失败，记录错误码（预期 1307 ERROR_INVALID_OWNER）' | Out-Null
+  # ⑤：一次调用，正常创建后依次 SetSecurityInfo(OWNER) 为 ca_a、SY、BA
+  Invoke-ProbeSquat -CaseId 'S-E' -Step 'se-e5-squat' -As 'ca_b' -PipeName $pipe -Sddl '-' -SetOwner @($a.Sid, 'SY', 'BA') `
+    -Expect 'P6（主证据）：三个 set_owner 均 ok == false、win32_error == 1307；每个 owner_readback.sid == ca_b' -Evidence {
+    param($r)
+    $sets = @(Get-ProbeSteps $r 'set_owner' | ForEach-Object { [ordered]@{ target = Get-Field $_ 'target'; ok = Get-Field $_ 'ok'; win32_error = Get-Field $_ 'win32_error' } })
+    $reads = @(Get-ProbeSteps $r 'owner_readback' | ForEach-Object { [ordered]@{ target = Get-Field $_ 'target'; owner_sid = Get-Field $_ 'value.owner.sid' } })
+    $afterSet = @($reads | Where-Object { $null -ne $_.target })
+    [ordered]@{
+      create                       = Get-StepBrief (Get-ProbeStep $r 'create')
+      P6_set_owner                 = $sets
+      P6_set_owner_count           = $sets.Count
+      P6_all_set_owner_1307        = (($sets.Count -eq 3) -and (@($sets | Where-Object { $_.ok -ne $false -or $_.win32_error -ne 1307 }).Count -eq 0))
+      owner_readback               = $reads
+      P6_readbacks_after_set_ca_b  = (($afterSet.Count -eq 3) -and (@($afterSet | Where-Object { $_.owner_sid -ne $script:Users['ca_b'].Sid }).Count -eq 0))
+    }
+  } | Out-Null
+
+  # ⑥：三次独立调用，直接以含伪造属主的 SDDL 创建（S-R9，P6 的主要证据）
+  $sixth = [ordered]@{ caa = $a.Sid; sy = 'SY'; ba = 'BA' }
+  foreach ($k in $sixth.Keys) {
+    $targetSid = switch ($k) { 'caa' { $a.Sid } 'sy' { $SidSystem } 'ba' { $SidAdmins } }
+    Invoke-ProbeSquat -CaseId 'S-E' -Step "se-e6-$k" -As 'ca_b' -PipeName $pipe -Sddl "O:$($sixth[$k])$dacl" `
+      -Expect 'P6（主证据）：create.ok == false && create.win32_error == 1307；若 create 成功且 owner_readback == 目标即伪造成功（no-go）' -Evidence {
+      param($r)
+      $create = Get-ProbeStep $r 'create'
+      $readback = Get-Field (Get-ProbeStep $r 'owner_readback') 'value.owner.sid'
+      [ordered]@{
+        target_sid          = $targetSid
+        P6_create           = Get-StepBrief $create
+        P6_create_1307      = ((Get-Field $create 'ok') -eq $false -and (Get-Field $create 'win32_error') -eq 1307)
+        owner_readback_sid  = $readback
+        P6_forged           = (($null -ne $readback) -and ($readback -eq $targetSid))
+      }
+    } | Out-Null
   }
-  # ⑥：ca_b 直接以含伪造属主的 SDDL 创建（S-R9，P6 的主要证据）
-  foreach ($k in $owners.Keys) {
-    Invoke-ProbeSquat -CaseId 'S-E' -Step "se-e6-$($k.Replace('_', ''))" -As 'ca_b' -PipeName $pipe `
-      -Sddl "O:$($owners[$k])$dacl" -Expect 'P6 创建失败，记录错误码（预期 1307 ERROR_INVALID_OWNER）' | Out-Null
+
+  Invoke-P7Squat $pipe $dacl
+  if (-not (Wait-PipeGone $pipe)) { Add-SpikeError "S-E 结束后 $pipe 仍存在（squat 进程未退出？）" }
+}
+
+function Invoke-P7Squat([string]$Pipe, [string]$Dacl) {
+  # README“P7 备选（无需 mihomo）”：ca_b squat --hold，等 --ready-file 出现后 ca_a 探测；应看到 503 + {"pipe_probe":"squat"}
+  $squatStep = 'se-p7-squat'
+  $squatRec = New-ProbeRecord 'S-E' $squatStep 'ca_b' @() 'P7 备选：hold 期间有对应的 client_connected'
+  if (-not $ProbePath -or -not (Test-Path -LiteralPath $ProbePath)) {
+    $squatRec.status = 'probe-missing'
+    Add-Step 'S-E' $squatStep $squatRec
+    return
   }
-  if ((Test-PipePresent $pipe) -eq $true) { Add-SpikeError "S-E 结束后 $pipe 仍存在（squat 进程未退出？）" }
+  try {
+    $started = Start-ProbeSquatHold -Step $squatStep -As 'ca_b' -PipeName $Pipe -Sddl $Dacl -HoldSec $SquatHoldSec
+    $squatRec.args = $started.args
+    $squatRec.status = 'ran'
+    $deadline = (Get-Date).AddSeconds($ListenWaitSec)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $started.ready)) { Start-Sleep -Milliseconds 250 }
+    if (Test-Path -LiteralPath $started.ready) {
+      Invoke-ProbePipe -CaseId 'S-E' -Step 'se-p7-probe' -As 'ca_a' -PipeName $Pipe `
+        -Expect 'P7 备选：owner.sid == ca_b；http_version.status == 503 且 body_json.pipe_probe == squat' -Evidence {
+        param($r)
+        $http = Get-ProbeStep $r 'http_version'
+        [ordered]@{
+          P7_owner_sid      = Get-PipeOwnerSid $r
+          P7_owner_is_ca_b  = ((Get-PipeOwnerSid $r) -eq $script:Users['ca_b'].Sid)
+          http_status       = Get-Field $http 'value.status'
+          body_pipe_probe   = Get-Field $http 'value.body_json.pipe_probe'
+          reached_squatter  = ((Get-Field $http 'value.status') -eq 503 -and (Get-Field $http 'value.body_json.pipe_probe') -eq 'squat')
+        }
+      } | Out-Null
+    } else {
+      $squatRec.error = "$ListenWaitSec 秒内没有 ready 文件"
+    }
+    # 等 hold 自然结束（complete: true）；超时再强制结束——--out 有检查点，证据不丢
+    if (-not (Test-Path -LiteralPath (Join-Path (Get-JobDir $squatStep) 'exitcode.txt'))) {
+      $deadline = (Get-Date).AddSeconds($SquatHoldSec + 15)
+      while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath (Join-Path (Get-JobDir $squatStep) 'exitcode.txt'))) { Start-Sleep -Milliseconds 500 }
+    }
+    $exitFile = Join-Path (Get-JobDir $squatStep) 'exitcode.txt'
+    if (Test-Path -LiteralPath $exitFile) {
+      $squatRec.exitCode = [int]((Read-SharedText $exitFile).Trim())
+    } else {
+      $squatRec.timedOut = $true
+      Invoke-Users @{ Action = 'Stop'; Label = $squatStep } | Out-Null
+    }
+  } catch {
+    $squatRec.status = 'error'
+    $squatRec.error = $_.Exception.Message
+  }
+  Complete-ProbeRecord $squatRec {
+    param($r)
+    [ordered]@{
+      complete          = Get-Field $r 'complete'
+      ready_file        = Get-StepBrief (Get-ProbeStep $r 'ready_file')
+      client_connected  = @(Get-ProbeSteps $r 'client_connected' | ForEach-Object { Get-Field $_ 'value' })
+    }
+  } | Out-Null
+  if ($squatRec.error -and $squatRec.status -ne 'error') { Add-SpikeError "S-E/$squatStep：$($squatRec.error)" }
 }
 
 function Invoke-CaseF {
@@ -512,7 +795,13 @@ function Invoke-CaseF {
   $script:Scrub.Add($secret)
   $mihomo = @{ Label = 'sf-mihomo'; As = 'ca_b'; ExtCtl = "127.0.0.1:$PortForeignCtl"; Secret = $secret }
   Invoke-WithMihomo 'S-F' $mihomo {
-    Invoke-ProbeTcp 'S-F' 'sf-probe-tcp' 'ca_a' $PortForeignCtl '仅记录：GetExtendedTcpTable 条目与 PID、L2 ① ③、L3、WTS pUserSid（预期 ① 与 L3 ACCESS_DENIED，③ 得到 verge-mihomo.exe）' | Out-Null
+    Invoke-ProbeTcp -CaseId 'S-F' -Step 'sf-probe-tcp' -As 'ca_a' -Port $PortForeignCtl `
+      -Expect '仅记录：tcp_table、listener_pids、该 PID 的 l2_1 / l2_3 / l3、wts.user_sid（是否 == ca_b）' -Evidence {
+      param($r)
+      $e = Get-TcpEvidence $r
+      $e['wts_user_sid_is_ca_b'] = @($e.per_pid | ForEach-Object { $_.wts_user_sid -eq $script:Users['ca_b'].Sid })
+      $e
+    } | Out-Null
   }
 }
 
@@ -556,7 +845,7 @@ $summary = [ordered]@{
   methods    = $null
   steps      = $null
   errors     = $null
-  note       = '只记录不判定：P1 ~ P7 需人工按 §4.1 判定；探针输出格式待 TODO(probe-cli)'
+  note       = '只记录不判定：P1 ~ P7 需人工按 §4.1 判定；evidence 只是按 spike/pipe-probe/README.md 摘出的字段，以各步 output 为准'
 }
 if ($ProbePath -and (Test-Path -LiteralPath $ProbePath)) {
   $summary.probe.present = $true

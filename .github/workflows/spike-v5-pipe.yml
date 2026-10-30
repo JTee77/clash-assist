@@ -13,32 +13,32 @@ permissions:
 jobs:
   spike:
     runs-on: windows-2022
-    # 与 ci-standard-users.ps1 计划任务的 ExecutionTimeLimit（30 分钟）对齐（PR #46 SR-11 / SR2-4）
-    timeout-minutes: 30
+    # 45 分钟：探针编译 + S-A ~ S-F + 清理 / 上传。ci-standard-users.ps1 计划任务的 ExecutionTimeLimit
+    # 仍为 30 分钟（PR #46 SR-11 / SR2-4），短于 job，job 超时前残留任务也会被系统结束
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
     env:
-      # TODO(probe-cli): 产物名按 Pit 的 crate 定（假设 bin 名为 pipe-probe、独立 crate 自带 target 目录）
+      # spike/pipe-probe/README.md“构建”：独立 crate（自带空 [workspace]），产物在 crate 自己的 target 下
       PROBE_EXE: ${{ github.workspace }}\spike\pipe-probe\target\release\pipe-probe.exe
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # 探针 crate 由 Pit 提交到 spike/pipe-probe；尚未提交时跳过编译，编排脚本把探针步骤记为 probe-missing
       - name: Rust 工具链（rust-toolchain.toml）
-        if: hashFiles('spike/pipe-probe/Cargo.toml') != ''
         run: |
           $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel *= *"(.*)"$').Matches[0].Groups[1].Value
           rustup toolchain install $channel --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --version
 
+      # 单独一步：编译失败时不进入用例（rustup 会向上找到仓库根的 rust-toolchain.toml）
       - name: 编译探针 spike/pipe-probe
-        if: hashFiles('spike/pipe-probe/Cargo.toml') != ''
+        working-directory: spike/pipe-probe
         run: |
-          $locked = if (Test-Path spike/pipe-probe/Cargo.lock) { @('--locked') } else { @() }
-          cargo build --release --manifest-path spike/pipe-probe/Cargo.toml @locked
+          cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-FileHash -Algorithm SHA256 -LiteralPath $env:PROBE_EXE | Format-List
 
