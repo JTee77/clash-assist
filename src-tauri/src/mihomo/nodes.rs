@@ -21,7 +21,7 @@ fn is_junk_name(name: &str) -> bool {
 }
 
 fn ignore_type(t: &str) -> bool {
-    IGNORE_PROXY_TYPES.iter().any(|x| *x == t)
+    IGNORE_PROXY_TYPES.contains(&t)
 }
 
 /// A per-node capability flag from a proxy object; absent → false.
@@ -384,7 +384,7 @@ pub async fn list_nodes_async(
     timeout_ms: u64,
     sock_path: Option<&str>,
 ) -> Result<ListNodesResult, String> {
-    let tcp_timeout = timeout_ms.min(2000).max(400);
+    let tcp_timeout = timeout_ms.clamp(400, 2000);
     let unix_timeout = timeout_ms.max(tcp_timeout);
     let prefer_unix = sock_path.map(|s| !s.is_empty()).unwrap_or(false);
 
@@ -648,7 +648,6 @@ mod tests {
                     panic!("intentional smoke panic");
                 })
                 .map_err(|_| "caught panic".to_string())
-                .and_then(|()| Ok::<(), String>(()))
             })
             .await
         });
@@ -907,9 +906,7 @@ mod tests {
         );
         let _ = std::fs::remove_file(&sock);
 
-        let body = concat!(
-            r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"GLOBAL":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2","history":[{"time":"t","delay":40}]},"日本 TY-4-HY2":{"type":"Hysteria2","history":[{"time":"t","delay":55}]},"DIRECT":{"type":"Direct"}}}"#
-        );
+        let body = r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"GLOBAL":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2","history":[{"time":"t","delay":40}]},"日本 TY-4-HY2":{"type":"Hysteria2","history":[{"time":"t","delay":55}]},"DIRECT":{"type":"Direct"}}}"#;
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -981,9 +978,7 @@ mod tests {
         );
         let _ = std::fs::remove_file(&sock);
 
-        let json = concat!(
-            r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2"},"日本 TY-4-HY2":{"type":"Hysteria2"},"DIRECT":{"type":"Direct"}}}"#
-        );
+        let json = r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2"},"日本 TY-4-HY2":{"type":"Hysteria2"},"DIRECT":{"type":"Direct"}}}"#;
         let json_b = json.as_bytes();
         // Split inside multi-byte UTF-8 so char-based decode would corrupt.
         let split_at = (0..json_b.len())

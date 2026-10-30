@@ -1363,7 +1363,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
         for _ in 0..chunks {
             r.extend_from_slice(format!("{chunk_len:x}\r\n").as_bytes());
-            r.extend(std::iter::repeat(b'a').take(chunk_len));
+            r.extend(std::iter::repeat_n(b'a', chunk_len));
             r.extend_from_slice(b"\r\n");
         }
         r.extend_from_slice(b"0\r\n\r\n");

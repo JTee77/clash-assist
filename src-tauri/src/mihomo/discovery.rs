@@ -200,16 +200,13 @@ fn sock_answers_version(sock: &str, secret: &str) -> bool {
         _ => {
             // Retry once with empty secret (Verge service sock often has no auth).
             if !secret.is_empty() {
-                match http_via_unix("GET", "/version", None, "", Some(sock), 800) {
+                matches!(
+                    http_via_unix("GET", "/version", None, "", Some(sock), 800),
                     Ok(res)
                         if (200..300).contains(&res.status)
                             || res.status == 401
-                            || res.status == 403 =>
-                    {
-                        true
-                    }
-                    _ => false,
-                }
+                            || res.status == 403
+                )
             } else {
                 false
             }
@@ -508,6 +505,7 @@ fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
     if !path.exists() || !path.is_file() {
         return None;
     }
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] // 只有 macOS 分支读 plist
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -720,12 +718,13 @@ mixed-port: 7897
         let missing = format!("/tmp/clash-assist-no-sock-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&missing);
         // No live Verge required: all missing → None
-        let r = select_working_sock(&[missing.clone()], "");
+        let r = select_working_sock(std::slice::from_ref(&missing), "");
         assert!(r.is_none());
     }
 
     #[test]
     fn verge_candidates_include_service_and_legacy() {
+        #[cfg_attr(not(unix), allow(unused_variables))]
         let c = platform::verge_sock_candidates(&[], &[]);
         #[cfg(unix)]
         {

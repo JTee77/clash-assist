@@ -56,11 +56,9 @@ pub fn parse_whoami_txt(raw: &str) -> (Option<String>, Option<String>, Option<St
                 "ecs" => ecs = Some(v.clone()),
                 _ => {}
             },
-            [only] => {
-                // Bare value (some whoami services echo just the client IP).
-                if ip.is_none() && looks_like_ip(only) {
-                    ip = Some(only.clone());
-                }
+            // Bare value (some whoami services echo just the client IP).
+            [only] if ip.is_none() && looks_like_ip(only) => {
+                ip = Some(only.clone());
             }
             _ => {}
         }
@@ -68,6 +66,7 @@ pub fn parse_whoami_txt(raw: &str) -> (Option<String>, Option<String>, Option<St
     (ip, ns, ecs)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // scutil 解析只在 macOS 用；单测全平台跑
 #[derive(Debug, Default, Clone)]
 struct ResolverBlock {
     nameservers: Vec<String>,
@@ -89,6 +88,7 @@ fn looks_like_ip(s: &str) -> bool {
     false
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // scutil 解析只在 macOS 用；单测全平台跑
 fn is_tunnel_iface(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     // scutil: "if_index : 15 (utun4)" etc.
@@ -105,6 +105,7 @@ fn is_tunnel_iface(line: &str) -> bool {
 /// 3. If any block looks like tunnel/VPN (utun/ipsec/ppp/…), prefer those nameservers.
 /// 4. Else if scoped resolvers exist, prefer those.
 /// 5. Else return all unique nameservers (BTreeSet → stable sorted Vec).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // scutil 解析只在 macOS 用；单测全平台跑
 pub fn parse_scutil_dns(raw: &str) -> (Vec<String>, String) {
     let mut blocks: Vec<ResolverBlock> = Vec::new();
     let mut current: Option<ResolverBlock> = None;
@@ -201,14 +202,14 @@ fn truncate_hint(raw: &str, max_chars: usize) -> String {
 pub fn list_dns_resolvers_blocking() -> DnsResolversResult {
     #[cfg(not(target_os = "macos"))]
     {
-        return DnsResolversResult {
+        DnsResolversResult {
             resolvers: vec![],
             source: "unsupported-platform".into(),
             raw_hint: None,
             error: Some(
                 "DNS 解析器列表依赖 macOS `scutil --dns`；当前平台不可用。".into(),
             ),
-        };
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -318,7 +319,7 @@ pub fn dns_whoami_blocking(
             ecs: None,
             via,
             raw: String::new(),
-            error: Some(msg.into()),
+            error: Some(msg),
         }
     }
 

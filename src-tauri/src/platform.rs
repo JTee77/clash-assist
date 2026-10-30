@@ -25,6 +25,7 @@ pub const VERGE_SOCK_PATH: &str = "/tmp/verge/verge-mihomo.sock";
 pub const VERGE_SERVICE_USERS_DIR: &str = "/var/run/clash-verge-service/users";
 
 /// Mihomo Party controller sock (unix only) — consumed via the client table.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // 只在 macOS 客户端表中使用
 pub const PARTY_SOCK_PATH: &str = "/tmp/mihomo-party.sock";
 
 pub fn verge_config_path() -> PathBuf {
@@ -64,6 +65,7 @@ pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
 /// 连接前的路径侧检查（不跟随符号链接）：
 /// - 路径本身是 symlink → 拒绝（防止指向他人 sock 的 TOCTOU 替换）
 /// - lstat 属主不是本人 / root → 拒绝（发现阶段廉价过滤）
+///
 /// 真正的信任判定在连接后的 `ensure_connected_peer_trusted`。
 #[cfg(unix)]
 pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {

@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+#[cfg(unix)]
 use super::http_parse::parse_http_response_bytes;
 use super::types::{UnixHttpResult, MAX_BODY_BYTES};
 
