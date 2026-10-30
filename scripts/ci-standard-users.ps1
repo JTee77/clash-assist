@@ -764,6 +764,8 @@ function Invoke-Cleanup {
     exit 1
   }
   Write-Info '清理完成'
+  # 显式退出码：否则 $LASTEXITCODE 可能残留上面 taskkill 的非零值，调用方（spike workflow）会误判
+  exit 0
 }
 
 # ---------------------------------------------------------------- main
