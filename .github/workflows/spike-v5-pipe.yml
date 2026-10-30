@@ -1,0 +1,66 @@
+name: spike-v5-pipe
+
+# V5 pipe spike（windows-plan r4 §4.1，S-A ~ S-F）：只存在于 win/v5-pipe-spike 分支，不合并。
+# workflow_dispatch 要求 workflow 文件在默认分支上，这里不满足，所以只用 push 触发。
+on:
+  push:
+    branches: [win/v5-pipe-spike]
+
+# 只读；不使用任何 secret（§4.1、PR #46 r2 评审 ⑤）
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: windows-2022
+    # 与 ci-standard-users.ps1 计划任务的 ExecutionTimeLimit（30 分钟）对齐（PR #46 SR-11 / SR2-4）
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # TODO(probe-cli): 产物名按 Pit 的 crate 定（假设 bin 名为 pipe-probe、独立 crate 自带 target 目录）
+      PROBE_EXE: ${{ github.workspace }}\spike\pipe-probe\target\release\pipe-probe.exe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # 探针 crate 由 Pit 提交到 spike/pipe-probe；尚未提交时跳过编译，编排脚本把探针步骤记为 probe-missing
+      - name: Rust 工具链（rust-toolchain.toml）
+        if: hashFiles('spike/pipe-probe/Cargo.toml') != ''
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel *= *"(.*)"$').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal
+          rustc --version
+
+      - name: 编译探针 spike/pipe-probe
+        if: hashFiles('spike/pipe-probe/Cargo.toml') != ''
+        run: |
+          $locked = if (Test-Path spike/pipe-probe/Cargo.lock) { @('--locked') } else { @() }
+          cargo build --release --manifest-path spike/pipe-probe/Cargo.toml @locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $env:PROBE_EXE | Format-List
+
+      - name: 运行 S-A ~ S-F（mihomo v1.19.33 + 标准用户 ca_a / ca_b）
+        run: |
+          & ./scripts/spike-v5-pipe.ps1 -ResultsDir (Join-Path $env:RUNNER_TEMP 'v5-pipe-results') -ProbePath $env:PROBE_EXE
+          exit $LASTEXITCODE
+
+      # 兜底清理（编排脚本的 finally 已做过一次；可重复执行）：结束进程、删除计划任务、删除 ca_a / ca_b 及其配置文件
+      - name: 清理标准用户与计划任务
+        if: always()
+        run: |
+          Get-Process -Name verge-mihomo, pipe-probe -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
+          & ./scripts/ci-standard-users.ps1 -Action Cleanup -UserName ca_a, ca_b
+          exit $LASTEXITCODE
+
+      # 只上传结果目录（探针 / mihomo 输出 JSON 与日志）；禁止上传 ci-standard-users 的状态目录（含 DPAPI 凭据）
+      - name: 上传结果
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spike-v5-pipe-results
+          path: ${{ runner.temp }}/v5-pipe-results
+          if-no-files-found: warn
+          retention-days: 7
