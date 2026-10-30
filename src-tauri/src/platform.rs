@@ -86,10 +86,10 @@ pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(not(unix))]
-pub fn ensure_sock_path_trusted(_sock: &str) -> Result<(), String> {
-    Ok(())
-}
+// 非 Unix 平台（Windows）不编译 `ensure_sock_path_trusted`：那里没有 Unix 套接字，
+// 旧版的 `Ok(())` 桩等于静默放行。删除后任何调用点在 Windows 上都会编译失败，
+// 必须显式处理成「不可用」（见 `mihomo::discovery::select_working_sock`）。
+// Windows 的本机 IPC 信任校验走命名管道（M1：`ensure_pipe_server_trusted`）。
 
 /// 连接后检查对端进程凭证：peer uid 必须是本人或 root。
 /// Verge service 模式下 sock 文件属主可能是当前用户，但 mihomo 以 root 运行——peer uid=0 应被接受。

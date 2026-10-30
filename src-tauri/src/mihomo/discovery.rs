@@ -10,6 +10,7 @@ use crate::platform;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use super::transport::http_via_unix;
 use super::types::{DiscoverResult, DEFAULT_MIXED, DEFAULT_PORT};
 
@@ -185,6 +186,7 @@ fn sock_from_verge_cmdline() -> Option<String> {
 }
 
 /// Probe sock with GET /version (short timeout). Returns true on HTTP 2xx.
+#[cfg(unix)]
 fn sock_answers_version(sock: &str, secret: &str) -> bool {
     if !Path::new(sock).exists() {
         return false;
@@ -216,6 +218,7 @@ fn sock_answers_version(sock: &str, secret: &str) -> bool {
 }
 
 /// Pick first trusted-owner candidate that exists and answers /version; else first existing trusted one; else None.
+#[cfg(unix)]
 pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String> {
     let mut first_existing: Option<String> = None;
     for cand in candidates {
@@ -239,6 +242,15 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
         }
     }
     first_existing
+}
+
+/// 非 Unix 平台（Windows）：没有 Unix 套接字，也没有路径信任校验
+/// （`platform::ensure_sock_path_trusted` 只在 Unix 编译）。所有候选一律判为不可用，
+/// 不做任何探测、不发送 secret——绝不在缺少信任校验时静默放行。
+/// Windows 的本机 IPC 由 M1 的命名管道路径（`pipe::open_verified`）接管。
+#[cfg(not(unix))]
+pub fn select_working_sock(_candidates: &[String], _secret: &str) -> Option<String> {
+    None
 }
 
 fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
