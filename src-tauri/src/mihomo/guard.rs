@@ -316,7 +316,8 @@ mod tests {
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
                 #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
-                if path.is_dir() {
+                let is_dir = path.is_dir();
+                if is_dir {
                     stack.push(path);
                     continue;
                 }

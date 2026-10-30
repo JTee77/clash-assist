@@ -192,7 +192,8 @@ fn sock_from_verge_cmdline() -> Option<String> {
 #[cfg(unix)]
 fn sock_answers_version(sock: &str, secret: &str) -> bool {
     #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
-    if !Path::new(sock).exists() {
+    let sock_exists = Path::new(sock).exists();
+    if !sock_exists {
         return false;
     }
     match http_via_unix("GET", "/version", None, secret, Some(sock), 800) {
@@ -229,7 +230,8 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
         }
         let s = p.to_string_lossy().into_owned();
         #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
-        if !Path::new(&s).exists() {
+        let sock_exists = Path::new(&s).exists();
+        if !sock_exists {
             continue;
         }
         // 0.2.9：其他普通用户拥有的套接字不作候选（连回落候选也不当）。
@@ -389,11 +391,13 @@ pub fn read_controller_yaml(
     for raw in paths {
         let path = expand_path_str(raw);
         #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
-        if !path.exists() {
+        let exists = path.exists();
+        if !exists {
             continue;
         }
         #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
-        if let Ok(content) = std::fs::read_to_string(&path) {
+        let read = std::fs::read_to_string(&path);
+        if let Ok(content) = read {
             let (port, secret, mixed) =
                 parse_controller_yaml(&content, default_port, default_mixed);
             return DiscoverResult {
@@ -411,7 +415,8 @@ pub fn read_controller_yaml(
     for raw in paths {
         let path = expand_path_str(raw);
         #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
-        if path.is_dir() {
+        let is_dir = path.is_dir();
+        if is_dir {
             if let Ok(entries) = std::fs::read_dir(&path) {
                 let mut yamls: Vec<PathBuf> = entries
                     .filter_map(|e| e.ok().map(|e| e.path()))
@@ -424,7 +429,9 @@ pub fn read_controller_yaml(
                     .collect();
                 yamls.sort();
                 for y in yamls {
-                    if let Ok(content) = std::fs::read_to_string(&y) {
+                    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+                    let read = std::fs::read_to_string(&y);
+                    if let Ok(content) = read {
                         let (port, secret, mixed) =
                             parse_controller_yaml(&content, default_port, default_mixed);
                         return DiscoverResult {
@@ -544,7 +551,8 @@ pub fn parse_flclash_json_str(raw_json: &str) -> Option<ParsedControllerYaml> {
 /// or direct `.json`) and extract `ParsedControllerYaml`.
 fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
     #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
-    if !path.exists() || !path.is_file() {
+    let is_existing_file = path.exists() && path.is_file();
+    if !is_existing_file {
         return None;
     }
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] // 只有 macOS 分支读 plist
@@ -596,14 +604,20 @@ pub fn discover_flclash_with_paths(
     for raw in yaml_paths {
         let path = expand_path_str(raw);
         #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
-        if path.is_file() {
+        let is_file = path.is_file();
+        // 与原来的 `if is_file { … } else if path.is_dir() { … }` 等价：只有不是文件时才查 is_dir
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+        let is_dir = !is_file && path.is_dir();
+        if is_file {
             if let Some(p) = read_and_parse(&path) {
                 sources.push(path.display().to_string());
                 merge_parsed(&mut parsed, p);
             }
-        } else if path.is_dir() {
+        } else if is_dir {
             let cfg_yaml = path.join("config.yaml");
-            if cfg_yaml.is_file() {
+            #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+            let cfg_is_file = cfg_yaml.is_file();
+            if cfg_is_file {
                 let disp = cfg_yaml.display().to_string();
                 if !sources.contains(&disp) {
                     if let Some(p) = read_and_parse(&cfg_yaml) {
@@ -873,7 +887,8 @@ mixed-port: 7897
     fn live_verge_discover_resolves_service_sock_when_present() {
         let expected = platform::verge_service_sock_for_uid(platform::current_uid());
         #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
-        if !std::path::Path::new(&expected).exists() {
+        let present = std::path::Path::new(&expected).exists();
+        if !present {
             eprintln!("skip live: service sock absent ({expected})");
             return;
         }

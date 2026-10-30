@@ -278,7 +278,8 @@ fn find_system_resolver() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
         #[allow(clippy::disallowed_methods, reason = "仅 Linux/Unix，不在 S-R1 的 Windows 风险面")]
-        if let Ok(content) = std::fs::read_to_string("/etc/resolv.conf") {
+        let resolv = std::fs::read_to_string("/etc/resolv.conf");
+        if let Ok(content) = resolv {
             for line in content.lines() {
                 if let Some(rest) = line.strip_prefix("nameserver") {
                     let ip = rest.trim();

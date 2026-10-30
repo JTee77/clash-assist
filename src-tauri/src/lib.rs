@@ -840,7 +840,8 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
         let old = root.join(LEGACY_IDENTIFIER);
         let new = root.join(new_id);
         #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面")]
-        if old.is_dir() && dir_is_empty_or_missing(&new) {
+        let old_is_dir = old.is_dir();
+        if old_is_dir && dir_is_empty_or_missing(&new) {
             match copy_dir_all(&old, &new) {
                 Ok(()) => append_app_log(&format!("migrated {} -> {}", old.display(), new.display())),
                 Err(e) => append_app_log(&format!("migrate {} failed: {e}", old.display())),
