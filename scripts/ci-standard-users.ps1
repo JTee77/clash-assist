@@ -155,6 +155,7 @@ $SidUsers = 'S-1-5-32-545'
 $TaskPrefix = 'ca-spike-'
 $BatchRight = 'SeBatchLogonRight'
 $StartWaitSec = 30
+$TaskTimeLimitMin = 30
 
 if (-not $StateDir) {
   $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
@@ -555,8 +556,9 @@ function Start-ViaScheduledTask([string]$Identity, $Rec, [string]$JobDir, [strin
   $cmd = Get-WrapperCommandLine $JobDir
   $taskName = "$TaskPrefix$JobLabel"
   $taskAction = New-ScheduledTaskAction -Execute $cmd.Exe -Argument $cmd.Args -WorkingDirectory $JobDir
+  # 30 分钟，与 spike job 的 timeout-minutes 对齐（PR #46 评审 SR-11 / SR2-4）
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
+    -ExecutionTimeLimit (New-TimeSpan -Minutes $TaskTimeLimitMin) -MultipleInstances IgnoreNew
   if ($Identity -eq 'SYSTEM') {
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $principal -Settings $settings -Force | Out-Null
