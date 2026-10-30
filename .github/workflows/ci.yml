@@ -68,7 +68,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: 前端测试（vitest 296 用例）
+      - name: 前端测试（vitest）
         run: pnpm install --frozen-lockfile && pnpm test
 
       - name: 类型检查
@@ -77,7 +77,6 @@ jobs:
       - name: 后端测试（cargo test 全量）
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      # clippy.toml 的 disallowed-methods（M-2 / S-R1）在 Windows 分支上必须零告警
-      - name: clippy（-D warnings）
-        if: runner.os == 'Windows'
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+      # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警
+      - name: clippy（--all-targets -D warnings）
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
