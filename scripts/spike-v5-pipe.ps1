@@ -1401,7 +1401,9 @@ try {
       # 标识响应：让 pipe-probe 的 http_version 能区分第二实例（Ellie F3）
       try {
         $writer = New-Object System.IO.StreamWriter($server)
-        $writer.Write("HTTP/1.1 503 Service Unavailable`r`nContent-Length: 27`r`nConnection: close`r`n`r`n{"pipe_probe":"second"}")
+        $body = '{"pipe_probe":"second"}'
+        $payload = "HTTP/1.1 503 Service Unavailable`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n$body"
+        $writer.Write($payload)
         $writer.Flush()
       } catch { $doc.message = "write: $($_.Exception.Message)" }
       Start-Sleep -Milliseconds 200
