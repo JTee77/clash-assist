@@ -92,11 +92,36 @@ fn in_rt<T>(f: impl FnOnce() -> T) -> T {
     tauri::async_runtime::block_on(async move { f() })
 }
 
+/// 测试服务端实例的报告。`connected` 为真才说明 `bytes == 0` 有意义（Ellie PR50：
+/// connect 超时同样会得到 0 字节，必须先证明该实例确实接受了连接）。跨用户回放（M-c）
+/// 可复用 [`Report::assert_connected_zero_bytes`] / [`Report::summary_line`]。
 #[derive(Debug, Default)]
-struct Report {
-    bytes: usize,
+pub(crate) struct Report {
+    /// 该实例接受了一个客户端连接。
+    pub(crate) connected: bool,
+    /// 连接后收到的字节数。
+    pub(crate) bytes: usize,
     /// 匿名级别检查：Ok 表示服务端无法拿到本进程身份。
     anonymous: Option<Result<(), String>>,
+}
+
+impl Report {
+    /// 拒绝路径的断言：实例确实被连上，且收到 0 字节（F5）。
+    pub(crate) fn assert_connected_zero_bytes(&self, what: &str) {
+        assert!(
+            self.connected,
+            "{what}: 服务端实例从未被连接（0 字节不能说明问题）"
+        );
+        assert_eq!(self.bytes, 0, "{what}: 拒绝时服务端必须收到 0 字节（F5）");
+    }
+    /// 一行机器可读的摘要，供跨进程 / 跨用户的服务端打印、由父进程解析。
+    #[allow(dead_code, reason = "供 M-c 跨用户回放的辅助进程使用")]
+    pub(crate) fn summary_line(&self) -> String {
+        format!(
+            "PIPE_SERVER_REPORT connected={} bytes={}",
+            self.connected, self.bytes
+        )
+    }
 }
 
 /// 服务端在模拟客户端后能否打开线程令牌；SECURITY_ANONYMOUS 下应失败（或级别为 Anonymous）。
@@ -134,8 +159,8 @@ fn anonymous_check(server: &NamedPipeServer) -> Result<(), String> {
     }
 }
 
-/// 接受一个连接；`respond` 时读完请求头、做匿名检查并回 200。返回收到的字节数。
-fn spawn_server(
+/// 接受一个连接；`respond` 时读完请求头、做匿名检查并回 200。返回是否连上与收到的字节数。
+pub(crate) fn spawn_server(
     server: NamedPipeServer,
     respond: bool,
 ) -> tauri::async_runtime::JoinHandle<Report> {
@@ -146,8 +171,10 @@ fn spawn_server(
             .await
             .is_err()
         {
+            // connect 超时：connected = false，调用方据此判断 0 字节无意义。
             return rep;
         }
+        rep.connected = true;
         let mut buf = vec![0u8; 8192];
         let mut got = Vec::new();
         loop {
@@ -219,11 +246,7 @@ fn assert_rejected_zero_bytes(sddl: &str, policy: &TrustPolicy, reason: &str, in
         ),
         Ok((_, t)) => panic!("{sddl}: 应被拒绝，实际通过 {t:?}"),
     }
-    assert_eq!(
-        finish(srv).bytes,
-        0,
-        "{sddl}: 拒绝时服务端必须收到 0 字节（F5）"
-    );
+    finish(srv).assert_connected_zero_bytes(sddl);
 }
 
 #[test]
@@ -235,7 +258,7 @@ fn trusted_pipe_roundtrip_without_authorization_and_anonymous_qos() {
     assert_eq!(res.body, "ok");
     assert_eq!(trust.owner.who, Who::Me);
     let rep = finish(srv);
-    assert!(rep.bytes > 0);
+    assert!(rep.connected && rep.bytes > 0);
     rep.anonymous
         .expect("anonymous check ran")
         .expect("SECURITY_ANONYMOUS");
@@ -292,7 +315,9 @@ fn empty_dacl_real_pipe_is_denied_at_open_with_zero_bytes() {
     let srv = spawn_server(create_server(&name, &format!("O:{}D:P", me()), 1), true);
     let r = request(&name, &test_policy());
     assert!(matches!(r, Err(PipeErr::Denied)), "{:?}", r.map(|(_, t)| t));
-    assert_eq!(finish(srv).bytes, 0);
+    // 打开就失败：实例从未被连上（这里 connected = false 正是要断言的）。
+    let rep = finish(srv);
+    assert!(!rep.connected && rep.bytes == 0, "{rep:?}");
 }
 
 /// 完整性标签低于 Medium ⇒ 拒绝（Ellie 建议项）。
@@ -301,6 +326,14 @@ fn low_integrity_label_is_rejected_with_zero_bytes() {
     let me = me();
     let sddl = format!("O:{me}D:P(A;;GA;;;{me})(A;;GA;;;SY)S:(ML;;NW;;;LW)");
     assert_rejected_zero_bytes(&sddl, &test_policy(), "label-below-medium", true);
+}
+
+/// Ellie PR50 Q4：Medium 标签但不带 NO_WRITE_UP（`S:(ML;;NR;;;ME)`）⇒ 拒绝。
+#[test]
+fn medium_label_without_no_write_up_is_rejected_with_zero_bytes() {
+    let me = me();
+    let sddl = format!("O:{me}D:P(A;;GA;;;{me})(A;;GA;;;SY)S:(ML;;NR;;;ME)");
+    assert_rejected_zero_bytes(&sddl, &test_policy(), "label-no-write-up", true);
 }
 
 /// S-D′ 进程内重放（同一用户）：mihomo 默认 SDDL 的管道上再挂第二个实例。实例共享 FCB 的
@@ -324,8 +357,9 @@ fn s_d_prime_second_instance_on_mihomo_default_pipe_gets_zero_bytes() {
             other => panic!("应为 InsecureDacl，实际 {:?}", other.map(|(_, t)| t)),
         }
     }
-    assert_eq!(finish(a).bytes, 0, "第一个实例必须收到 0 字节");
-    assert_eq!(finish(b).bytes, 0, "第二个实例必须收到 0 字节");
+    // 两个实例都必须确实被连上过，0 字节才有意义（Ellie PR50）。
+    finish(a).assert_connected_zero_bytes("第一个实例");
+    finish(b).assert_connected_zero_bytes("第二个实例");
 }
 
 /// 管道路径上映像 / L3 只是诊断（V5 S-D′、Ellie §8）：生产白名单不含测试 exe，也照样通过并告警。
