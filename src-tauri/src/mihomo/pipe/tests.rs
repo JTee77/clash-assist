@@ -253,13 +253,19 @@ fn f3_prime_real_pipe_dacls() {
         format!("O:{me}D:P(A;;GA;;;{me})(A;;GA;;;SY)(A;;GW;;;AU)"),
         format!("O:{me}D:P(A;;GA;;;{me})(A;;0x4;;;IU)"),
         format!("O:{me}D:P(A;;GA;;;{me})(A;;WD;;;WD)"),
-        // MAXIMUM_ALLOWED（SDDL 没有缩写）
-        format!("O:{me}D:P(A;;GA;;;{me})(A;;0x2000000;;;BU)"),
     ] {
         assert_rejected_zero_bytes(&sddl, &p, "dacl-allows-foreign-instance", true);
     }
     // NULL DACL
     assert_rejected_zero_bytes(&format!("O:{me}D:NO_ACCESS_CONTROL"), &p, "dacl-null", true);
+
+    // CI 实测（windows-2022）：写进管道 SD 的 MAXIMUM_ALLOWED 位不会保留（内核只在访问请求里认它），
+    // 读回来的 DACL 不含危险位，因此判定通过。单测里仍覆盖「若读到 MAXIMUM_ALLOWED 就拒绝」。
+    let name = unique_name();
+    let sddl = format!("O:{me}D:P(A;;GA;;;{me})(A;;0x2000000;;;BU)");
+    let srv = spawn_server(create_server(&name, &sddl, 1), true);
+    assert!(request(&name, &p).is_ok(), "{sddl}");
+    finish(srv);
 }
 
 /// cvsi 风格 AU 0x12019b（读写数据但不含 0x4）：通过，只带 S-2 提示（Ellie §2-4）。
