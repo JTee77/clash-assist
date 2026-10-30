@@ -810,6 +810,7 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
         if ty.is_dir() {
             copy_dir_all(&entry.path(), &to)?;
         } else if ty.is_file() {
+            #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面")]
             std::fs::copy(entry.path(), &to)?;
         }
     }

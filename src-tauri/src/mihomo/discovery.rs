@@ -942,6 +942,7 @@ mixed-port: 7897
         let yaml_file = tmp.join("config.yaml");
 
         // Case A: EC disabled in prefs
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
         std::fs::write(
             &pref_file,
             r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7895,\"external-controller\":\"\",\"secret\":\"\"}}"}"#,
@@ -984,6 +985,7 @@ mixed-port: 7897
         }
 
         // Case B: EC enabled in prefs with 32-char secret
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
         std::fs::write(
             &pref_file,
             r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7896,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"my-flclash-secret\"}}"}"#,
@@ -1040,6 +1042,7 @@ mod windows_secret_tests {
         let dir = std::env::temp_dir().join(format!("ca-win-sock-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let existing = dir.join("exists.sock");
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
         std::fs::write(&existing, b"").unwrap();
         let r = read_controller_yaml(
             &[],
