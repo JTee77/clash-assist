@@ -70,7 +70,10 @@ pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
 #[cfg(unix)]
 pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "仅 Unix，不在 S-R1 的 Windows 风险面"
+    )]
     let meta = std::fs::symlink_metadata(sock).map_err(|e| format!("lstat {sock}: {e}"))?;
     if meta.file_type().is_symlink() {
         return Err(format!("拒绝符号链接套接字路径 {sock}"));
@@ -115,7 +118,14 @@ pub fn ensure_connected_peer_trusted(
 
 #[cfg(unix)]
 fn peer_uid(fd: std::os::fd::RawFd) -> Result<u32, String> {
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
     {
         let mut euid: libc::uid_t = 0;
         let mut egid: libc::gid_t = 0;
@@ -235,7 +245,8 @@ pub struct ClientDiscovery {
 pub fn flclash_preference_paths() -> Vec<String> {
     vec![
         "~/Library/Preferences/com.follow.clash.plist".into(),
-        "~/Library/Containers/com.follow.clash/Data/Library/Preferences/com.follow.clash.plist".into(),
+        "~/Library/Containers/com.follow.clash/Data/Library/Preferences/com.follow.clash.plist"
+            .into(),
         "~/Library/Application Support/com.follow.clash/shared_preferences.json".into(),
         "~/Library/Application Support/FlClash/shared_preferences.json".into(),
     ]
@@ -342,7 +353,8 @@ mod tests {
             let home = dirs::home_dir().expect("home dir");
             assert_eq!(
                 p,
-                home.join("Library/Application Support").join(VERGE_REL_CONFIG),
+                home.join("Library/Application Support")
+                    .join(VERGE_REL_CONFIG),
                 "macOS Verge config path must be byte-identical to pre-seam code"
             );
         }
@@ -372,7 +384,10 @@ mod tests {
         let me = current_uid();
         for c in verge_sock_candidates(&[], &[]) {
             if let Some(rest) = c.strip_prefix(&format!("{VERGE_SERVICE_USERS_DIR}/")) {
-                assert!(rest.starts_with(&format!("{me}/")), "unexpected other-uid candidate {c}");
+                assert!(
+                    rest.starts_with(&format!("{me}/")),
+                    "unexpected other-uid candidate {c}"
+                );
             }
         }
     }
@@ -409,7 +424,10 @@ mod tests {
         let _l = UnixListener::bind(&real).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let err = ensure_sock_path_trusted(link.to_str().unwrap()).expect_err("symlink must fail");
-        assert!(err.contains("符号链接") || err.to_lowercase().contains("symlink"), "{err}");
+        assert!(
+            err.contains("符号链接") || err.to_lowercase().contains("symlink"),
+            "{err}"
+        );
         assert!(ensure_sock_path_trusted(real.to_str().unwrap()).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -427,7 +445,10 @@ mod tests {
             assert!(c.iter().any(|p| p == &verge_tmpdir_sock()));
             assert!(c.iter().any(|p| p == "/custom/from-yaml.sock"));
             // legacy path appears only once even though also in yaml
-            assert_eq!(c.iter().filter(|p| p.as_str() == VERGE_SOCK_PATH).count(), 1);
+            assert_eq!(
+                c.iter().filter(|p| p.as_str() == VERGE_SOCK_PATH).count(),
+                1
+            );
         } else {
             // 非 Unix：没有内置的 service / legacy / TMPDIR 候选，只原样透传 yaml 路径。
             // （Windows 上这些候选随后在 select_working_sock 中一律判为不可用。）
@@ -439,7 +460,10 @@ mod tests {
     #[test]
     fn macos_client_table_preserves_historical_values() {
         let cx = client_discovery("clashx_meta").expect("clashx_meta");
-        assert_eq!(cx.yaml_paths, vec!["~/.config/clash/config.yaml".to_string()]);
+        assert_eq!(
+            cx.yaml_paths,
+            vec!["~/.config/clash/config.yaml".to_string()]
+        );
         assert_eq!(cx.default_port, 9090);
         assert_eq!(cx.default_mixed, 7890);
         assert!(cx.sock_candidates.is_empty());

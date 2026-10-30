@@ -161,7 +161,10 @@ pub fn parse_scutil_dns(raw: &str) -> (Vec<String>, String) {
         if !scoped.is_empty() {
             scoped
         } else {
-            blocks.iter().filter(|b| !b.nameservers.is_empty()).collect()
+            blocks
+                .iter()
+                .filter(|b| !b.nameservers.is_empty())
+                .collect()
         }
     };
 
@@ -206,9 +209,7 @@ pub fn list_dns_resolvers_blocking() -> DnsResolversResult {
             resolvers: vec![],
             source: "unsupported-platform".into(),
             raw_hint: None,
-            error: Some(
-                "DNS 解析器列表依赖 macOS `scutil --dns`；当前平台不可用。".into(),
-            ),
+            error: Some("DNS 解析器列表依赖 macOS `scutil --dns`；当前平台不可用。".into()),
         }
     }
 
@@ -277,7 +278,10 @@ fn find_system_resolver() -> Option<String> {
     }
     #[cfg(target_os = "linux")]
     {
-        #[allow(clippy::disallowed_methods, reason = "仅 Linux/Unix，不在 S-R1 的 Windows 风险面")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "仅 Linux/Unix，不在 S-R1 的 Windows 风险面"
+        )]
         let resolv = std::fs::read_to_string("/etc/resolv.conf");
         if let Ok(content) = resolv {
             for line in content.lines() {
@@ -336,7 +340,12 @@ pub fn dns_whoami_blocking(
         Some(r) => r.to_string(),
         None => match find_system_resolver() {
             Some(s) => s,
-            None => return whoami_err("system".to_string(), "无法确定系统 DNS 解析器地址".to_string()),
+            None => {
+                return whoami_err(
+                    "system".to_string(),
+                    "无法确定系统 DNS 解析器地址".to_string(),
+                )
+            }
         },
     };
 
@@ -372,7 +381,8 @@ mod tests {
 
     #[test]
     fn parse_whoami_full_fields() {
-        let raw = "\"ns\" \"172.68.41.102\"\n\"ip\" \"146.19.163.158\"\n\"ecs\" \"146.19.163.0/24/24\"\n";
+        let raw =
+            "\"ns\" \"172.68.41.102\"\n\"ip\" \"146.19.163.158\"\n\"ecs\" \"146.19.163.0/24/24\"\n";
         let (ip, ns, ecs) = parse_whoami_txt(raw);
         assert_eq!(ip.as_deref(), Some("146.19.163.158"));
         assert_eq!(ns.as_deref(), Some("172.68.41.102"));

@@ -59,9 +59,15 @@ pub const EGRESS_TIMED_HOSTS: &[&str] = &["speed.cloudflare.com"];
 /// 控制器主机必须是回环地址。
 pub fn check_controller_host(host: &str) -> Result<(), String> {
     let h = host.trim();
-    let bare = h.strip_prefix('[').and_then(|x| x.strip_suffix(']')).unwrap_or(h);
+    let bare = h
+        .strip_prefix('[')
+        .and_then(|x| x.strip_suffix(']'))
+        .unwrap_or(h);
     let ok = bare.eq_ignore_ascii_case("localhost")
-        || bare.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false);
+        || bare
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
     if ok {
         Ok(())
     } else {
@@ -89,10 +95,7 @@ pub fn check_controller_path(path: &str) -> Result<(), String> {
     if !path.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(err());
     }
-    let first = path[1..]
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
+    let first = path[1..].split(['/', '?', '#']).next().unwrap_or("");
     if CONTROLLER_PATH_PREFIXES.contains(&first) {
         Ok(())
     } else {
@@ -192,7 +195,15 @@ mod tests {
 
     #[test]
     fn controller_host_loopback_only() {
-        for ok in ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]", " 127.0.0.1 "] {
+        for ok in [
+            "127.0.0.1",
+            "127.1.2.3",
+            "localhost",
+            "LOCALHOST",
+            "::1",
+            "[::1]",
+            " 127.0.0.1 ",
+        ] {
             assert!(check_controller_host(ok).is_ok(), "{ok}");
         }
         for bad in [
@@ -298,7 +309,9 @@ mod tests {
 
     #[test]
     fn sock_path_shape() {
-        assert!(check_sock_path("/var/run/clash-verge-service/users/501/verge-mihomo.sock").is_ok());
+        assert!(
+            check_sock_path("/var/run/clash-verge-service/users/501/verge-mihomo.sock").is_ok()
+        );
         assert!(check_sock_path("relative.sock").is_err());
         assert!(check_sock_path("/tmp/../var/run/docker.sock").is_err());
         assert!(check_sock_path("/tmp/a\0b").is_err());
@@ -315,7 +328,10 @@ mod tests {
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
-                #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）"
+                )]
                 let is_dir = path.is_dir();
                 if is_dir {
                     stack.push(path);
@@ -325,7 +341,10 @@ mod tests {
                 if !name.ends_with(".ts") || name.contains(".test.") {
                     continue;
                 }
-                #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）"
+                )]
                 let src = std::fs::read_to_string(&path).unwrap();
                 for cap in re.captures_iter(&src) {
                     let host = cap[1].to_ascii_lowercase();
@@ -339,6 +358,9 @@ mod tests {
                 }
             }
         }
-        assert!(seen > 10, "expected to find probe URLs under src/lib/egress");
+        assert!(
+            seen > 10,
+            "expected to find probe URLs under src/lib/egress"
+        );
     }
 }

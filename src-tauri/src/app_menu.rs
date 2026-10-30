@@ -96,13 +96,24 @@ pub fn build<R: Runtime>(h: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::separator(h)?,
             &PredefinedMenuItem::services(h, t("服务", "服務", "Services").as_deref())?,
             &PredefinedMenuItem::separator(h)?,
-            &PredefinedMenuItem::hide(h, t("隐藏 Clash伴侣", "隱藏 Clash伴侶", "Hide Clash Assist").as_deref())?,
-            &PredefinedMenuItem::hide_others(h, t("隐藏其他", "隱藏其他", "Hide Others").as_deref())?,
+            &PredefinedMenuItem::hide(
+                h,
+                t("隐藏 Clash伴侣", "隱藏 Clash伴侶", "Hide Clash Assist").as_deref(),
+            )?,
+            &PredefinedMenuItem::hide_others(
+                h,
+                t("隐藏其他", "隱藏其他", "Hide Others").as_deref(),
+            )?,
             &PredefinedMenuItem::separator(h)?,
-            &PredefinedMenuItem::quit(h, t("退出 Clash伴侣", "結束 Clash伴侶", "Quit Clash Assist").as_deref())?,
+            &PredefinedMenuItem::quit(
+                h,
+                t("退出 Clash伴侣", "結束 Clash伴侶", "Quit Clash Assist").as_deref(),
+            )?,
         ],
     )?;
-    let close = || PredefinedMenuItem::close_window(h, t("关闭窗口", "關閉視窗", "Close Window").as_deref());
+    let close = || {
+        PredefinedMenuItem::close_window(h, t("关闭窗口", "關閉視窗", "Close Window").as_deref())
+    };
     let file = Submenu::with_items(h, pick("文件", "檔案", "File"), true, &[&close()?])?;
     let edit = Submenu::with_items(
         h,
@@ -132,7 +143,10 @@ pub fn build<R: Runtime>(h: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         &[
             &reload_item,
             &PredefinedMenuItem::separator(h)?,
-            &PredefinedMenuItem::fullscreen(h, t("进入全屏幕", "進入全螢幕", "Enter Full Screen").as_deref())?,
+            &PredefinedMenuItem::fullscreen(
+                h,
+                t("进入全屏幕", "進入全螢幕", "Enter Full Screen").as_deref(),
+            )?,
         ],
     )?;
     let window = Submenu::with_id_and_items(

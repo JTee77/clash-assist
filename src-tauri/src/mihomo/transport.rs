@@ -20,13 +20,15 @@ async fn read_body_capped_with(
     max: usize,
 ) -> Result<(u16, String), String> {
     let status = res.status().as_u16();
-    let buf = crate::http_body::read_body_capped(res, max).await.map_err(|e| {
-        if e.contains("too large") {
-            format!("{e} — refusing to ship to webview")
-        } else {
-            e
-        }
-    })?;
+    let buf = crate::http_body::read_body_capped(res, max)
+        .await
+        .map_err(|e| {
+            if e.contains("too large") {
+                format!("{e} — refusing to ship to webview")
+            } else {
+                e
+            }
+        })?;
     let body = String::from_utf8_lossy(&buf).into_owned();
     Ok((status, body))
 }
@@ -120,7 +122,10 @@ pub fn http_via_unix(
     let sock = sock_path.ok_or_else(|| {
         "unix socket path not provided (refusing Verge default for non-Verge clients)".to_string()
     })?;
-    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "仅 Unix，不在 S-R1 的 Windows 风险面"
+    )]
     let sock_exists = std::path::Path::new(sock).exists();
     if !sock_exists {
         return Err(format!("unix socket not found: {sock}"));
@@ -192,9 +197,7 @@ pub fn http_via_unix(
     _sock_path: Option<&str>,
     _timeout_ms: u64,
 ) -> Result<UnixHttpResult, String> {
-    Err(
-        "unix socket transport unavailable on this platform".into(),
-    )
+    Err("unix socket transport unavailable on this platform".into())
 }
 
 /// Async fetch a URL optionally via local mixed-port HTTP proxy.
@@ -207,7 +210,9 @@ pub async fn proxy_fetch_async(
 ) -> Result<UnixHttpResult, String> {
     let work = proxy_fetch_inner(url, mixed_port, user_agent, timeout_ms);
     if let Some(cancel) = cancel {
-        return match futures_util::future::select(std::pin::pin!(work), std::pin::pin!(cancel)).await {
+        return match futures_util::future::select(std::pin::pin!(work), std::pin::pin!(cancel))
+            .await
+        {
             futures_util::future::Either::Left((result, _)) => result,
             futures_util::future::Either::Right((_, _)) => Err("已取消".into()),
         };
@@ -286,7 +291,8 @@ mod tests {
     #[test]
     fn body_cap_enforced_while_streaming_chunked() {
         // 无 Content-Length 的 chunked 响应，总量 4 KiB > 1 KiB 上限：必须在读流过程中拒绝。
-        let mut resp = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        let mut resp =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
         for _ in 0..8 {
             resp.extend_from_slice(b"200\r\n");
             resp.extend_from_slice(&[b'a'; 0x200]);
@@ -302,16 +308,20 @@ mod tests {
 
     #[test]
     fn body_cap_rejects_declared_content_length() {
-        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\nConnection: close\r\n\r\nabc".to_vec();
+        let resp =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\nConnection: close\r\n\r\nabc".to_vec();
         let (port, h) = serve_once(resp);
         let r = fetch_capped(port, 1024);
         let _ = h.join();
-        assert!(r.expect_err("declared oversize must be rejected").contains("too large"));
+        assert!(r
+            .expect_err("declared oversize must be rejected")
+            .contains("too large"));
     }
 
     #[test]
     fn body_under_cap_is_returned() {
-        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_vec();
+        let resp =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_vec();
         let (port, h) = serve_once(resp);
         let r = fetch_capped(port, 1024);
         let _ = h.join();
@@ -364,8 +374,15 @@ mod tests {
         });
 
         let started = std::time::Instant::now();
-        let result =
-            tauri::async_runtime::block_on(http_via_tcp_async("127.0.0.1", port, "GET", "/proxies", None, "", 250));
+        let result = tauri::async_runtime::block_on(http_via_tcp_async(
+            "127.0.0.1",
+            port,
+            "GET",
+            "/proxies",
+            None,
+            "",
+            250,
+        ));
         let elapsed = started.elapsed();
 
         let err = match result {
@@ -435,7 +452,9 @@ pub(crate) mod windows_tcp_fail_closed_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while std::time::Instant::now() < deadline {
             match listener.accept() {
-                Ok((_, peer)) => panic!("Windows 上不应向控制器建立 TCP 连接，却 accept 到了 {peer}"),
+                Ok((_, peer)) => {
+                    panic!("Windows 上不应向控制器建立 TCP 连接，却 accept 到了 {peer}")
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => panic!("accept: {e}"),
             }
@@ -457,7 +476,11 @@ pub(crate) mod windows_tcp_fail_closed_tests {
                 "s3cret-must-not-leave",
                 1000,
             ));
-            assert_eq!(r.unwrap_err(), WINDOWS_TCP_CONTROLLER_UNAVAILABLE, "{method}");
+            assert_eq!(
+                r.unwrap_err(),
+                WINDOWS_TCP_CONTROLLER_UNAVAILABLE,
+                "{method}"
+            );
         }
         assert_never_accepted(&listener);
     }

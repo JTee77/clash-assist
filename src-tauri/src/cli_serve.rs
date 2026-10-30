@@ -109,7 +109,10 @@ pub fn generate_token() -> Result<String, String> {
 fn fill_random(buf: &mut [u8]) -> Result<(), String> {
     use std::fs::File;
     use std::io::Read as _;
-    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "仅 Unix，不在 S-R1 的 Windows 风险面"
+    )]
     let mut f = File::open("/dev/urandom").map_err(|e| format!("打开 /dev/urandom 失败：{e}"))?;
     f.read_exact(buf)
         .map_err(|e| format!("读取 /dev/urandom 失败：{e}"))?;
@@ -121,9 +124,8 @@ pub fn bind_localhost(port: u16) -> Result<TcpListener, String> {
     let addr: SocketAddr = format!("{BIND_HOST}:{port}")
         .parse()
         .map_err(|e| format!("地址无效：{e}"))?;
-    let listener = TcpListener::bind(addr).map_err(|e| {
-        format!("无法绑定 {BIND_HOST}:{port}：{e}。请换 --port 或确认未被占用。")
-    })?;
+    let listener = TcpListener::bind(addr)
+        .map_err(|e| format!("无法绑定 {BIND_HOST}:{port}：{e}。请换 --port 或确认未被占用。"))?;
     let local = listener
         .local_addr()
         .map_err(|e| format!("读取绑定地址失败：{e}"))?;
@@ -365,12 +367,8 @@ fn handle_connection(mut stream: TcpStream, inner: &ServeInner) -> Result<(), St
     stream
         .set_nonblocking(false)
         .map_err(|e| format!("clear inherited nonblocking: {e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .ok();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(30)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(30))).ok();
 
     let req = read_http_request(&mut stream)?;
     if inner.shutdown.load(Ordering::SeqCst) {
@@ -671,11 +669,7 @@ mod tests {
             .and_then(|l| l.split_whitespace().nth(1))
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        let body = text
-            .split("\r\n\r\n")
-            .nth(1)
-            .unwrap_or("")
-            .to_string();
+        let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
         (status, body)
     }
 
@@ -740,9 +734,7 @@ mod tests {
         let mut client = StdTcpStream::connect(&addr).expect("connect");
         std::thread::sleep(Duration::from_millis(250));
         client
-            .write_all(
-                b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-            )
+            .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             .expect("write");
         let mut buf = Vec::new();
         client.read_to_end(&mut buf).expect("read");

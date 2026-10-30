@@ -19,12 +19,11 @@ mod transport;
 mod types;
 
 // Public controller-layer API surface (referenced as `mihomo::X` from `crate::lib`).
-pub use discovery::{discover_controller, discover_for_client};
+pub use cancel::{arm_cancel, disarm_cancel, fire_cancel};
 #[cfg(not(windows))]
 pub use discovery::read_verge_config;
+pub use discovery::{discover_controller, discover_for_client};
 pub use nodes::list_nodes_async;
-pub use cancel::{arm_cancel, disarm_cancel, fire_cancel};
 pub use timed::proxy_timed_transfer_async;
 pub use transport::{http_via_tcp_async, http_via_unix, proxy_fetch_async};
 pub use types::{DiscoverResult, ListNodesResult, TimedTransferResult, UnixHttpResult};
-

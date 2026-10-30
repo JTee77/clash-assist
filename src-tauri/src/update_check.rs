@@ -245,7 +245,10 @@ pub fn resolve_download_target(info: &UpdateInfo) -> Result<DownloadTarget, Stri
         .dmg_sha256
         .as_deref()
         .and_then(normalize_sha256_digest)
-        .ok_or_else(|| "最新 Release 未提供安装包 SHA-256 摘要，为安全起见已停止一键更新，请前往下载页手动更新".to_string())?;
+        .ok_or_else(|| {
+            "最新 Release 未提供安装包 SHA-256 摘要，为安全起见已停止一键更新，请前往下载页手动更新"
+                .to_string()
+        })?;
     Ok(DownloadTarget { url, sha256 })
 }
 
@@ -616,7 +619,8 @@ pub fn verify_sha256_file(path: &Path, expected_digest: Option<&str>) -> Result<
     let Some(raw) = expected_digest.map(str::trim).filter(|s| !s.is_empty()) else {
         return Err("缺少安装包 SHA-256 摘要，拒绝安装未校验的更新包".into());
     };
-    let expected = normalize_sha256_digest(raw).ok_or_else(|| format!("无效的 SHA-256 摘要格式：{raw}"))?;
+    let expected =
+        normalize_sha256_digest(raw).ok_or_else(|| format!("无效的 SHA-256 摘要格式：{raw}"))?;
     let mut file = std::fs::File::open(path).map_err(|e| format!("打开安装包失败：{e}"))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
@@ -748,8 +752,8 @@ pub fn apply_dmg_to_app_bundle(
         active: true,
     };
 
-    let mounted_app = find_app_in_dir(&mnt_dir)
-        .ok_or_else(|| "更新镜像中未找到 .app 应用包".to_string())?;
+    let mounted_app =
+        find_app_in_dir(&mnt_dir).ok_or_else(|| "更新镜像中未找到 .app 应用包".to_string())?;
     let staging_app = work_dir.join("staging.app");
     copy_bundle_via_ditto(&mounted_app, &staging_app)?;
 
@@ -833,9 +837,14 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
 
     let dmg_path = work_dir.join("update.dmg");
     let proxy_port = active_local_proxy_port();
-    if let Err(e) =
-        stream_dmg_to_file(&resolved_url, env!("CARGO_PKG_VERSION"), &dmg_path, proxy_port, on_progress)
-            .await
+    if let Err(e) = stream_dmg_to_file(
+        &resolved_url,
+        env!("CARGO_PKG_VERSION"),
+        &dmg_path,
+        proxy_port,
+        on_progress,
+    )
+    .await
     {
         let _ = std::fs::remove_dir_all(&work_dir);
         return Err(format!("下载更新包失败：{e}"));
@@ -862,10 +871,7 @@ pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String>
     let target_app = resolve_target_app_bundle(&exe)?;
 
     let work_dir = PathBuf::from(work_dir_str.trim());
-    let file_name = work_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let file_name = work_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if !file_name.starts_with("clash-assist-update-") || !work_dir.is_dir() {
         return Err("无效的临时更新目录".into());
     }
@@ -978,7 +984,8 @@ mod tests {
 
     const GOOD_DMG: &str =
         "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/Clash.Assist_0.2.9_aarch64.dmg";
-    const GOOD_SHA: &str = "sha256:251112b7cd87706978a3ad57b15b3d4191dfacc65fefa8d9b5c36da01482dbdc";
+    const GOOD_SHA: &str =
+        "sha256:251112b7cd87706978a3ad57b15b3d4191dfacc65fefa8d9b5c36da01482dbdc";
 
     #[test]
     fn dmg_url_rejects_traversal_and_encoded_variants() {
@@ -1048,7 +1055,10 @@ mod tests {
             "file:///etc/passwd",
             "javascript:alert(1)",
         ] {
-            assert!(validate_release_page_url(bad).is_err(), "should reject: {bad}");
+            assert!(
+                validate_release_page_url(bad).is_err(),
+                "should reject: {bad}"
+            );
             assert!(open_release_page(bad).is_err(), "open should reject: {bad}");
         }
     }
@@ -1077,7 +1087,10 @@ mod tests {
             "tag_name": "v0.2.9",
             "assets": [{ "name": "Clash.Assist_0.2.9_aarch64.dmg", "browser_download_url": GOOD_DMG, "digest": "md5:abc" }]
         });
-        assert_eq!(parse_release_dmg_asset(&bad_digest), (Some(GOOD_DMG.into()), None));
+        assert_eq!(
+            parse_release_dmg_asset(&bad_digest),
+            (Some(GOOD_DMG.into()), None)
+        );
     }
 
     fn info(update_available: bool, dmg_url: Option<&str>, sha: Option<&str>) -> UpdateInfo {
@@ -1114,7 +1127,8 @@ mod tests {
 
     #[test]
     fn verify_sha256_file_fails_closed_and_matches() {
-        let dir = std::env::temp_dir().join(format!("clash-assist-sha-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("clash-assist-sha-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("x.bin");
         std::fs::write(&f, b"abc").unwrap();
@@ -1153,7 +1167,8 @@ mod tests {
             resolve_target_app_bundle(vol).unwrap(),
             PathBuf::from("/Applications/Clash Assist.app")
         );
-        let dev = Path::new("/Users/test/Projects/clash-assist/src-tauri/target/debug/clash-assist");
+        let dev =
+            Path::new("/Users/test/Projects/clash-assist/src-tauri/target/debug/clash-assist");
         assert!(bundle_path_from_exe(dev).is_none());
     }
 
@@ -1252,7 +1267,8 @@ mod tests {
         let work_dir = base.join("work");
         std::fs::create_dir_all(&work_dir).unwrap();
 
-        apply_dmg_to_app_bundle(&dmg_path, &target_app, &work_dir).expect("apply_dmg should succeed");
+        apply_dmg_to_app_bundle(&dmg_path, &target_app, &work_dir)
+            .expect("apply_dmg should succeed");
 
         assert!(!target_app.join("Contents/old.txt").exists());
         let new_plist = std::fs::read_to_string(target_app.join("Contents/Info.plist")).unwrap();
@@ -1381,9 +1397,7 @@ mod tests {
         );
         let (port, h) = serve_raw_once(head.into_bytes());
         let url = format!("http://127.0.0.1:{port}/latest");
-        let r = tauri::async_runtime::block_on(get_bytes_via(
-            &url, "test", 3000, 1000, None, None,
-        ));
+        let r = tauri::async_runtime::block_on(get_bytes_via(&url, "test", 3000, 1000, None, None));
         let _ = h.join();
         let err = r.expect_err("oversized release JSON must be rejected");
         assert!(err.contains("too large"), "{err}");
@@ -1392,9 +1406,7 @@ mod tests {
         let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
         let (port, h) = serve_raw_once(ok);
         let url = format!("http://127.0.0.1:{port}/latest");
-        let r = tauri::async_runtime::block_on(get_bytes_via(
-            &url, "test", 3000, 1000, None, None,
-        ));
+        let r = tauri::async_runtime::block_on(get_bytes_via(&url, "test", 3000, 1000, None, None));
         let _ = h.join();
         assert_eq!(r.unwrap(), b"{}");
     }
@@ -1415,7 +1427,12 @@ mod tests {
         let dest = dir.join("t.dmg");
         let url = format!("http://127.0.0.1:{port}/t.dmg");
         let r = tauri::async_runtime::block_on(stream_dmg_to_file_capped(
-            &url, "test", &dest, None, &|_| {}, 1024,
+            &url,
+            "test",
+            &dest,
+            None,
+            &|_| {},
+            1024,
         ));
         let _ = h.join();
         let err = r.expect_err("declared oversize DMG must be rejected");
@@ -1432,7 +1449,12 @@ mod tests {
         let dest = dir.join("t.dmg");
         let url = format!("http://127.0.0.1:{port}/t.dmg");
         let r = tauri::async_runtime::block_on(stream_dmg_to_file_capped(
-            &url, "test", &dest, None, &|_| {}, 2048,
+            &url,
+            "test",
+            &dest,
+            None,
+            &|_| {},
+            2048,
         ));
         let _ = h.join();
         let err = r.expect_err("oversized DMG stream must abort");

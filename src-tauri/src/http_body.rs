@@ -67,8 +67,7 @@ mod tests {
     #[test]
     fn body_cap_enforced_while_streaming_chunked() {
         let mut resp =
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-                .to_vec();
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
         for _ in 0..8 {
             resp.extend_from_slice(b"200\r\n");
             resp.extend_from_slice(&[b'a'; 0x200]);
