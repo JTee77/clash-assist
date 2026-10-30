@@ -1,0 +1,5 @@
+# 反例：reusable workflow 未固定
+on: push
+jobs:
+  a:
+    uses: octo/repo/.github/workflows/w.yml@main

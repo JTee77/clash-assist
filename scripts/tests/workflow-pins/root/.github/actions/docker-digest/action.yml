@@ -1,0 +1,5 @@
+# 正例：docker action 按 digest 固定
+name: docker-digest
+runs:
+  using: docker
+  image: docker://alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000

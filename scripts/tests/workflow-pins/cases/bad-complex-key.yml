@@ -1,0 +1,8 @@
+# 反例：YAML 复杂键 ? uses（评审附录 B）
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - ? uses
+        : actions/checkout@v4

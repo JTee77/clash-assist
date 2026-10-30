@@ -1,0 +1,11 @@
+# 反例（r2 n8）：services 镜像用 latest
+# expect: jobs.a.services.db.image: 容器镜像必须按 @sha256
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    services:
+      db:
+        image: postgres:latest
+    steps:
+      - run: "true"

@@ -356,6 +356,7 @@ fn append_app_log(msg: &str) {
         return;
     }
     let path = dir.join("app.log");
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 存量日志追加打开，M1 改用安全打开封装（S-R1）")]
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -809,6 +810,7 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
         if ty.is_dir() {
             copy_dir_all(&entry.path(), &to)?;
         } else if ty.is_file() {
+            #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面")]
             std::fs::copy(entry.path(), &to)?;
         }
     }
@@ -838,7 +840,9 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
     for root in roots {
         let old = root.join(LEGACY_IDENTIFIER);
         let new = root.join(new_id);
-        if old.is_dir() && dir_is_empty_or_missing(&new) {
+        #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面")]
+        let old_is_dir = old.is_dir();
+        if old_is_dir && dir_is_empty_or_missing(&new) {
             match copy_dir_all(&old, &new) {
                 Ok(()) => append_app_log(&format!("migrated {} -> {}", old.display(), new.display())),
                 Err(e) => append_app_log(&format!("migrate {} failed: {e}", old.display())),

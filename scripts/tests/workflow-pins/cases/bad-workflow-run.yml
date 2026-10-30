@@ -1,0 +1,7 @@
+# 反例：workflow_run（列表形式）
+on: [push, workflow_run]
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

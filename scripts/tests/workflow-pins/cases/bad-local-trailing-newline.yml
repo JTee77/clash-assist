@@ -1,0 +1,8 @@
+# 反例：本地引用末尾带换行
+# expect: 本地路径不得含空白字符
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: "./.github/actions/local\n"

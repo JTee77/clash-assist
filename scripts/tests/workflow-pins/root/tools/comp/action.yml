@@ -1,0 +1,6 @@
+# 反例目标：.github 之外的 composite action，内部 uses 未固定（r2 n6 / n12）
+name: comp
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4

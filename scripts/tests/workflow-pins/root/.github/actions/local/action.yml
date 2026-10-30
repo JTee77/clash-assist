@@ -1,0 +1,6 @@
+# 正例：.github 下的 composite action，内部 uses 已固定 SHA
+name: local
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

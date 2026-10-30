@@ -7,6 +7,8 @@
 //!   **绝不** sudo / 提权。
 //! - 目标已存在且**不是**本工具生成的 shim（无标记行）→ 拒绝覆盖（`shim_exists`）。
 //! - 原子写：先写临时文件再 rename，权限 0755。
+// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
+#![allow(clippy::disallowed_methods)]
 
 use std::path::{Path, PathBuf};
 

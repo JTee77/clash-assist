@@ -4,6 +4,8 @@
 //! 3) `apply_staged_update`：后台静默挂载 .dmg、提取 .app、清除 com.apple.quarantine 隔离属性、
 //!    校验签名、原子替换当前 .app（替换后不强行退出，当前窗口可继续正常使用，下次重开自动生效）。
 //! 4) `relaunch_app`：用户点击「立即重启」时，拉起新版 .app 并退出当前进程。
+// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
+#![allow(clippy::disallowed_methods)]
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};

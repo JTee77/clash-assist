@@ -1,0 +1,8 @@
+# 反例：短 SHA / tag
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960
+      - uses: actions/setup-node@v4

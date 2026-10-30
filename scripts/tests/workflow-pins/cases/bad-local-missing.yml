@@ -1,0 +1,8 @@
+# 反例：本地 action 目录下没有 action.yml，无法检查
+# expect: 找不到本地 action
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/nope

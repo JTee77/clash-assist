@@ -120,7 +120,9 @@ pub fn http_via_unix(
     let sock = sock_path.ok_or_else(|| {
         "unix socket path not provided (refusing Verge default for non-Verge clients)".to_string()
     })?;
-    if !std::path::Path::new(sock).exists() {
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    let sock_exists = std::path::Path::new(sock).exists();
+    if !sock_exists {
         return Err(format!("unix socket not found: {sock}"));
     }
     // 请求行是手写拼接的：方法 / 路径带 CR、LF 或空格会注入额外请求头。

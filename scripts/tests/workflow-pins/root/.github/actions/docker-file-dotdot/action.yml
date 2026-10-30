@@ -1,0 +1,5 @@
+# 反例目标：Dockerfile 路径含 ..
+name: docker-file-dotdot
+runs:
+  using: docker
+  image: ../docker-file/Dockerfile

@@ -1,0 +1,10 @@
+# 反例：docker:// 与 container 值末尾带换行
+# expect: docker:// 必须按
+# expect: 容器镜像必须按
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    container: "node@sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+    steps:
+      - uses: "docker://alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000\n"

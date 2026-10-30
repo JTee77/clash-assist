@@ -70,6 +70,7 @@ pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
 #[cfg(unix)]
 pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
     let meta = std::fs::symlink_metadata(sock).map_err(|e| format!("lstat {sock}: {e}"))?;
     if meta.file_type().is_symlink() {
         return Err(format!("拒绝符号链接套接字路径 {sock}"));
