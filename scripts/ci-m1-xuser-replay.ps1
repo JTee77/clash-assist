@@ -1,4 +1,9 @@
 <#
+  !!! 切勿在开发机上运行（DO NOT RUN ON A DEV MACHINE）!!!
+  本脚本需要管理员权限：创建并删除本地用户 ca_a / ca_b、注册计划任务、临时授予登录权限、
+  删除这两个用户的配置文件，并强制结束 ca_a / ca_b 名下的全部进程。只给一次性的 CI runner 用；
+  未设置 $env:CI 时直接以退出码 2 结束，不做任何改动。
+
 .SYNOPSIS
   M1 跨用户回放（Ellie V5 复跑复核 §2-4 MUST-4、§2-11）：S-D′（mihomo 默认 SDDL + 他人第二实例）
   与规则 4 的 token-mismatch / unverified。由 .github/workflows/ci.yml 的 xuser-windows job 调用。
@@ -13,6 +18,11 @@
        创建 \\.\pipe\verge-mihomo-sidecar-release-<ca_a 的 ownerKey>（属主 = ca_a，与 V5 中真实
        mihomo 的属主 / DACL 一致）。不用真实 mihomo：它无法统计收到的字节；也不用 .NET
        PipeSecurity：它会把非容器对象 ACE 上的 OICI 规范化掉，与 go-winio 实际写入的 SD 不同。
+       取舍：首个实例用 P/Invoke CreateNamedPipeW + 原样 SDDL（ConvertStringSecurityDescriptorToSecurityDescriptorW），
+       而不是 .NET PipeSecurity。原因有二：(a) 更接近 mihomo 的真实行为——go-winio 正是把 SDDL 原样交给
+       CreateNamedPipeW，而 PipeSecurity 会把 OICI 等继承标志规范化掉，客户端读回的 DACL 会与真实
+       mihomo 不同；(b) 服务端是我们自己的代码，才能逐连接记录 accepted / 时间戳 / 收到的字节数。
+       代价：被测的不是 mihomo 二进制本身，属主与 DACL 的一致性以 V5 S-D′ 的读回值为准。
     2. ca_b 用 .NET NamedPipeServerStream（MaxAllowedServerInstances、无 FirstPipeInstance）挂第二实例。
     3. ca_a 运行客户端连 N 次。断言：每次 InsecureDacl / dacl-allows-foreign-instance；ca_b 的实例
        确实接受过连接（accepted=true，Ellie M-c：超时不能算 0 字节通过）；两个实例收到的字节数都为 0。
@@ -46,6 +56,12 @@ param(
 
   [string]$WorkDir
 )
+
+# 开发机防护：GitHub Actions 等 CI 会设置 CI=true；未设置则什么都不做、非零退出
+if (-not $env:CI) {
+  [Console]::Error.WriteLine('ci-m1-xuser-replay.ps1：未设置 $env:CI，拒绝运行。本脚本会创建 / 删除本地用户 ca_a、ca_b 并结束其名下全部进程，只能在一次性的 CI runner 上运行，切勿在开发机上运行。')
+  exit 2
+}
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
@@ -124,6 +140,20 @@ function Get-Prop($Obj, [string]$Name) {
   $p = $Obj.PSObject.Properties[$Name]
   if ($p) { return $p.Value }
   return $null
+}
+
+# 服务端记录的 connections 校验。字段缺失、条数与 accepts 不符、某条缺 end 或 end 不是 eof，都算失败
+function Test-ServerConnections($Server) {
+  if ($null -eq $Server) { return @{ ok = $false; detail = '无服务端记录' } }
+  $pc = $Server.PSObject.Properties['connections']
+  $pa = $Server.PSObject.Properties['accepts']
+  if (-not $pc -or $null -eq $pc.Value) { return @{ ok = $false; detail = '缺少 connections 字段（或为 null）' } }
+  if (-not $pa -or $null -eq $pa.Value) { return @{ ok = $false; detail = '缺少 accepts 字段' } }
+  $conns = @($pc.Value)
+  $ends = @($conns | ForEach-Object { Get-Prop $_ 'end' })
+  $notEof = @($ends | Where-Object { $_ -ne 'eof' })
+  $ok = ($conns.Count -eq [int]$pa.Value -and $ends.Count -eq $conns.Count -and $notEof.Count -eq 0)
+  return @{ ok = $ok; detail = "count=$($conns.Count) accepts=$($pa.Value) ends=$(($ends | Select-Object -Unique) -join ',')" }
 }
 
 function Read-JsonFile([string]$Path) {
@@ -419,9 +449,16 @@ function Invoke-SDPrime {
   # Ellie M-c：先证明外人实例确实接受过连接，0 字节断言才有意义
   Add-Assert 'sdp: ca_b 的第二实例确实接受过连接（accepted）' ([bool]($s2 -and $s2.accepted -and $s2.accepts -ge 1)) 'accepted=true, accepts >= 1' `
     ("accepted=$(if ($s2) { $s2.accepted }) accepts=$(if ($s2) { $s2.accepts })")
-  $timeouts = @(@($s1, $s2) | Where-Object { $_ } | ForEach-Object { @($_.connections) } | Where-Object { $_.end -ne 'eof' })
-  Add-Assert 'sdp: 每个被接受的连接都以 EOF 结束（客户端拒绝后直接关闭）' ([bool]($timeouts.Count -eq 0)) 'end = eof' `
-    ((@($timeouts | ForEach-Object { $_.end })) -join ',')
+  # 逐实例核对：connections 字段必须存在、条数等于 accepts、每条都带 end=eof（缺字段即失败，不能静默通过）
+  $connOk = $true
+  $connDetail = @()
+  foreach ($pair in @(@('first', $s1), @('second', $s2))) {
+    $r = Test-ServerConnections $pair[1]
+    if (-not $r.ok) { $connOk = $false }
+    $connDetail += "$($pair[0]): $($r.detail)"
+  }
+  Add-Assert 'sdp: 每个实例 count(connections) = accepts，且每个连接都以 EOF 结束（客户端拒绝后直接关闭）' $connOk `
+    'connections 存在、count = accepts、end 全为 eof' ($connDetail -join '; ')
   Add-Assert 'sdp: 两个实例收到的字节数都为 0（F5）' ([bool]($s1 -and $s2 -and $s1.bytesRead -eq 0 -and $s2.bytesRead -eq 0)) 'first=0, second=0' `
     ("first=$(if ($s1) { $s1.bytesRead }) second=$(if ($s2) { $s2.bytesRead })")
   # 每次连接都落在这两个实例之一（没有别的实例），首个实例的 accepted 只作记录
@@ -480,14 +517,20 @@ function Invoke-TcpCase([string]$Method, [int]$Port, [string]$Expect) {
 
 # ---------------------------------------------------------------- 清理
 
-function Invoke-ReplayCleanup {
-  foreach ($l in @($script:Started)) { Stop-Job $l }
-  # 先按映像名结束残留（避免配置文件被占用导致 Cleanup 非零）；runner 自身的步骤在 pwsh 中运行
-  foreach ($name in @('verge-mihomo', [IO.Path]::GetFileNameWithoutExtension($ClientName), 'powershell')) {
-    foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-      try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
+function Stop-ReplayUserProcesses {
+  foreach ($p in @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)) {
+    $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction SilentlyContinue
+    if ($o -and $o.ReturnValue -eq 0 -and $o.Domain -eq $env:COMPUTERNAME -and @('ca_a', 'ca_b') -contains $o.User) {
+      try { Stop-Process -Id ([int]$p.ProcessId) -Force -ErrorAction Stop } catch { }
     }
   }
+}
+
+function Invoke-ReplayCleanup {
+  foreach ($l in @($script:Started)) { Stop-Job $l }
+  # 只结束 ca_a / ca_b 名下的残留进程（服务端 powershell、客户端、mihomo 及其子进程），不按映像名一刀切：
+  # runner 自身的步骤也在 powershell / pwsh 中运行。ci-standard-users Cleanup 还会再按属主扫一遍
+  Stop-ReplayUserProcesses
   Start-Sleep -Milliseconds 500
   try {
     Invoke-Users @{ Action = 'Cleanup'; UserName = @('ca_a', 'ca_b') } | Out-Null
