@@ -418,6 +418,8 @@ pub(crate) struct WinPipeProbe {
     pub tried: Vec<(String, String)>,
     /// M-3：TCP 能否回落。
     pub fallback: super::trust::TcpFallback,
+    /// 被判为 InsecureDacl 的候选名（Ellie PR50 Q5：即使选中了别的候选也要提示用户）。
+    pub insecure: Vec<String>,
 }
 
 #[cfg(windows)]
@@ -434,11 +436,13 @@ fn windows_probe_pipes(
                 selected: None,
                 tried: vec![],
                 fallback: TcpFallback::Blocked(format!("读不到当前用户 SID，不回落 TCP：{e}")),
+                insecure: vec![],
             }
         }
     };
     let mut tried = Vec::new();
     let mut errs: Vec<PipeErr> = Vec::new();
+    let mut errs_names: Vec<String> = Vec::new();
     for cand in windows_pipe_candidates(yaml_pipe, &key) {
         let (name, kind) = match super::guard::check_pipe_name_with_key(&cand, &key) {
             Ok(x) => x,
@@ -453,15 +457,20 @@ fn windows_probe_pipes(
         ));
         match r {
             // 校验通过的管道只要回应了 HTTP 就选用（401/403 也说明内核在线）。
+            // 之前若有 InsecureDacl 候选，回落状态保持 VerifiedOnly（更保守）。
             Ok(_) => {
                 return WinPipeProbe {
                     selected: Some(cand),
                     tried,
-                    fallback: TcpFallback::Allowed { denied_seen: false },
+                    fallback: tcp_fallback_after_pipes(&errs),
+                    insecure: errs_names,
                 }
             }
             Err(e) => {
                 let stop = matches!(e, PipeErr::Untrusted(_));
+                if matches!(e, PipeErr::InsecureDacl(_)) {
+                    errs_names.push(cand.clone());
+                }
                 tried.push((cand, e.to_string()));
                 errs.push(e);
                 if stop {
@@ -475,6 +484,17 @@ fn windows_probe_pipes(
         selected: None,
         tried,
         fallback: tcp_fallback_after_pipes(&errs),
+        insecure: errs_names,
+    }
+}
+
+/// Q5：把 InsecureDacl 提示附在来源标签后（无论最终选中哪条路径）。
+#[cfg(any(windows, test))]
+fn with_insecure_suffix(source: String, insecure: &[String]) -> String {
+    if insecure.is_empty() {
+        source
+    } else {
+        format!("{source};pipe-insecure-dacl={}", insecure.join("|"))
     }
 }
 
@@ -487,7 +507,13 @@ pub(crate) fn windows_probe_verge_pipes() -> WinPipeProbe {
     for (c, why) in &probe.tried {
         crate::append_app_log(&format!("[discover] 管道候选 {c:?} 不可用：{why}"));
     }
-    super::win_tcp::record_pipe_outcome(probe.fallback.clone());
+    super::win_tcp::record_probe_outcome(probe.fallback.clone());
+    for c in &probe.insecure {
+        crate::append_app_log(&format!(
+            "[discover] {}（{c}）",
+            super::trust::PIPE_INSECURE_DACL_UI
+        ));
+    }
     probe
 }
 
@@ -536,7 +562,13 @@ fn discover_controller_inner() -> DiscoverResult {
     for (c, why) in &probe.tried {
         crate::append_app_log(&format!("[discover] 管道候选 {c:?} 不可用：{why}"));
     }
-    super::win_tcp::record_pipe_outcome(probe.fallback.clone());
+    super::win_tcp::record_probe_outcome(probe.fallback.clone());
+    for c in &probe.insecure {
+        crate::append_app_log(&format!(
+            "[discover] {}（{c}）",
+            super::trust::PIPE_INSECURE_DACL_UI
+        ));
+    }
 
     let mixed = parsed.mixed_port.unwrap_or(DEFAULT_MIXED);
     let (port, tcp_from_yaml) = match parsed.port {
@@ -567,6 +599,8 @@ fn discover_controller_inner() -> DiscoverResult {
     } else {
         format!("verge-config:{files}")
     };
+
+    let source = with_insecure_suffix(source, &probe.insecure);
 
     DiscoverResult {
         host: "127.0.0.1".into(),
@@ -1011,6 +1045,18 @@ mixed-port: 7897
         assert!(!windows_pipe_candidates(Some(""), k)
             .iter()
             .any(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn insecure_pipe_warning_survives_selection() {
+        assert_eq!(
+            with_insecure_suffix("verge-pipe:a".into(), &[]),
+            "verge-pipe:a"
+        );
+        assert_eq!(
+            with_insecure_suffix("verge-pipe:b".into(), &["a".into(), "c".into()]),
+            "verge-pipe:b;pipe-insecure-dacl=a|c"
+        );
     }
 
     #[test]
