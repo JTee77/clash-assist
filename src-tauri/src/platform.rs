@@ -54,18 +54,27 @@ pub fn current_uid() -> u32 {
     0
 }
 
-/// 套接字属主是否可信：本人（euid）或 root（Verge 系统服务）。
-/// 别的普通用户拥有的套接字一律拒绝，避免把当前用户的控制器 secret 发给他人进程。
+/// 套接字属主 / 对端 uid 是否可信：本人（euid）或 root（Verge 系统服务）。
+/// 别的普通用户一律拒绝，避免把当前用户的控制器 secret 发给他人进程。
 #[cfg(unix)]
 pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
     owner_uid == current || owner_uid == 0
 }
 
-/// 在连接 Unix 套接字、发送 secret 之前检查其属主（跟随符号链接，检查最终目标）。
+/// 连接前的路径侧检查（不跟随符号链接）：
+/// - 路径本身是 symlink → 拒绝（防止指向他人 sock 的 TOCTOU 替换）
+/// - lstat 属主不是本人 / root → 拒绝（发现阶段廉价过滤）
+/// 真正的信任判定在连接后的 `ensure_connected_peer_trusted`。
 #[cfg(unix)]
-pub fn ensure_sock_owner_trusted(sock: &str) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(sock).map_err(|e| format!("stat {sock}: {e}"))?;
+pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let meta = std::fs::symlink_metadata(sock).map_err(|e| format!("lstat {sock}: {e}"))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("拒绝符号链接套接字路径 {sock}"));
+    }
+    if !meta.file_type().is_socket() {
+        return Err(format!("不是 Unix 套接字：{sock}"));
+    }
     let owner = meta.uid();
     let me = current_uid();
     if sock_owner_trusted(owner, me) {
@@ -78,8 +87,74 @@ pub fn ensure_sock_owner_trusted(sock: &str) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-pub fn ensure_sock_owner_trusted(_sock: &str) -> Result<(), String> {
+pub fn ensure_sock_path_trusted(_sock: &str) -> Result<(), String> {
     Ok(())
+}
+
+/// 连接后检查对端进程凭证：peer uid 必须是本人或 root。
+/// Verge service 模式下 sock 文件属主可能是当前用户，但 mihomo 以 root 运行——peer uid=0 应被接受。
+#[cfg(unix)]
+pub fn ensure_connected_peer_trusted(
+    stream: &std::os::unix::net::UnixStream,
+    sock: &str,
+) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let peer = peer_uid(stream.as_raw_fd()).map_err(|e| format!("peercred {sock}: {e}"))?;
+    let me = current_uid();
+    if sock_owner_trusted(peer, me) {
+        Ok(())
+    } else {
+        Err(format!(
+            "拒绝连接其他用户进程的套接字 {sock}（对端 uid {peer}，当前 uid {me}）"
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn peer_uid(fd: std::os::fd::RawFd) -> Result<u32, String> {
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))]
+    {
+        let mut euid: libc::uid_t = 0;
+        let mut egid: libc::gid_t = 0;
+        // SAFETY: getpeereid writes into the two out-params; fd is a connected unix socket.
+        let rc = unsafe { libc::getpeereid(fd, &mut euid, &mut egid) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(euid as u32)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: getsockopt(SO_PEERCRED) fills ucred for a connected unix socket.
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                &mut cred as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(cred.uid as u32)
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "linux"
+    )))]
+    {
+        let _ = fd;
+        Err("peer credentials unsupported on this OS".into())
+    }
 }
 
 /// `$TMPDIR/verge-mihomo.sock` (or `/tmp/...` when TMPDIR unset).
@@ -114,7 +189,7 @@ pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> V
         push(verge_service_sock_for_uid(uid));
 
         // 0.2.9：不再枚举 service 目录下其他 uid 的套接字——那是别的用户的 mihomo，
-        // 不应把当前用户的 secret 发过去（见 `ensure_sock_owner_trusted`）。
+        // 不应把当前用户的 secret 发过去（见 `ensure_sock_path_trusted`）。
 
         push(VERGE_SOCK_PATH.to_string());
         push(verge_tmpdir_sock());
@@ -281,14 +356,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn own_socket_is_trusted_and_candidates_skip_other_uids() {
+    fn own_socket_path_is_trusted_and_candidates_skip_other_uids() {
         let dir = std::env::temp_dir().join(format!("ca-sock-owner-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("m.sock");
         let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        assert!(ensure_sock_owner_trusted(sock.to_str().unwrap()).is_ok());
-        assert!(ensure_sock_owner_trusted("/nonexistent/ca.sock").is_err());
+        assert!(ensure_sock_path_trusted(sock.to_str().unwrap()).is_ok());
+        assert!(ensure_sock_path_trusted("/nonexistent/ca.sock").is_err());
         let _ = std::fs::remove_dir_all(&dir);
 
         let me = current_uid();
@@ -297,6 +372,43 @@ mod tests {
                 assert!(rest.starts_with(&format!("{me}/")), "unexpected other-uid candidate {c}");
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connected_peer_of_own_listener_is_trusted() {
+        use std::os::unix::net::{UnixListener, UnixStream};
+        let dir = std::env::temp_dir().join(format!("ca-peercred-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("p.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let path = sock.to_str().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+        });
+        let client = UnixStream::connect(&path).unwrap();
+        assert!(ensure_connected_peer_trusted(&client, &path).is_ok());
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sock_path_is_rejected() {
+        use std::os::unix::net::UnixListener;
+        let dir = std::env::temp_dir().join(format!("ca-sock-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.sock");
+        let link = dir.join("link.sock");
+        let _l = UnixListener::bind(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = ensure_sock_path_trusted(link.to_str().unwrap()).expect_err("symlink must fail");
+        assert!(err.contains("符号链接") || err.to_lowercase().contains("symlink"), "{err}");
+        assert!(ensure_sock_path_trusted(real.to_str().unwrap()).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

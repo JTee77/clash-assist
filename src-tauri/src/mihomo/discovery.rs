@@ -228,7 +228,7 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
             continue;
         }
         // 0.2.9：其他普通用户拥有的套接字不作候选（连回落候选也不当）。
-        if crate::platform::ensure_sock_owner_trusted(&s).is_err() {
+        if crate::platform::ensure_sock_path_trusted(&s).is_err() {
             continue;
         }
         if first_existing.is_none() {

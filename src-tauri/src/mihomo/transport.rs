@@ -92,11 +92,12 @@ pub fn http_via_unix(
     if !path.starts_with('/') || !path.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(format!("invalid request path: {path:?}"));
     }
-    // 0.2.9：不把当前用户的 secret 发给其他用户拥有的套接字（仅允许本人或 root 拥有）。
-    crate::platform::ensure_sock_owner_trusted(sock)?;
+    // 0.2.9：拒绝符号链接路径；连接后用对端凭证（peer uid）判定可信，避免 path TOCTOU。
+    crate::platform::ensure_sock_path_trusted(sock)?;
 
     let timeout = Duration::from_millis(timeout_ms);
     let mut stream = UnixStream::connect(sock).map_err(|e| format!("connect {sock}: {e}"))?;
+    crate::platform::ensure_connected_peer_trusted(&stream, sock)?;
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
