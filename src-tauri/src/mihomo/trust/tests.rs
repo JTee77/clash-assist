@@ -844,11 +844,21 @@ fn tcp_listener_conflict_and_unrelated_rows() {
         c,
         ListenerCheck::Rejected(TcpReject::ListenerConflict(vec![7, 8]))
     );
-    // 其他地址族上的监听者不参与冲突判定（Ellie S2：0.0.0.0 + [::] 组合）
+    // Ellie PR50 Q1（取代 S2 时的做法）：0.0.0.0 + [::] 组合若 PID 不同，也算冲突；PID 相同仍可验证。
     let c = check(
         v4addr(),
         vec![row("0.0.0.0", 7)],
         vec![row("::", 8)],
+        &FakeProc::mine(),
+    );
+    assert_eq!(
+        c,
+        ListenerCheck::Rejected(TcpReject::ListenerConflict(vec![7, 8]))
+    );
+    let c = check(
+        v4addr(),
+        vec![row("0.0.0.0", 7)],
+        vec![row("::", 7)],
         &FakeProc::mine(),
     );
     assert!(matches!(c, ListenerCheck::Verified { pid: 7, .. }), "{c:?}");
@@ -1137,4 +1147,77 @@ fn file_name_handles_all_separators() {
     for (k, v) in m {
         assert_eq!(file_name(k), v);
     }
+}
+
+/// Ellie PR50 Q1：目标为 IPv4 时，v6 表 `::` 上 PID 不同的监听者也算冲突。
+#[test]
+fn ipv6_unspecified_listener_with_other_pid_is_conflict_for_ipv4_target() {
+    let p = FakeProc::mine();
+    assert_eq!(
+        check(v4addr(), vec![row("127.0.0.1", 7)], vec![row("::", 8)], &p).clone_reject_code(),
+        Some("listener-conflict")
+    );
+    // 同一 PID 的双栈监听不算冲突
+    assert!(matches!(
+        check(v4addr(), vec![row("127.0.0.1", 7)], vec![row("::", 7)], &p),
+        ListenerCheck::Verified { pid: 7, .. }
+    ));
+    // `::1`（非通配）不影响 127.0.0.1
+    assert!(matches!(
+        check(v4addr(), vec![row("127.0.0.1", 7)], vec![row("::1", 8)], &p),
+        ListenerCheck::Verified { pid: 7, .. }
+    ));
+    // 只有 v6 通配、v4 没有监听：仍是 NotListening（带双栈提示），不凭 v6 行判 verified
+    assert!(matches!(
+        check(v4addr(), vec![], vec![row("::", 8)], &p),
+        ListenerCheck::NotListening {
+            ipv6_dual_stack_hint: true
+        }
+    ));
+}
+
+/// Ellie PR50 Q4：标签不带 NO_WRITE_UP（如 `S:(ML;;NR;;;ME)`）⇒ 拒绝，即使 RID 不低于 Medium。
+#[test]
+fn label_without_no_write_up_rejects() {
+    // SYSTEM_MANDATORY_LABEL_NO_WRITE_UP（security.rs 读取标签时用到）
+    assert_eq!(MANDATORY_NO_WRITE_UP, 0x1);
+    for rid in [0x1000, MANDATORY_MEDIUM_RID, 0x3000] {
+        let mut f = FakePipe::sidecar_ok().with_label(LabelFact::WithoutNoWriteUp(rid));
+        let e = decide(PipeKind::Sidecar, &mut f).unwrap_err();
+        assert_eq!(e.reason, "label-no-write-up", "0x{rid:X}");
+        assert!(matches!(PipeErr::from_reject(e), PipeErr::InsecureDacl(_)));
+    }
+}
+
+/// Ellie PR50 M-a：单次请求只能收紧 M-3 状态。
+#[test]
+fn single_request_can_only_tighten_fallback() {
+    let allowed = || TcpFallback::Allowed { denied_seen: false };
+    let vo = || TcpFallback::VerifiedOnly("v".into());
+    let blocked = || TcpFallback::Blocked("b".into());
+    // Blocked 之后：成功 / NotFound（= Allowed）、VerifiedOnly、Blocked 都不覆盖
+    for new in [allowed(), vo(), blocked()] {
+        assert_eq!(tighten_fallback(Some(&blocked()), new), None);
+    }
+    // VerifiedOnly 之后：只有 Blocked 能写入
+    assert_eq!(tighten_fallback(Some(&vo()), allowed()), None);
+    assert_eq!(tighten_fallback(Some(&vo()), vo()), None);
+    assert_eq!(tighten_fallback(Some(&vo()), blocked()), Some(blocked()));
+    // Allowed 之后：收紧可写
+    assert_eq!(tighten_fallback(Some(&allowed()), allowed()), None);
+    assert_eq!(tighten_fallback(Some(&allowed()), vo()), Some(vo()));
+    assert_eq!(
+        tighten_fallback(Some(&allowed()), blocked()),
+        Some(blocked())
+    );
+    // 缓存为空：不写 Allowed（否则会跳过下一次完整探测），收紧可写
+    assert_eq!(tighten_fallback(None, allowed()), None);
+    assert_eq!(
+        tighten_fallback(None, TcpFallback::Allowed { denied_seen: true }),
+        None
+    );
+    assert_eq!(tighten_fallback(None, blocked()), Some(blocked()));
+    // NotFound / Busy / 成功折算成的 Allowed 都不会放宽
+    let nf = tcp_fallback_after_pipes(&[PipeErr::NotFound]);
+    assert_eq!(tighten_fallback(Some(&blocked()), nf), None);
 }

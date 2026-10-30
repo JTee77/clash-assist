@@ -13,7 +13,9 @@ use windows_sys::Win32::Security::{
 use super::identity::Known;
 use super::sid::OwnedSid;
 use super::util::{last_err, LocalBox};
-use crate::mihomo::trust::{AceFact, AceKind, DaclFact, FactErr, LabelFact, SecurityFact};
+use crate::mihomo::trust::{
+    AceFact, AceKind, DaclFact, FactErr, LabelFact, SecurityFact, MANDATORY_NO_WRITE_UP,
+};
 
 /// SYSTEM_MANDATORY_LABEL_ACE_TYPE。
 const MANDATORY_LABEL_ACE: u8 = 0x11;
@@ -116,9 +118,21 @@ unsafe fn label(sacl: *mut ACL) -> Result<LabelFact, FactErr> {
             return Ok(LabelFact::Unparsed);
         }
         let rid = *GetSidSubAuthority(sid, u32::from(n) - 1);
+        // 任一标签 ACE 缺 NO_WRITE_UP ⇒ WithoutNoWriteUp（拒绝，Ellie PR50 Q4）；RID 取最低。
+        let nw = a.Mask & MANDATORY_NO_WRITE_UP != 0;
         out = match out {
-            LabelFact::Rid(r) if r <= rid => LabelFact::Rid(r),
-            _ => LabelFact::Rid(rid),
+            LabelFact::None => {
+                if nw {
+                    LabelFact::Rid(rid)
+                } else {
+                    LabelFact::WithoutNoWriteUp(rid)
+                }
+            }
+            LabelFact::Rid(r) if nw => LabelFact::Rid(r.min(rid)),
+            LabelFact::Rid(r) | LabelFact::WithoutNoWriteUp(r) => {
+                LabelFact::WithoutNoWriteUp(r.min(rid))
+            }
+            LabelFact::Unparsed => LabelFact::Unparsed,
         };
     }
     Ok(out)

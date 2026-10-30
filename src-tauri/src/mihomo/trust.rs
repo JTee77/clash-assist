@@ -158,8 +158,12 @@ pub enum DaclFact {
 pub enum LabelFact {
     /// 没有显式标签（等同 Medium）。
     None,
-    /// `S-1-16-<rid>` 的 RID（Low = 0x1000，Medium = 0x2000，High = 0x3000，System = 0x4000）。
+    /// `S-1-16-<rid>` 的 RID（Low = 0x1000，Medium = 0x2000，High = 0x3000，System = 0x4000），
+    /// 且每条标签 ACE 都带 `SYSTEM_MANDATORY_LABEL_NO_WRITE_UP`（0x1）。
     Rid(u32),
+    /// 有标签 ACE 不带 NO_WRITE_UP（如 `S:(ML;;NR;;;ME)`）：低完整性进程仍可写入 / 插入实例。
+    /// 拒绝（Ellie PR50 Q4）。值为最低 RID。
+    WithoutNoWriteUp(u32),
     /// 有标签 ACE 但解析不了。
     Unparsed,
 }
@@ -366,11 +370,22 @@ pub const INSECURE_DACL_REASONS: &[&str] = &[
     "dacl-unknown-ace",
     "label-below-medium",
     "label-unparsed",
+    "label-no-write-up",
 ];
+
+/// 标签 ACE 的 `SYSTEM_MANDATORY_LABEL_NO_WRITE_UP`。
+pub const MANDATORY_NO_WRITE_UP: u32 = 0x1;
 
 /// §2.2 管道判定。信任 = L1 属主（按 PipeKind）+ F3′ DACL 白名单 + 完整性标签；三者来自同一句柄上
 /// 的一次 `GetSecurityInfo`。服务端 PID、L2、L3 只作诊断。调用方保证判定通过之前不向管道写任何
 /// 字节（F5）。
+///
+/// **接受的风险 R3（WRITE_DAC 注入后复原，TOCTOU）**：安全描述符只在连接后读取一次。持有
+/// `WRITE_DAC`（或 `WRITE_OWNER`）的主体可以先放宽 DACL、插入自己的实例、再把 DACL 改回原样；
+/// 这样的实例在读取时看起来是安全的，本函数无法发现。之所以接受：在 mihomo 默认 SDDL 与 Verge
+/// SDDL 下，`WRITE_DAC` / `WRITE_OWNER` 只授予受信主体（本人 / SYSTEM / BA，或经 GENERIC_ALL
+/// 映射），而它们本来就能直接冒充控制器；任何把这些位授予其他主体的 DACL 都会在下面的 F3′
+/// 白名单里被拒绝。详见 docs/windows-naming.md「接受的风险」。
 pub fn decide_pipe(
     kind: PipeKind,
     images: &[String],
@@ -404,7 +419,8 @@ pub fn decide_pipe(
         ));
     }
 
-    // F3′：DACL 白名单（强制）
+    // F3′：DACL 白名单（强制）。R3（WRITE_DAC 注入后复原）是接受的风险，见上方函数注释与
+    // docs/windows-naming.md：这里只能看到读取时刻的 DACL。
     const STALE: &str = "；若 Verge 已升级仍出现，可能是同名管道已被占用（旧实例未退出）";
     match dacl_verdict(&sec.dacl) {
         DaclVerdict::Ok => {}
@@ -439,6 +455,13 @@ pub fn decide_pipe(
             return Err(reject(
                 "label-below-medium",
                 format!("管道完整性标签 0x{r:X} 低于 Medium"),
+                Some(&owner),
+            ))
+        }
+        LabelFact::WithoutNoWriteUp(r) => {
+            return Err(reject(
+                "label-no-write-up",
+                format!("管道完整性标签（0x{r:X}）不含 NO_WRITE_UP，低完整性进程仍可写入"),
                 Some(&owner),
             ))
         }
@@ -592,6 +615,25 @@ pub enum TcpFallback {
     VerifiedOnly(String),
     /// 有候选被判为不可信（或出现其他错误）：停止，不回落 TCP。
     Blocked(String),
+}
+
+/// 严格程度：Allowed < VerifiedOnly < Blocked。
+fn fallback_rank(f: &TcpFallback) -> u8 {
+    match f {
+        TcpFallback::Allowed { .. } => 0,
+        TcpFallback::VerifiedOnly(_) => 1,
+        TcpFallback::Blocked(_) => 2,
+    }
+}
+
+/// Ellie PR50 M-a：**单次**管道请求的结果只能收紧 M-3 状态，不能放宽。
+///
+/// `current` 为当前有效（未过期）的缓存。返回 `Some(new)` 表示应写入（并刷新时间戳）；
+/// `None` 表示保持原状。成功、NotFound、Busy（= Allowed）永远不写：放宽只能由一轮完整的
+/// 候选探测（`record_probe_outcome`）做出；缓存为空时也不写 Allowed，以免跳过下一次完整探测。
+pub fn tighten_fallback(current: Option<&TcpFallback>, new: TcpFallback) -> Option<TcpFallback> {
+    let cur = current.map(fallback_rank).unwrap_or(0);
+    (fallback_rank(&new) > cur).then_some(new)
 }
 
 pub fn tcp_fallback_after_pipes(errs: &[PipeErr]) -> TcpFallback {
@@ -754,6 +796,18 @@ pub fn decide_tcp_listener(
     let mut pids: Vec<u32> = relevant.iter().map(|r| r.pid).collect();
     pids.sort_unstable();
     pids.dedup();
+    // Ellie PR50 Q1：目标是 IPv4 时，IPv6 表里 `::` 通配（可能是双栈套接字）且 PID 不同的监听者
+    // 也算冲突（保守；连接后的 PID 绑定本来也会兜住）。
+    if addr.is_ipv4() && !pids.is_empty() {
+        if let Ok(rows6) = other {
+            for r in rows6.iter().filter(|r| r.ip.is_unspecified()) {
+                if !pids.contains(&r.pid) {
+                    pids.push(r.pid);
+                }
+            }
+            pids.sort_unstable();
+        }
+    }
 
     if pids.len() > 1 {
         return ListenerCheck::Rejected(TcpReject::ListenerConflict(pids));

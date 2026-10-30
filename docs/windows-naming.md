@@ -49,3 +49,19 @@
 - 3 `src-tauri/windows/hooks.nsh`：卸载时删除应用数据
 - `platform::app_log_dir()`：Windows 上改为 `%LOCALAPPDATA%\ClashAssist\logs`
 - M4 冒烟测试 `scripts/smoke-windows.ps1`、M5 `updater-e2e.yml`
+
+## 控制器命名管道（M1）
+
+- 候选顺序：Verge yaml 的 `external-controller-pipe` → `\\.\pipe\verge-mihomo-production-{key}` → `\\.\pipe\verge-mihomo-sidecar-release-{key}`，其中 key = hex(sha256(当前用户 SID))。不带 key 的旧名字只在 yaml 写明时尝试（N-2）。前缀必须是小写的 `\\.\pipe\`。
+- 信任判定见 `src-tauri/src/mihomo/trust.rs` 的 `decide_pipe`：
+  - 属主白名单（按 PipeKind 区分）；
+  - DACL 白名单（F3′）：只有本人、SYSTEM、BA 可以持有 `FILE_CREATE_PIPE_INSTANCE`、`WRITE_DAC`、`WRITE_OWNER`、`GENERIC_WRITE`、`GENERIC_ALL`、`MAXIMUM_ALLOWED`；
+  - 完整性标签不低于 Medium，并且带 NO_WRITE_UP。
+  - 以上三项在已连接的句柄上用一次 `GetSecurityInfo` 读出，判定通过之前不写任何字节。
+
+### 接受的风险
+
+- **R3：WRITE_DAC 注入后复原（TOCTOU）。**
+  - 风险：安全描述符只在连接后读取一次。持有 `WRITE_DAC` 或 `WRITE_OWNER` 的主体可以先放宽 DACL、插入自己的管道实例，再把 DACL 改回原样。客户端读到的是复原之后的安全描述符，因此无法发现。
+  - 为何接受：在 mihomo 默认 SDDL 和 Verge sidecar SDDL 下，`WRITE_DAC` / `WRITE_OWNER` 只授予受信主体（本人、SYSTEM、BA，或经 `GENERIC_ALL` 映射得到），而这些主体本来就能直接冒充控制器。任何把这些位授予其他主体的 DACL，都会在 F3′ 白名单检查中被拒绝。
+  - 代码位置：`decide_pipe` 的函数注释和 F3′ 检查处都有对应注释。
