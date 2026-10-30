@@ -10,6 +10,8 @@
 mod cancel;
 mod discovery;
 pub mod guard;
+// 非 Unix 上暂无调用方（Unix 套接字传输不编译）；M1 的命名管道传输复用这里的解析。
+#[cfg_attr(not(unix), allow(dead_code))]
 mod http_parse;
 mod nodes;
 mod timed;
@@ -17,7 +19,9 @@ mod transport;
 mod types;
 
 // Public controller-layer API surface (referenced as `mihomo::X` from `crate::lib`).
-pub use discovery::{discover_controller, discover_for_client, read_verge_config};
+pub use discovery::{discover_controller, discover_for_client};
+#[cfg(not(windows))]
+pub use discovery::read_verge_config;
 pub use nodes::list_nodes_async;
 pub use cancel::{arm_cancel, disarm_cancel, fire_cancel};
 pub use timed::proxy_timed_transfer_async;

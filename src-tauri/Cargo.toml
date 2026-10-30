@@ -35,6 +35,27 @@ open = { version = "5", features = ["shellexecute-on-windows"] }
 # CLI：Ctrl+C / SIGTERM 时先切回原节点再退出（sigaction / write / _exit）。
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# Windows 移植（windows-plan r4 §3）：复用 Cargo.lock 中已有的 windows-sys 0.61.2。
+# M0 只引入依赖与 feature 清单；各 API 在 M1（管道 L1–L3、TCP 监听者校验）、
+# M2（DNS 网卡发现）、M5（更新器）中使用。
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",                  # HANDLE、CloseHandle、LocalFree、UNICODE_STRING、错误码
+  "Win32_Security",                    # GetTokenInformation、TokenUser、EqualSid、IsWellKnownSid、CopySid、GetAce、GetAclInformation、SECURITY_ATTRIBUTES
+  "Win32_Security_Authorization",      # ConvertSidToStringSidW、GetSecurityInfo、GetNamedSecurityInfoW、ConvertStringSecurityDescriptorToSecurityDescriptorW
+  "Win32_System_Threading",            # OpenProcess、OpenProcessToken、QueryFullProcessImageNameW、GetCurrentProcess、OpenThreadToken（测试）
+  "Win32_System_Pipes",                # GetNamedPipeServerProcessId、ImpersonateNamedPipeClient（测试）
+  "Win32_Storage_FileSystem",          # SECURITY_ANONYMOUS、FILE_SHARE_READ、CreateDirectoryW、GetFinalPathNameByHandleW、GetFileVersionInfo*W、VerQueryValueW
+  "Win32_System_Registry",             # RegGetValueW（install_kind）
+  "Win32_System_Diagnostics_ToolHelp", # CreateToolhelp32Snapshot、Process32FirstW/NextW（L2 ③）
+  "Win32_UI_Shell",                    # SHGetKnownFolderPath（FOLDERID_ProgramData）
+  "Win32_System_Com",                  # CoTaskMemFree（释放 SHGetKnownFolderPath 的返回值）
+  "Wdk_System_SystemInformation",      # NtQuerySystemInformation（L2 ②；常量 0x58 与结构体需自定义）
+  "Win32_NetworkManagement_IpHelper",  # GetAdaptersAddresses、GetBestRoute2、GetExtendedTcpTable、TCP_TABLE_OWNER_PID_LISTENER
+  "Win32_NetworkManagement_Ndis",      # IF_OPER_STATUS、NET_LUID_LH（IpHelper 结构体依赖）
+  "Win32_Networking_WinSock",          # SOCKADDR_INET、AF_INET/AF_INET6/AF_UNSPEC
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

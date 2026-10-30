@@ -1,0 +1,10 @@
+# windows-plan r4 §2.8 / §3（S-8 ①）：workflow 中的 action 全部按 commit SHA 固定，
+# 由 Dependabot 每周检查新版本并提 PR（同时更新 SHA 与行尾的 `# vX.Y.Z` 注释）。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

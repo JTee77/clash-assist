@@ -4,6 +4,8 @@
 //! 3) `apply_staged_update`：后台静默挂载 .dmg、提取 .app、清除 com.apple.quarantine 隔离属性、
 //!    校验签名、原子替换当前 .app（替换后不强行退出，当前窗口可继续正常使用，下次重开自动生效）。
 //! 4) `relaunch_app`：用户点击「立即重启」时，拉起新版 .app 并退出当前进程。
+// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
+#![allow(clippy::disallowed_methods)]
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -1363,7 +1365,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
         for _ in 0..chunks {
             r.extend_from_slice(format!("{chunk_len:x}\r\n").as_bytes());
-            r.extend(std::iter::repeat(b'a').take(chunk_len));
+            r.extend(std::iter::repeat_n(b'a', chunk_len));
             r.extend_from_slice(b"\r\n");
         }
         r.extend_from_slice(b"0\r\n\r\n");

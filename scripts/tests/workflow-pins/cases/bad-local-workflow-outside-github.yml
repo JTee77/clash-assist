@@ -1,0 +1,6 @@
+# 反例：job 级本地 reusable 引用指向 .github 之外的文件
+# expect: 只允许位于 ./.github/ 下
+on: push
+jobs:
+  a:
+    uses: ./tools/comp/action.yml

@@ -1,0 +1,31 @@
+# 正例：应通过
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    container: node@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    services:
+      db:
+        image: docker://postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+      - uses: ./.github/actions/local
+      - uses: ./.github/actions/docker-digest
+      - uses: ./.github/actions/docker-file
+      - uses: docker://alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - run: 'echo "uses: actions/checkout@v4 只是文本 # pull_request_target"' 
+  b:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/o/i:1@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - run: "true"
+  local-reusable:
+    uses: ./.github/workflows/called.yml
+  reusable:
+    uses: octo/repo/.github/workflows/w.yml@11d5960a326750d5838078e36cf38b85af677262

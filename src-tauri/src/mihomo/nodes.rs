@@ -21,7 +21,7 @@ fn is_junk_name(name: &str) -> bool {
 }
 
 fn ignore_type(t: &str) -> bool {
-    IGNORE_PROXY_TYPES.iter().any(|x| *x == t)
+    IGNORE_PROXY_TYPES.contains(&t)
 }
 
 /// A per-node capability flag from a proxy object; absent → false.
@@ -384,7 +384,7 @@ pub async fn list_nodes_async(
     timeout_ms: u64,
     sock_path: Option<&str>,
 ) -> Result<ListNodesResult, String> {
-    let tcp_timeout = timeout_ms.min(2000).max(400);
+    let tcp_timeout = timeout_ms.clamp(400, 2000);
     let unix_timeout = timeout_ms.max(tcp_timeout);
     let prefer_unix = sock_path.map(|s| !s.is_empty()).unwrap_or(false);
 
@@ -459,6 +459,7 @@ mod tests {
     use super::*;
 
     /// A local controller fixture; no real proxy process or network settings are touched.
+    #[cfg(not(windows))]
     struct ProviderController {
         port: u16,
         requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -503,6 +504,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     impl ProviderController {
         fn start(providers_status: u16, providers_body: &str) -> Self {
             use std::io::Write;
@@ -537,6 +539,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     impl Drop for ProviderController {
         fn drop(&mut self) {
             self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -544,6 +547,8 @@ mod tests {
         }
     }
 
+    // 依赖本地 TCP 控制器 fixture；Windows 上 TCP 出口 fail-closed（P-1），不适用。
+    #[cfg(not(windows))]
     #[test]
     fn list_nodes_includes_provider_leaves_and_ships_the_group_table() {
         let controller = ProviderController::start(200, r#"{"providers":{"subscription":{"vehicleType":"File","proxies":[{"name":"provider-a","type":"Vless","udp":true}]}}}"#);
@@ -605,6 +610,8 @@ mod tests {
         );
     }
 
+    // 依赖本地 TCP 控制器 fixture；Windows 上 TCP 出口 fail-closed（P-1），不适用。
+    #[cfg(not(windows))]
     #[test]
     fn provider_failure_keeps_static_nodes_and_reports_incomplete_list() {
         let controller = ProviderController::start(403, r#"{"message":"denied"}"#);
@@ -648,7 +655,6 @@ mod tests {
                     panic!("intentional smoke panic");
                 })
                 .map_err(|_| "caught panic".to_string())
-                .and_then(|()| Ok::<(), String>(()))
             })
             .await
         });
@@ -907,9 +913,7 @@ mod tests {
         );
         let _ = std::fs::remove_file(&sock);
 
-        let body = concat!(
-            r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"GLOBAL":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2","history":[{"time":"t","delay":40}]},"日本 TY-4-HY2":{"type":"Hysteria2","history":[{"time":"t","delay":55}]},"DIRECT":{"type":"Direct"}}}"#
-        );
+        let body = r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"GLOBAL":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2","history":[{"time":"t","delay":40}]},"日本 TY-4-HY2":{"type":"Hysteria2","history":[{"time":"t","delay":55}]},"DIRECT":{"type":"Direct"}}}"#;
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -981,9 +985,7 @@ mod tests {
         );
         let _ = std::fs::remove_file(&sock);
 
-        let json = concat!(
-            r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2"},"日本 TY-4-HY2":{"type":"Hysteria2"},"DIRECT":{"type":"Direct"}}}"#
-        );
+        let json = r#"{"proxies":{"Proxy":{"type":"Selector","now":"香港 HK-2-AT","all":["香港 HK-2-AT","日本 TY-4-HY2"]},"香港 HK-2-AT":{"type":"Hysteria2"},"日本 TY-4-HY2":{"type":"Hysteria2"},"DIRECT":{"type":"Direct"}}}"#;
         let json_b = json.as_bytes();
         // Split inside multi-byte UTF-8 so char-based decode would corrupt.
         let split_at = (0..json_b.len())
@@ -1107,5 +1109,34 @@ mod tests {
             err.contains("解析 /proxies JSON 失败"),
             "unexpected error: {err}"
         );
+    }
+}
+
+/// P-1：`list_nodes_async` 的 TCP 路径（直接走 TCP，以及 Unix 套接字不可用后的回落）
+/// 在 Windows 上同样不得建连。
+#[cfg(all(test, windows))]
+mod windows_tcp_fail_closed_tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn list_nodes_never_connects_on_windows_direct_or_fallback() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for sock in [None, Some("/tmp/verge-mihomo.sock")] {
+            let r = tauri::async_runtime::block_on(list_nodes_async(
+                "127.0.0.1",
+                port,
+                "s3cret-must-not-leave",
+                1000,
+                sock,
+            ));
+            // 结果必须是失败（Err，或 Ok 但无节点），且不能来自任何真实连接（见下方断言）。
+            match r {
+                Err(_) => {}
+                Ok(ok) => assert!(ok.nodes.is_empty() && ok.error.is_some(), "sock={sock:?}: unexpected success"),
+            }
+        }
+        crate::mihomo::transport::windows_tcp_fail_closed_tests::assert_never_accepted(&listener);
     }
 }

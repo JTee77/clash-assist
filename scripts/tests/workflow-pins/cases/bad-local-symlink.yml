@@ -1,0 +1,9 @@
+# 反例（r2 n12）：.github/actions/comp 是指向 ../../tools/comp 的符号链接（自测时创建），内部 @v4
+# expect: 不在仓库的 .github 目录内
+# expect: tools/comp/action.yml: runs.steps[0].uses: 未按 40 位 commit SHA 固定
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/comp

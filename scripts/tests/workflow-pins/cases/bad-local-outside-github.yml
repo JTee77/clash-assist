@@ -1,0 +1,9 @@
+# 反例（r2 n6）：.github 之外的本地 composite action，内部 @v4
+# expect: 只允许位于 ./.github/ 下
+# expect: tools/comp/action.yml: runs.steps[0].uses: 未按 40 位 commit SHA 固定
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./tools/comp

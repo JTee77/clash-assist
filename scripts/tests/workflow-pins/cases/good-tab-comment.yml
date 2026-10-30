@@ -1,0 +1,8 @@
+# 正例（r2 c22）：值与行内注释之间用 Tab 分隔，不应误报
+on: push	# 触发器
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262	# v4.4.0
+      - uses: "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"	 	# v4.4.0

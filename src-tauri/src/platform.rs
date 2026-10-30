@@ -25,6 +25,7 @@ pub const VERGE_SOCK_PATH: &str = "/tmp/verge/verge-mihomo.sock";
 pub const VERGE_SERVICE_USERS_DIR: &str = "/var/run/clash-verge-service/users";
 
 /// Mihomo Party controller sock (unix only) — consumed via the client table.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // 只在 macOS 客户端表中使用
 pub const PARTY_SOCK_PATH: &str = "/tmp/mihomo-party.sock";
 
 pub fn verge_config_path() -> PathBuf {
@@ -64,10 +65,12 @@ pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
 /// 连接前的路径侧检查（不跟随符号链接）：
 /// - 路径本身是 symlink → 拒绝（防止指向他人 sock 的 TOCTOU 替换）
 /// - lstat 属主不是本人 / root → 拒绝（发现阶段廉价过滤）
+///
 /// 真正的信任判定在连接后的 `ensure_connected_peer_trusted`。
 #[cfg(unix)]
 pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
     let meta = std::fs::symlink_metadata(sock).map_err(|e| format!("lstat {sock}: {e}"))?;
     if meta.file_type().is_symlink() {
         return Err(format!("拒绝符号链接套接字路径 {sock}"));
@@ -86,10 +89,10 @@ pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(not(unix))]
-pub fn ensure_sock_path_trusted(_sock: &str) -> Result<(), String> {
-    Ok(())
-}
+// 非 Unix 平台（Windows）不编译 `ensure_sock_path_trusted`：那里没有 Unix 套接字，
+// 旧版的 `Ok(())` 桩等于静默放行。删除后任何调用点在 Windows 上都会编译失败，
+// 必须显式处理成「不可用」（见 `mihomo::discovery::select_working_sock`）。
+// Windows 的本机 IPC 信任校验走命名管道（M1：`ensure_pipe_server_trusted`）。
 
 /// 连接后检查对端进程凭证：peer uid 必须是本人或 root。
 /// Verge service 模式下 sock 文件属主可能是当前用户，但 mihomo 以 root 运行——peer uid=0 应被接受。
@@ -426,7 +429,9 @@ mod tests {
             // legacy path appears only once even though also in yaml
             assert_eq!(c.iter().filter(|p| p.as_str() == VERGE_SOCK_PATH).count(), 1);
         } else {
-            assert_eq!(c, vec!["/custom/from-yaml.sock".to_string()]);
+            // 非 Unix：没有内置的 service / legacy / TMPDIR 候选，只原样透传 yaml 路径。
+            // （Windows 上这些候选随后在 select_working_sock 中一律判为不可用。）
+            assert_eq!(c, yaml);
         }
     }
 

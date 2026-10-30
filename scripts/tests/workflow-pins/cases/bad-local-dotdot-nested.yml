@@ -1,0 +1,7 @@
+# 反例：本地路径中间含 ..
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/../../../evil

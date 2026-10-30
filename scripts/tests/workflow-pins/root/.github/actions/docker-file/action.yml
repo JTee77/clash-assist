@@ -1,0 +1,5 @@
+# 正例：docker action 用仓库内 Dockerfile
+name: docker-file
+runs:
+  using: docker
+  image: Dockerfile

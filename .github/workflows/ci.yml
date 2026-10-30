@@ -5,25 +5,70 @@ on:
     branches: [main]
   pull_request:
 
+# 默认只读（windows-plan r4 §2.8 / §3）；各 job 不再额外授权。
+permissions:
+  contents: read
+
 jobs:
-  test:
-    # 项目仅支持 macOS arm64；公开仓库的 macOS runner 免费额度不受限
-    runs-on: macos-14
-    timeout-minutes: 30
+  # 供应链与版本检查（S-8 ②④、S-9）：不跑仓库依赖，只用 runner 自带的 bash / node / python3（含 python3-yaml）。
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
-      # 与本地 pnpm 12 对齐（不加 packageManager 字段——pnpm 12 会把自身 vendored 进 lockfile）
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          version: 12
+          persist-credentials: false
+          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - name: action 固定到 commit SHA、禁用高危触发器
+        run: |
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+          bash scripts/check-workflow-pins.sh
+
+      - name: pins 检查自测（正例 + 绕过反例）
+        run: bash scripts/test-check-workflow-pins.sh
+
+      - name: 版本一致性（package.json / Cargo.toml / tauri.conf.json）
+        run: node scripts/check-version-sync.mjs
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15：受支持的 macOS arm64 镜像（macos-14 于 2026-11-02 退役）；windows-2022：Windows x64（x86_64-pc-windows-msvc）
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    # Windows 上 Rust 冷编译明显慢于 macOS
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # 按 rust-toolchain.toml 固定的版本安装（含 clippy），不依赖 runner 预装的 stable
+      - name: Rust 工具链（rust-toolchain.toml）
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"$/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel" --profile minimal --component clippy
+          rustc --version
+          cargo clippy --version
+
+      # pnpm 写精确版本（S-8 ③）；仍不加 packageManager 字段——pnpm 12 会把自身 vendored 进 lockfile
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 12.16.1
+
+      # PR 构建保留 pnpm 缓存：缓存按 ref 隔离，不会污染 release（S-8 ⑥）
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
-      - name: 前端测试（vitest 296 用例）
+      - name: 前端测试（vitest）
         run: pnpm install --frozen-lockfile && pnpm test
 
       - name: 类型检查
@@ -31,3 +76,7 @@ jobs:
 
       - name: 后端测试（cargo test 全量）
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警
+      - name: clippy（--all-targets -D warnings）
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

@@ -1,0 +1,7 @@
+# 固定 Rust 工具链（windows-plan r4 §2.8 / §3，S-8 ③）：不用浮动的 stable。
+# rustup 在仓库内任意目录执行 cargo 时都会读取本文件（含 --manifest-path src-tauri/Cargo.toml）。
+# clippy 为 CI 的 `cargo clippy -- -D warnings` 所需；目标平台均为各 runner 的宿主
+# （macos-14 = aarch64-apple-darwin，windows-2022 = x86_64-pc-windows-msvc），不额外列 targets。
+[toolchain]
+channel = "1.99.1"
+components = ["clippy"]

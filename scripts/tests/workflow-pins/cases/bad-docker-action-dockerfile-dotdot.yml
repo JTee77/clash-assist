@@ -1,0 +1,8 @@
+# 反例：docker action 的 Dockerfile 路径含 ..
+# expect: Dockerfile 路径不得为绝对路径
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/docker-file-dotdot

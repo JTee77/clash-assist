@@ -10,9 +10,13 @@ use crate::platform;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use super::transport::http_via_unix;
 use super::types::{DiscoverResult, DEFAULT_MIXED, DEFAULT_PORT};
 
+/// 原始 Verge `config.yaml`（含 secret）。Windows 上不编译：不把 secret 交给前端。
+#[cfg(not(windows))]
+#[allow(clippy::disallowed_methods, reason = "仅非 Windows 编译（cfg(not(windows))），不在 S-R1 的 Windows 风险面")]
 pub fn read_verge_config() -> Result<String, String> {
     let path = platform::verge_config_path();
     std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))
@@ -185,8 +189,11 @@ fn sock_from_verge_cmdline() -> Option<String> {
 }
 
 /// Probe sock with GET /version (short timeout). Returns true on HTTP 2xx.
+#[cfg(unix)]
 fn sock_answers_version(sock: &str, secret: &str) -> bool {
-    if !Path::new(sock).exists() {
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    let sock_exists = Path::new(sock).exists();
+    if !sock_exists {
         return false;
     }
     match http_via_unix("GET", "/version", None, secret, Some(sock), 800) {
@@ -198,16 +205,13 @@ fn sock_answers_version(sock: &str, secret: &str) -> bool {
         _ => {
             // Retry once with empty secret (Verge service sock often has no auth).
             if !secret.is_empty() {
-                match http_via_unix("GET", "/version", None, "", Some(sock), 800) {
+                matches!(
+                    http_via_unix("GET", "/version", None, "", Some(sock), 800),
                     Ok(res)
                         if (200..300).contains(&res.status)
                             || res.status == 401
-                            || res.status == 403 =>
-                    {
-                        true
-                    }
-                    _ => false,
-                }
+                            || res.status == 403
+                )
             } else {
                 false
             }
@@ -216,6 +220,7 @@ fn sock_answers_version(sock: &str, secret: &str) -> bool {
 }
 
 /// Pick first trusted-owner candidate that exists and answers /version; else first existing trusted one; else None.
+#[cfg(unix)]
 pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String> {
     let mut first_existing: Option<String> = None;
     for cand in candidates {
@@ -224,7 +229,9 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
             continue;
         }
         let s = p.to_string_lossy().into_owned();
-        if !Path::new(&s).exists() {
+        #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+        let sock_exists = Path::new(&s).exists();
+        if !sock_exists {
             continue;
         }
         // 0.2.9：其他普通用户拥有的套接字不作候选（连回落候选也不当）。
@@ -241,7 +248,17 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
     first_existing
 }
 
+/// 非 Unix 平台（Windows）：没有 Unix 套接字，也没有路径信任校验
+/// （`platform::ensure_sock_path_trusted` 只在 Unix 编译）。所有候选一律判为不可用，
+/// 不做任何探测、不发送 secret——绝不在缺少信任校验时静默放行。
+/// Windows 的本机 IPC 由 M1 的命名管道路径（`pipe::open_verified`）接管。
+#[cfg(not(unix))]
+pub fn select_working_sock(_candidates: &[String], _secret: &str) -> Option<String> {
+    None
+}
+
 fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
     let content = std::fs::read_to_string(path).ok()?;
     Some(parse_controller_yaml_rich(&content))
 }
@@ -249,6 +266,31 @@ fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
 /// Discover Verge controller: merge stale `config.yaml` + fresher `clash-verge.yaml`,
 /// then resolve a working unix sock across service / legacy / TMPDIR / yaml / cmdline.
 pub fn discover_controller() -> DiscoverResult {
+    withhold_secret_on_windows(discover_controller_inner())
+}
+
+/// Windows：发现结果里**不携带 secret**（方案 §2.1 规则 4，M-3 / C-1 / C-4）。
+///
+/// Windows 上还没有 `verify_tcp_listener`，任何 TCP 监听者都只能算
+/// `listener-unverified`（服务模式恒为 unverified，C-4），而 unverified 一律不发送 secret。
+/// 所以 secret 在离开发现阶段之前就被清空：不交给前端（`discover_mihomo*` 命令），
+/// 也不会被前端回传进 `mihomo_http` / `list_nodes`。TCP 出口本身另有 fail-closed 门控
+/// （`transport::http_via_tcp_async`）。
+///
+/// TODO(M1) verify_tcp_listener: 只有 listener-verified 时才保留 secret。
+#[cfg(windows)]
+fn withhold_secret_on_windows(mut d: DiscoverResult) -> DiscoverResult {
+    d.secret = String::new();
+    d
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn withhold_secret_on_windows(d: DiscoverResult) -> DiscoverResult {
+    d
+}
+
+fn discover_controller_inner() -> DiscoverResult {
     let config_path = platform::verge_config_path();
     let clash_verge_path = platform::verge_clash_verge_yaml_path();
 
@@ -327,24 +369,35 @@ pub fn read_controller_yaml(
     sock_candidates: &[String],
     source_prefix: &str,
 ) -> DiscoverResult {
-    let mut sock_path: Option<String> = None;
-    for cand in sock_candidates {
+    // Unix 套接字候选：只在 Unix 上做存在性检查。非 Unix（Windows）上一律为 None，
+    // 绝不对候选调用 `Path::exists`——候选若是管道名，`exists` 会以默认 QoS 打开管道（M-2）。
+    // Windows 的管道候选由 M1 的 `pipe::open_verified` 处理。
+    #[cfg(unix)]
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    let sock_path: Option<String> = sock_candidates.iter().find_map(|cand| {
         let p = expand_path_str(cand);
-        if p.as_os_str().is_empty() {
-            continue;
+        if !p.as_os_str().is_empty() && p.exists() {
+            Some(p.to_string_lossy().into_owned())
+        } else {
+            None
         }
-        if p.exists() {
-            sock_path = Some(p.to_string_lossy().into_owned());
-            break;
-        }
-    }
+    });
+    #[cfg(not(unix))]
+    let sock_path: Option<String> = {
+        let _ = sock_candidates;
+        None
+    };
 
     for raw in paths {
         let path = expand_path_str(raw);
-        if !path.exists() {
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+        let exists = path.exists();
+        if !exists {
             continue;
         }
-        if let Ok(content) = std::fs::read_to_string(&path) {
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+        let read = std::fs::read_to_string(&path);
+        if let Ok(content) = read {
             let (port, secret, mixed) =
                 parse_controller_yaml(&content, default_port, default_mixed);
             return DiscoverResult {
@@ -361,7 +414,9 @@ pub fn read_controller_yaml(
     // Also try scanning directories for any *.yaml / *.yml (FlClash / Nyanpasu)
     for raw in paths {
         let path = expand_path_str(raw);
-        if path.is_dir() {
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+        let is_dir = path.is_dir();
+        if is_dir {
             if let Ok(entries) = std::fs::read_dir(&path) {
                 let mut yamls: Vec<PathBuf> = entries
                     .filter_map(|e| e.ok().map(|e| e.path()))
@@ -374,7 +429,9 @@ pub fn read_controller_yaml(
                     .collect();
                 yamls.sort();
                 for y in yamls {
-                    if let Ok(content) = std::fs::read_to_string(&y) {
+                    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+                    let read = std::fs::read_to_string(&y);
+                    if let Ok(content) = read {
                         let (port, secret, mixed) =
                             parse_controller_yaml(&content, default_port, default_mixed);
                         return DiscoverResult {
@@ -493,9 +550,12 @@ pub fn parse_flclash_json_str(raw_json: &str) -> Option<ParsedControllerYaml> {
 /// Read a FlClash preference file (`.plist` via `plutil -convert json -o -` on macOS,
 /// or direct `.json`) and extract `ParsedControllerYaml`.
 fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
-    if !path.exists() || !path.is_file() {
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+    let is_existing_file = path.exists() && path.is_file();
+    if !is_existing_file {
         return None;
     }
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] // 只有 macOS 分支读 plist
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -517,6 +577,7 @@ fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
     let content = std::fs::read_to_string(path).ok()?;
     parse_flclash_json_str(&content)
 }
@@ -542,14 +603,21 @@ pub fn discover_flclash_with_paths(
 
     for raw in yaml_paths {
         let path = expand_path_str(raw);
-        if path.is_file() {
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+        let is_file = path.is_file();
+        // 与原来的 `if is_file { … } else if path.is_dir() { … }` 等价：只有不是文件时才查 is_dir
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+        let is_dir = !is_file && path.is_dir();
+        if is_file {
             if let Some(p) = read_and_parse(&path) {
                 sources.push(path.display().to_string());
                 merge_parsed(&mut parsed, p);
             }
-        } else if path.is_dir() {
+        } else if is_dir {
             let cfg_yaml = path.join("config.yaml");
-            if cfg_yaml.is_file() {
+            #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
+            let cfg_is_file = cfg_yaml.is_file();
+            if cfg_is_file {
                 let disp = cfg_yaml.display().to_string();
                 if !sources.contains(&disp) {
                     if let Some(p) = read_and_parse(&cfg_yaml) {
@@ -584,6 +652,10 @@ pub fn discover_flclash_with_paths(
 }
 
 pub fn discover_for_client(client_id: &str) -> DiscoverResult {
+    withhold_secret_on_windows(discover_for_client_inner(client_id))
+}
+
+fn discover_for_client_inner(client_id: &str) -> DiscoverResult {
     if client_id == "verge" {
         return discover_controller();
     }
@@ -708,12 +780,13 @@ mixed-port: 7897
         let missing = format!("/tmp/clash-assist-no-sock-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&missing);
         // No live Verge required: all missing → None
-        let r = select_working_sock(&[missing.clone()], "");
+        let r = select_working_sock(std::slice::from_ref(&missing), "");
         assert!(r.is_none());
     }
 
     #[test]
     fn verge_candidates_include_service_and_legacy() {
+        #[cfg_attr(not(unix), allow(unused_variables))]
         let c = platform::verge_sock_candidates(&[], &[]);
         #[cfg(unix)]
         {
@@ -813,7 +886,9 @@ mixed-port: 7897
     #[test]
     fn live_verge_discover_resolves_service_sock_when_present() {
         let expected = platform::verge_service_sock_for_uid(platform::current_uid());
-        if !std::path::Path::new(&expected).exists() {
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
+        let present = std::path::Path::new(&expected).exists();
+        if !present {
             eprintln!("skip live: service sock absent ({expected})");
             return;
         }
@@ -867,6 +942,7 @@ mixed-port: 7897
         let yaml_file = tmp.join("config.yaml");
 
         // Case A: EC disabled in prefs
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
         std::fs::write(
             &pref_file,
             r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7895,\"external-controller\":\"\",\"secret\":\"\"}}"}"#,
@@ -890,7 +966,8 @@ mixed-port: 7897
         #[cfg(target_os = "macos")]
         {
             let plist_file = tmp.join("com.follow.clash.plist");
-            std::fs::write(&plist_file, &std::fs::read(&pref_file).unwrap()).expect("copy json");
+            #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix）测试，不在 S-R1 的 Windows 风险面")]
+            std::fs::write(&plist_file, std::fs::read(&pref_file).unwrap()).expect("copy json");
             let status = std::process::Command::new("/usr/bin/plutil")
                 .args(["-convert", "binary1"])
                 .arg(&plist_file)
@@ -908,6 +985,7 @@ mixed-port: 7897
         }
 
         // Case B: EC enabled in prefs with 32-char secret
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
         std::fs::write(
             &pref_file,
             r#"{"flutter.config": "{\"patchClashConfig\":{\"mixed-port\":7896,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"my-flclash-secret\"}}"}"#,
@@ -928,5 +1006,52 @@ mixed-port: 7897
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// P-1：Windows 上发现结果不得携带 secret（§2.1 规则 4 / C-1 / C-4）。
+#[cfg(all(test, windows))]
+mod windows_secret_tests {
+    use super::*;
+
+    #[test]
+    fn withhold_secret_clears_secret_and_keeps_rest() {
+        let d = DiscoverResult {
+            host: "127.0.0.1".into(),
+            port: 9097,
+            secret: "s3cret".into(),
+            mixed_port: 7897,
+            source: "verge-config:x".into(),
+            sock_path: None,
+        };
+        let out = withhold_secret_on_windows(d);
+        assert!(out.secret.is_empty());
+        assert_eq!((out.port, out.mixed_port, out.source.as_str()), (9097, 7897, "verge-config:x"));
+    }
+
+    #[test]
+    fn discover_entrypoints_never_return_secret_on_windows() {
+        for id in ["verge", "flclash", "clashx_meta", "mihomo_party", "nope"] {
+            assert!(discover_for_client(id).secret.is_empty(), "{id}");
+        }
+        assert!(discover_controller().secret.is_empty());
+    }
+
+    #[test]
+    fn read_controller_yaml_never_probes_sock_candidates_on_windows() {
+        let dir = std::env::temp_dir().join(format!("ca-win-sock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("exists.sock");
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
+        std::fs::write(&existing, b"").unwrap();
+        let r = read_controller_yaml(
+            &[],
+            9090,
+            7890,
+            &[existing.to_string_lossy().into_owned()],
+            "t",
+        );
+        assert_eq!(r.sock_path, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
