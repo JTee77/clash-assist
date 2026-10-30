@@ -73,14 +73,23 @@ fn create_server(name: &str, sddl: &str, max_instances: usize) -> NamedPipeServe
         lpSecurityDescriptor: sd.as_ptr(),
         bInheritHandle: 0,
     };
-    // SAFETY: sa / sd 在调用期间有效。
-    unsafe {
-        ServerOptions::new()
-            .first_pipe_instance(true)
-            .max_instances(max_instances)
-            .create_with_security_attributes_raw(name, &mut sa as *mut _ as *mut c_void)
-    }
-    .expect("create pipe")
+    let sa_ptr = &mut sa as *mut SECURITY_ATTRIBUTES as usize;
+    // tokio 要在运行时内注册句柄。
+    in_rt(|| {
+        // SAFETY: sa / sd 在调用期间有效（block_on 同步返回）。
+        unsafe {
+            ServerOptions::new()
+                .first_pipe_instance(true)
+                .max_instances(max_instances)
+                .create_with_security_attributes_raw(name, sa_ptr as *mut c_void)
+        }
+        .expect("create pipe")
+    })
+}
+
+/// 在 tauri 的 tokio 运行时上下文里同步执行（创建 / 打开管道需要 reactor）。
+fn in_rt<T>(f: impl FnOnce() -> T) -> T {
+    tauri::async_runtime::block_on(async move { f() })
 }
 
 #[derive(Debug, Default)]
@@ -292,10 +301,12 @@ fn low_integrity_label_is_rejected_with_zero_bytes() {
 fn s_d_prime_second_instance_on_mihomo_default_pipe_gets_zero_bytes() {
     let name = unique_name();
     let first = create_server(&name, "D:P(A;OICI;0x12019f;;;BU)(A;OICI;0x12019f;;;SY)", 4);
-    let second = ServerOptions::new()
-        .max_instances(4)
-        .create(&name)
-        .expect("second instance");
+    let second = in_rt(|| {
+        ServerOptions::new()
+            .max_instances(4)
+            .create(&name)
+            .expect("second instance")
+    });
     let a = spawn_server(first, true);
     let b = spawn_server(second, true);
     for _ in 0..2 {
@@ -353,9 +364,11 @@ fn busy_pipe_retries_until_deadline_then_busy() {
     let name = unique_name();
     let server = create_server(&name, &verge_sddl(), 1);
     // 占住唯一的实例。
-    let holder = tokio::net::windows::named_pipe::ClientOptions::new()
-        .open(&name)
-        .expect("first client");
+    let holder = in_rt(|| {
+        tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&name)
+            .expect("first client")
+    });
     let pn = PipeName::for_test(name.clone());
     let started = Instant::now();
     let r = tauri::async_runtime::block_on(open_verified(
