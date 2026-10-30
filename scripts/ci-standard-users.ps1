@@ -11,10 +11,13 @@
   本脚本只做“创建用户、以某身份运行、记录、清理”，不做任何放行 / 拒绝判断。
 
   动作（-Action）：
-    Create   用 `net user <名> <随机口令> /add` 创建用户，确认只在 Users 组、不在 Administrators 组；
+    Create   用 New-LocalUser 创建用户（口令在内存中随机生成为 SecureString，不出现在任何命令行，
+             也不以明文落盘），确认只在 Users 组、不在 Administrators 组；
              取得 SID 与 Verge 属主键 ownerKey = hex(sha256(SID 字符串的 UTF-8 字节))（与 2.1
-             verge_owner_key 一致）。口令只写入仅 SYSTEM/Administrators 可读的状态目录，
-             并在 GitHub Actions 中 ::add-mask::。
+             verge_owner_key 一致）。users.json 只记 Name、Sid、OwnerKey（无机密）。
+             后续 Start 需要凭据，因此把 PSCredential 用 Export-Clixml 写到状态目录的
+             secrets\<名>.cred.xml：口令部分由 DPAPI 按当前用户（runner 管理员账户）加密，
+             其他账户无法解密；目录 ACL 只允许 SYSTEM / Administrators。
              在 GitHub Actions 中写 $GITHUB_OUTPUT：<名>_sid、<名>_key。
     Show     打印已创建用户（不含口令）。
     Start    以 -As 指定的身份（已创建的用户名，或 SYSTEM）后台启动 -FilePath，立即返回作业对象
@@ -79,9 +82,11 @@
 
 .EXAMPLE
   # 在 workflow 的 `shell: pwsh` 步骤中用 & 调用（-Environment 需要哈希表，不能用 pwsh -File 传）：
+  # 取 SID / ownerKey 用步骤输出（steps.<id>.outputs.ca_a_sid / ca_a_key）或 -Action Show，
+  # 不要直接读取或打印状态目录里的文件。
   & ./scripts/ci-standard-users.ps1 -Action Create
-  $u = Get-Content -Raw "$env:RUNNER_TEMP/ca-standard-users/users.json" | ConvertFrom-Json
-  $a = $u | Where-Object Name -eq 'ca_a'
+  & ./scripts/ci-standard-users.ps1 -Action Show
+  $a = [pscustomobject]@{ Sid = $env:CA_A_SID; OwnerKey = $env:CA_A_KEY }   # 由上一步输出传入
 
 .EXAMPLE
   # S-A：ca_a 运行 mihomo（Verge sidecar 管道名与 SDDL），ca_a 运行探针
@@ -105,6 +110,8 @@
 
 .NOTES
   需要管理员权限（runner 默认满足）。兼容 PowerShell 7 与 Windows PowerShell 5.1。
+  禁止把状态目录（-StateDir，默认 $RUNNER_TEMP\ca-standard-users）作为 artifact 上传：
+  其中 secrets\ 下是 DPAPI 保护的凭据文件；artifact 只上传探针输出的 JSON。
   “待验证”：Credential 方式在 runner 会话中是否可用、SeBatchLogonRight 授予后计划任务能否以
   标准用户运行，均在 V5 spike 当天实测，结论记入 M1 PR。
 #>
@@ -154,6 +161,7 @@ if (-not $StateDir) {
   $StateDir = Join-Path $base 'ca-standard-users'
 }
 $UsersFile = Join-Path $StateDir 'users.json'
+$SecretsDir = Join-Path $StateDir 'secrets'
 $JobsDir = Join-Path $StateDir 'jobs'
 $GrantsFile = Join-Path $StateDir 'grants.json'
 
@@ -183,8 +191,9 @@ function Get-OwnerKey([string]$Sid) {
 }
 
 function New-RandomPassword {
+  # 返回 SecureString，口令不以 .NET 字符串形式存在。
   # 24 位：保证大写、小写、数字、符号各至少一个（满足 Windows Server 默认复杂度策略）；
-  # 符号集避开 net.exe 命令行中会被特殊解释的字符（引号、空格、/、^、&、|、<、>、%）。
+  # 符号集避开引号、空格、/、^、&、|、<、>、%，便于排障时手工输入。
   $upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
   $lower = 'abcdefghijkmnopqrstuvwxyz'
   $digit = '23456789'
@@ -208,7 +217,11 @@ function New-RandomPassword {
       $j = [int]([BitConverter]::ToUInt32($b, 0) % [uint32]($i + 1))
       $tmp = $chars[$i]; $chars[$i] = $chars[$j]; $chars[$j] = $tmp
     }
-    return (-join $chars)
+    $sec = New-Object Security.SecureString
+    foreach ($c in $chars) { $sec.AppendChar($c) }
+    $chars.Clear()
+    $sec.MakeReadOnly()
+    return $sec
   } finally {
     $rng.Dispose()
   }
@@ -278,6 +291,15 @@ function Write-JsonFile([string]$Path, $Value) {
 }
 
 function Get-Users { return Read-JsonFile $UsersFile }
+
+function Get-CredentialPath([string]$Name) { return (Join-Path $SecretsDir "$Name.cred.xml") }
+
+function Get-UserCredential([string]$Name) {
+  # Export-Clixml 写入的 PSCredential：口令由 DPAPI 按当前用户加密，只能由同一账户在本机解密。
+  $path = Get-CredentialPath $Name
+  if (-not (Test-Path -LiteralPath $path)) { throw "缺少 $Name 的凭据文件 $path，请先 -Action Create" }
+  return (Import-Clixml -LiteralPath $path)
+}
 
 function Get-UserRecord([string]$Name) {
   $rec = Get-Users | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
@@ -422,17 +444,21 @@ function Invoke-Create {
       throw "本机已存在用户 $name（不是本脚本创建的），拒绝复用；请先确认后手动删除"
     }
     $password = New-RandomPassword
-    if ($env:GITHUB_ACTIONS -eq 'true') { Write-Host "::add-mask::$password" }
-    # 计划内的命令形式（§4.1 第 3 步）；新用户默认只属于 Users 组。
-    Invoke-Native 'net.exe' @('user', $name, $password, '/add') "net user $name /add"
+    # §4.1 第 3 步原文为 `net user <名> <口令> /add`；改用 New-LocalUser，口令不进入进程命令行
+    # （PR #46 评审 SR-8）。新用户默认只属于 Users 组。
+    New-LocalUser -Name $name -Password $password -AccountNeverExpires -PasswordNeverExpires `
+      -UserMayNotChangePassword -Description 'clash-assist CI spike temporary user' | Out-Null
     $sid = Get-LocalSid $name
+    # 先记录用户（Cleanup 依据 users.json 删除），再写凭据
     $records.Add([pscustomobject]@{
         Name     = $name
         Sid      = $sid
         OwnerKey = Get-OwnerKey $sid
-        Password = $password
       })
     Write-JsonFile $UsersFile $records.ToArray()
+    if (-not (Test-Path -LiteralPath $SecretsDir)) { New-Item -ItemType Directory -Path $SecretsDir | Out-Null }
+    $cred = New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$name", $password)
+    $cred | Export-Clixml -LiteralPath (Get-CredentialPath $name)
 
     $admins = Get-GroupMemberSids $SidAdmins
     $users = Get-GroupMemberSids $SidUsers
@@ -518,8 +544,7 @@ function Start-ViaCredential($Rec, [string]$JobDir) {
     if ($svc.StartType -eq 'Disabled') { Set-Service -Name seclogon -StartupType Manual }
     Start-Service -Name seclogon
   }
-  $sec = ConvertTo-SecureString $Rec.Password -AsPlainText -Force
-  $cred = New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$($Rec.Name)", $sec)
+  $cred = Get-UserCredential $Rec.Name
   $cmd = Get-WrapperCommandLine $JobDir
   $p = Start-Process -FilePath $cmd.Exe -ArgumentList $cmd.Args -Credential $cred -LoadUserProfile `
     -WorkingDirectory $JobDir -WindowStyle Hidden -PassThru
@@ -537,8 +562,11 @@ function Start-ViaScheduledTask([string]$Identity, $Rec, [string]$JobDir, [strin
     Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $principal -Settings $settings -Force | Out-Null
   } else {
     Grant-BatchLogon $Rec.Sid
+    $cred = Get-UserCredential $Rec.Name
+    # Register-ScheduledTask 只接受字符串口令：仅在本次调用的内存中解出，经 CIM 传给任务计划程序，
+    # 不出现在命令行、日志或磁盘上。
     Register-ScheduledTask -TaskName $taskName -Action $taskAction -Settings $settings -RunLevel Limited `
-      -User "$env:COMPUTERNAME\$($Rec.Name)" -Password $Rec.Password -Force | Out-Null
+      -User $cred.UserName -Password $cred.GetNetworkCredential().Password -Force | Out-Null
   }
   Start-ScheduledTask -TaskName $taskName | Out-Null
   return $taskName
