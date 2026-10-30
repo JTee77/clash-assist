@@ -5,8 +5,6 @@
 //! candidates (service sock on 2.5.6+, legacy `/tmp/verge/...`, `$TMPDIR`, yaml
 //! `external-controller-unix`, optional `-ext-ctl-unix` cmdline). Other clients
 //! read the per-OS table in `crate::platform` and never receive Verge's socket.
-// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
-#![allow(clippy::disallowed_methods)]
 
 use crate::platform;
 use regex::Regex;
@@ -18,6 +16,7 @@ use super::types::{DiscoverResult, DEFAULT_MIXED, DEFAULT_PORT};
 
 /// 原始 Verge `config.yaml`（含 secret）。Windows 上不编译：不把 secret 交给前端。
 #[cfg(not(windows))]
+#[allow(clippy::disallowed_methods, reason = "仅非 Windows 编译（cfg(not(windows))），不在 S-R1 的 Windows 风险面")]
 pub fn read_verge_config() -> Result<String, String> {
     let path = platform::verge_config_path();
     std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", path.display(), e))
@@ -192,6 +191,7 @@ fn sock_from_verge_cmdline() -> Option<String> {
 /// Probe sock with GET /version (short timeout). Returns true on HTTP 2xx.
 #[cfg(unix)]
 fn sock_answers_version(sock: &str, secret: &str) -> bool {
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
     if !Path::new(sock).exists() {
         return false;
     }
@@ -228,6 +228,7 @@ pub fn select_working_sock(candidates: &[String], secret: &str) -> Option<String
             continue;
         }
         let s = p.to_string_lossy().into_owned();
+        #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
         if !Path::new(&s).exists() {
             continue;
         }
@@ -255,6 +256,7 @@ pub fn select_working_sock(_candidates: &[String], _secret: &str) -> Option<Stri
 }
 
 fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
     let content = std::fs::read_to_string(path).ok()?;
     Some(parse_controller_yaml_rich(&content))
 }
@@ -369,6 +371,7 @@ pub fn read_controller_yaml(
     // 绝不对候选调用 `Path::exists`——候选若是管道名，`exists` 会以默认 QoS 打开管道（M-2）。
     // Windows 的管道候选由 M1 的 `pipe::open_verified` 处理。
     #[cfg(unix)]
+    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
     let sock_path: Option<String> = sock_candidates.iter().find_map(|cand| {
         let p = expand_path_str(cand);
         if !p.as_os_str().is_empty() && p.exists() {
@@ -385,9 +388,11 @@ pub fn read_controller_yaml(
 
     for raw in paths {
         let path = expand_path_str(raw);
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
         if !path.exists() {
             continue;
         }
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
         if let Ok(content) = std::fs::read_to_string(&path) {
             let (port, secret, mixed) =
                 parse_controller_yaml(&content, default_port, default_mixed);
@@ -405,6 +410,7 @@ pub fn read_controller_yaml(
     // Also try scanning directories for any *.yaml / *.yml (FlClash / Nyanpasu)
     for raw in paths {
         let path = expand_path_str(raw);
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
         if path.is_dir() {
             if let Ok(entries) = std::fs::read_dir(&path) {
                 let mut yamls: Vec<PathBuf> = entries
@@ -537,6 +543,7 @@ pub fn parse_flclash_json_str(raw_json: &str) -> Option<ParsedControllerYaml> {
 /// Read a FlClash preference file (`.plist` via `plutil -convert json -o -` on macOS,
 /// or direct `.json`) and extract `ParsedControllerYaml`.
 fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
     if !path.exists() || !path.is_file() {
         return None;
     }
@@ -562,6 +569,7 @@ fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
     let content = std::fs::read_to_string(path).ok()?;
     parse_flclash_json_str(&content)
 }
@@ -587,6 +595,7 @@ pub fn discover_flclash_with_paths(
 
     for raw in yaml_paths {
         let path = expand_path_str(raw);
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 仅读配置文件路径，非管道候选（S-R1）")]
         if path.is_file() {
             if let Some(p) = read_and_parse(&path) {
                 sources.push(path.display().to_string());
@@ -863,6 +872,7 @@ mixed-port: 7897
     #[test]
     fn live_verge_discover_resolves_service_sock_when_present() {
         let expected = platform::verge_service_sock_for_uid(platform::current_uid());
+        #[allow(clippy::disallowed_methods, reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）")]
         if !std::path::Path::new(&expected).exists() {
             eprintln!("skip live: service sock absent ({expected})");
             return;
