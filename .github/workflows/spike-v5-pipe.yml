@@ -22,6 +22,8 @@ jobs:
     env:
       # spike/pipe-probe/README.md“构建”：独立 crate（自带空 [workspace]），产物在 crate 自己的 target 下
       PROBE_EXE: ${{ github.workspace }}\spike\pipe-probe\target\release\pipe-probe.exe
+      # 临时：只跑 S-F2 + S-D-prime（Ellie F2/F3 复测）。恢复全量：删除 SPIKE_CASES 这一行
+      SPIKE_CASES: S-F2,S-D-prime
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -42,9 +44,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-FileHash -Algorithm SHA256 -LiteralPath $env:PROBE_EXE | Format-List
 
-      - name: 运行 S-A ~ S-F（mihomo v1.19.33 + 标准用户 ca_a / ca_b）
+      - name: 运行用例（SPIKE_CASES，默认 S-A ~ S-F2；mihomo v1.19.33 + 标准用户 ca_a / ca_b）
         run: |
-          & ./scripts/spike-v5-pipe.ps1 -ResultsDir (Join-Path $env:RUNNER_TEMP 'v5-pipe-results') -ProbePath $env:PROBE_EXE
+          $only = @{}
+          if ($env:SPIKE_CASES) { $only.Cases = @($env:SPIKE_CASES -split ',' | ForEach-Object { $_.Trim() }) }
+          & ./scripts/spike-v5-pipe.ps1 -ResultsDir (Join-Path $env:RUNNER_TEMP 'v5-pipe-results') -ProbePath $env:PROBE_EXE @only
           exit $LASTEXITCODE
 
       # 兜底清理（编排脚本的 finally 已做过一次；可重复执行）：结束进程、删除计划任务、删除 ca_a / ca_b 及其配置文件
