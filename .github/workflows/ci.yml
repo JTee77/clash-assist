@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  # 供应链与版本检查（S-8 ②④、S-9）：不跑仓库依赖，只用 runner 自带的 bash / node。
+  # 供应链与版本检查（S-8 ②④、S-9）：不跑仓库依赖，只用 runner 自带的 bash / node / python3（含 python3-yaml）。
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -21,7 +21,12 @@ jobs:
           fetch-depth: 0
 
       - name: action 固定到 commit SHA、禁用高危触发器
-        run: bash scripts/check-workflow-pins.sh
+        run: |
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+          bash scripts/check-workflow-pins.sh
+
+      - name: pins 检查自测（正例 + 绕过反例）
+        run: bash scripts/test-check-workflow-pins.sh
 
       - name: 版本一致性（package.json / Cargo.toml / tauri.conf.json）
         run: node scripts/check-version-sync.mjs

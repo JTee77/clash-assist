@@ -1,0 +1,7 @@
+# 反例：本地路径含 ..（评审 SR-4）
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./../evil

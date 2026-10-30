@@ -1,0 +1,7 @@
+# 反例：docker 未用 digest
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker://alpine:3.20
