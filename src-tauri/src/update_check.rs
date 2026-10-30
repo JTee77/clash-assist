@@ -319,7 +319,27 @@ async fn get_bytes_with_proxy_fallback(
     connect_ms: u64,
     accept_header: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    if let Some(port) = active_local_proxy_port() {
+    get_bytes_via(
+        url,
+        current,
+        timeout_ms,
+        connect_ms,
+        accept_header,
+        active_local_proxy_port(),
+    )
+    .await
+}
+
+/// 同上，代理端口显式注入（单测传 None，避免本机开着代理时结果受环境影响）。
+async fn get_bytes_via(
+    url: &str,
+    current: &str,
+    timeout_ms: u64,
+    connect_ms: u64,
+    accept_header: Option<&str>,
+    proxy_port: Option<u16>,
+) -> Result<Vec<u8>, String> {
+    if let Some(port) = proxy_port {
         if let Ok(client) = build_http_client(current, Some(timeout_ms), connect_ms, Some(port)) {
             let mut req = client.get(url);
             if let Some(acc) = accept_header {
@@ -1359,8 +1379,8 @@ mod tests {
         );
         let (port, h) = serve_raw_once(head.into_bytes());
         let url = format!("http://127.0.0.1:{port}/latest");
-        let r = tauri::async_runtime::block_on(get_bytes_with_proxy_fallback(
-            &url, "test", 3000, 1000, None,
+        let r = tauri::async_runtime::block_on(get_bytes_via(
+            &url, "test", 3000, 1000, None, None,
         ));
         let _ = h.join();
         let err = r.expect_err("oversized release JSON must be rejected");
@@ -1370,8 +1390,8 @@ mod tests {
         let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
         let (port, h) = serve_raw_once(ok);
         let url = format!("http://127.0.0.1:{port}/latest");
-        let r = tauri::async_runtime::block_on(get_bytes_with_proxy_fallback(
-            &url, "test", 3000, 1000, None,
+        let r = tauri::async_runtime::block_on(get_bytes_via(
+            &url, "test", 3000, 1000, None, None,
         ));
         let _ = h.join();
         assert_eq!(r.unwrap(), b"{}");
