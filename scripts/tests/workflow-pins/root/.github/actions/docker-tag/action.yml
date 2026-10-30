@@ -1,0 +1,5 @@
+# 反例目标（r2 n7）：docker action 用 tag
+name: docker-tag
+runs:
+  using: docker
+  image: docker://alpine:3

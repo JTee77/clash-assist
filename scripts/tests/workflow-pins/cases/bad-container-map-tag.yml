@@ -1,0 +1,10 @@
+# 反例：job container.image 用 tag（映射形式）
+# expect: jobs.a.container.image: 容器镜像必须按 @sha256
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    container:
+      image: node:22
+    steps:
+      - run: "true"

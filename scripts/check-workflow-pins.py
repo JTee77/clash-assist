@@ -15,10 +15,18 @@
      本地引用会被递归检查：action 目录下的 action.yml / action.yaml、或被调用的
      reusable workflow 文件，按同样规则再检查一遍（即使引用本身已违规，只要目标
      仍在仓库内也会继续检查，以便一次报全）。找不到 action.yml / action.yaml 视为违规。
-  2. workflow（位于 workflows/ 目录下或含 `jobs` 键的文档）的触发器中
+     所有规则都按「整个值」匹配（re.fullmatch），值末尾的换行 / 空白不能混过（r2 SR2-3 n16）；
+     远程引用的 owner/repo/path 各段不得为空、`.` 或 `..`（r2 SR2-3 n17）。
+  2. 容器镜像必须按 digest 固定（r2 SR2-2）：
+       - workflow 的 jobs.*.container（字符串或 .image）、jobs.*.services.*.image：
+         [docker://]image@sha256:<64 位十六进制>
+       - docker action（action.yml 中 runs.using: docker）的 runs.image：
+         docker://image@sha256:<64 位十六进制>，或指向仓库内 Dockerfile 的相对路径
+         （不得含 `..` 段、不得为绝对路径，解析后必须仍在仓库内）
+  3. workflow（位于 workflows/ 目录下或含 `jobs` 键的文档）的触发器中
      禁止 pull_request_target 与 workflow_run。PyYAML 按 YAML 1.1 会把键 `on`
      解析成布尔 True，两种形式都检查。
-  3. 同一映射中出现重复键视为违规（防止用重复键遮蔽检查结果）。
+  4. 同一映射中出现重复键视为违规（防止用重复键遮蔽检查结果）。
 
 用法：python3 scripts/check-workflow-pins.py [--repo-root DIR] [路径 ...]
       路径可以是目录（递归查找 *.yml / *.yaml）或文件，默认 .github。
@@ -36,8 +44,10 @@ except ImportError:  # pragma: no cover - 环境问题直接失败，不静默�
     print("check-workflow-pins: 需要 PyYAML（Debian/Ubuntu 包 python3-yaml）", file=sys.stderr)
     sys.exit(2)
 
-SHA_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[^@\s]+)?@[0-9a-f]{40}$")
-DOCKER_RE = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+# 只与 re.fullmatch 搭配使用（不用 ^/$：Python 的 $ 会匹配末尾的 \n）
+SHA_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[^@\s]+)?@[0-9a-f]{40}")
+DOCKER_RE = re.compile(r"docker://[^@\s]+@sha256:[0-9a-f]{64}")
+IMAGE_RE = re.compile(r"(docker://)?[^@\s]+@sha256:[0-9a-f]{64}")
 LOCAL_PREFIX = "./.github/"
 BANNED_TRIGGERS = ("pull_request_target", "workflow_run")
 
@@ -65,6 +75,36 @@ def _construct_mapping(loader, node, deep=False):
     return yaml.SafeLoader.construct_mapping(loader, node, deep)
 
 
+def _scan_to_next_token(self):
+    """与 PyYAML 的 Scanner.scan_to_next_token 相同，但允许注释或行尾之前出现 Tab。
+
+    YAML 1.2 允许用 Tab 分隔值与行内注释（`uses: x@sha<Tab># v4`），PyYAML 会直接报
+    「found character '\\t' that cannot start any token」（r2 c22 误报）。这里只放行
+    「一串空格 / Tab 之后紧跟 # 或换行」的情况；Tab 出现在其它位置（如缩进）仍按原样报错。
+    """
+    if self.index == 0 and self.peek() == "\uFEFF":
+        self.forward()
+    found = False
+    while not found:
+        while self.peek() == " ":
+            self.forward()
+        if self.peek() == "\t":
+            n = 0
+            while self.peek(n) in " \t":
+                n += 1
+            if self.peek(n) in "#\0\r\n\x85\u2028\u2029":
+                self.forward(n)
+        if self.peek() == "#":
+            while self.peek() not in "\0\r\n\x85\u2028\u2029":
+                self.forward()
+        if self.scan_line_break():
+            if not self.flow_level:
+                self.allow_simple_key = True
+        else:
+            found = True
+
+
+StrictLoader.scan_to_next_token = _scan_to_next_token
 StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping)
 
 
@@ -92,6 +132,8 @@ def check_local(ref, repo_root):
     """返回 (错误列表, 需要递归检查的文件 realpath 或 None)。"""
     errs = []
     rel = ref[2:]
+    if re.search(r"\s", ref):
+        return ["本地路径不得含空白字符（含末尾换行）"], None
     segments = rel.replace("\\", "/").split("/")
     if not rel or ".." in segments:
         return ["本地路径不得为空或包含 `..` 段"], None
@@ -126,8 +168,65 @@ def check_uses(value, repo_root):
     if value.startswith("./"):
         return check_local(value, repo_root)
     if value.startswith("docker://"):
-        return ([] if DOCKER_RE.match(value) else ["docker:// 必须按 @sha256:<64 位十六进制> 固定"]), None
-    return ([] if SHA_RE.match(value) else ["未按 40 位 commit SHA 固定"]), None
+        return ([] if DOCKER_RE.fullmatch(value) else ["docker:// 必须按 @sha256:<64 位十六进制> 固定"]), None
+    if not SHA_RE.fullmatch(value):
+        return ["未按 40 位 commit SHA 固定"], None
+    if any(seg in ("", ".", "..") for seg in value.split("@", 1)[0].split("/")):
+        return ["远程引用的路径段不得为空、`.` 或 `..`"], None
+    return [], None
+
+
+def check_image(value):
+    if not isinstance(value, str):
+        return f"镜像必须是字符串，实际为 {type(value).__name__}"
+    return None if IMAGE_RE.fullmatch(value) else "容器镜像必须按 @sha256:<64 位十六进制> 固定"
+
+
+def check_job_images(doc):
+    """workflow 中 jobs.*.container / jobs.*.services.*.image。返回 [(路径, 值, 错误)]。"""
+    out = []
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict):
+        return out
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        if "container" in job:
+            c = job["container"]
+            p = f"jobs.{name}.container"
+            if isinstance(c, dict):
+                c, p = c.get("image"), p + ".image"
+            err = check_image(c)
+            if err:
+                out.append((p, c, err))
+        services = job.get("services")
+        if isinstance(services, dict):
+            for sname, svc in services.items():
+                img = svc.get("image") if isinstance(svc, dict) else svc
+                err = check_image(img)
+                if err:
+                    out.append((f"jobs.{name}.services.{sname}.image", img, err))
+    return out
+
+
+def check_docker_action(doc, f, repo_root):
+    """action.yml 中 runs.using: docker 的 runs.image。返回错误或 None。"""
+    runs = doc.get("runs")
+    if not isinstance(runs, dict) or runs.get("using") != "docker":
+        return None
+    img = runs.get("image")
+    if not isinstance(img, str):
+        return f"runs.image 必须是字符串，实际为 {type(img).__name__}"
+    if img.startswith("docker://"):
+        return None if DOCKER_RE.fullmatch(img) else "runs.image 的 docker:// 镜像必须按 @sha256:<64 位十六进制> 固定"
+    # 否则是相对 action 目录的 Dockerfile 路径
+    if re.search(r"\s", img) or img.startswith(("/", "\\")) or ".." in img.replace("\\", "/").split("/"):
+        return "runs.image 的 Dockerfile 路径不得为绝对路径、不得含 `..` 段或空白字符"
+    root = os.path.realpath(repo_root)
+    target = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(f)), img))
+    if not _inside(target, root):
+        return "runs.image 的 Dockerfile 解析后不在仓库内"
+    return None
 
 
 def walk_uses(node, path, out):
@@ -156,7 +255,8 @@ def check_file(f, repo_root, state):
     """检查单个 YAML 文件；本地引用指向的文件加入队列。返回 False 表示无法解析。"""
     try:
         with open(f, encoding="utf-8") as fh:
-            docs = list(yaml.load_all(fh, Loader=StrictLoader))
+            text = fh.read()
+        docs = list(yaml.load_all(text, Loader=StrictLoader))
     except DuplicateKeyError as e:
         state["problems"].append(f"{f}: {e}")
         return True
@@ -174,6 +274,12 @@ def check_file(f, repo_root, state):
                 state["problems"].append(f"{f}: {p}: {err}：{v!r}")
             if follow:
                 state["queue"].append(follow)
+        if isinstance(doc, dict):
+            for p, v, err in check_job_images(doc):
+                state["problems"].append(f"{f}: {p}: {err}：{v!r}")
+            err = check_docker_action(doc, f, repo_root)
+            if err:
+                state["problems"].append(f"{f}: {err}：{doc['runs'].get('image')!r}")
         if isinstance(doc, dict) and (in_workflows or "jobs" in doc):
             for key in ("on", True):
                 if key in doc:

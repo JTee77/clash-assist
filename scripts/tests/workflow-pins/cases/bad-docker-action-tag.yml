@@ -1,0 +1,8 @@
+# 反例（r2 n7）：本地 docker action 的 runs.image 用 tag
+# expect: docker-tag/action.yml: runs.image 的 docker:// 镜像必须按 @sha256
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./.github/actions/docker-tag

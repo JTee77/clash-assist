@@ -1,0 +1,8 @@
+# 反例：repo 段为 ..
+# expect: 远程引用的路径段不得为空
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/..@11d5960a326750d5838078e36cf38b85af677262
