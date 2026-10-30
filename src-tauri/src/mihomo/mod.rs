@@ -24,6 +24,9 @@ mod types;
 // Windows TCP 控制器出口（规则 4 监听者校验、secret 闸门、M-3）。
 #[cfg(windows)]
 mod win_tcp;
+// MUST-4 跨用户 CI 回放的客户端入口（测试专用，平时忽略；scripts/ci-m1-xuser-replay.ps1）。
+#[cfg(all(test, windows))]
+mod xuser_replay_tests;
 
 // Public controller-layer API surface (referenced as `mihomo::X` from `crate::lib`).
 pub use cancel::{arm_cancel, disarm_cancel, fire_cancel};

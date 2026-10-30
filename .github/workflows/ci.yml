@@ -80,3 +80,71 @@ jobs:
       # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警
       - name: clippy（--all-targets -D warnings）
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  # MUST-4（Ellie V5 复跑复核 §2-4、§2-11）：跨用户 S-D′ 回放与规则 4 的 token-mismatch / unverified。
+  # 客户端是 M1 生产代码（src-tauri/src/mihomo/xuser_replay_tests.rs 中平时忽略的测试），以标准用户
+  # ca_a 身份运行；ca_a / ca_b 由 scripts/ci-standard-users.ps1 临时创建（口令只在内存 / DPAPI 中）。
+  # 不使用任何 secret。
+  xuser-windows:
+    runs-on: windows-2022
+    # 冷编译 + 回放；计划任务的 ExecutionTimeLimit 为 30 分钟（ci-standard-users.ps1）
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Rust 工具链（rust-toolchain.toml）
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel *= *"(.*)"$').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+
+      # 单独一步：编译失败时不进入回放。只编 lib 的测试二进制，从 cargo 的 JSON 输出取路径
+      - name: 编译测试二进制（clash_assist_lib）
+        run: |
+          $lines = cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --no-run --message-format=json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = @($lines | ForEach-Object { try { $_ | ConvertFrom-Json } catch { } } |
+              Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'clash_assist_lib' -and $_.profile.test -and $_.executable } |
+              ForEach-Object { $_.executable } | Select-Object -Unique)
+          if ($exe.Count -ne 1) { Write-Error "应恰有一个 clash_assist_lib 测试二进制，实际 $($exe.Count) 个"; exit 1 }
+          & $exe[0] --list --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CLIENT_EXE=$($exe[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 跨用户回放（S-D′ + token-mismatch / unverified）
+        run: |
+          & ./scripts/ci-m1-xuser-replay.ps1 -ClientExe $env:CLIENT_EXE -ResultsDir (Join-Path $env:RUNNER_TEMP 'm1-xuser-results')
+          exit $LASTEXITCODE
+
+      # 兜底清理（回放脚本的 finally 已做过一次；可重复执行）。配置文件“正在使用”在 runner 上偶发，
+      # 所以以“用户与计划任务都已删除”为准判定成败
+      - name: 清理标准用户与计划任务
+        if: always()
+        run: |
+          Get-Process -Name verge-mihomo, ca-m1-client -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
+          & ./scripts/ci-standard-users.ps1 -Action Cleanup -UserName ca_a, ca_b
+          $code = $LASTEXITCODE
+          $users = @(Get-LocalUser -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('ca_a', 'ca_b') })
+          $tasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'ca-spike-*' })
+          if ($users.Count -gt 0 -or $tasks.Count -gt 0) {
+            Write-Error "清理不完整：用户 $($users.Name -join ',')；计划任务 $($tasks.TaskName -join ',')（Cleanup 退出码 $code）"
+            exit 1
+          }
+          if ($code -ne 0) { Write-Warning "Cleanup 退出码 $code，但用户与计划任务均已删除" }
+          exit 0
+
+      # 只上传结果目录（results.json 与各作业的输出）；禁止上传 ci-standard-users 的状态目录（含 DPAPI 凭据）
+      - name: 上传结果
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: m1-xuser-results
+          path: ${{ runner.temp }}/m1-xuser-results
+          if-no-files-found: warn
+          retention-days: 7
