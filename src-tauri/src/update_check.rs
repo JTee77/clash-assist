@@ -21,6 +21,10 @@ pub const DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
 /// 单块空闲超时：30 秒没有新数据视为连接停滞。替代旧的全局 120s 总超时——
 /// 大安装包在慢网络下会被总超时误杀；流式下载有进度事件，停滞对用户可见。
 const DOWNLOAD_IDLE_TIMEOUT_MS: u64 = 30_000;
+/// GitHub Release API JSON 上限（正常几 KB～几十 KB；给足余量防异常膨胀吃内存）。
+const RELEASE_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// 安装包流式下载硬上限（当前 aarch64 DMG 约数十 MB；超过视为异常 / 攻击）。
+const DMG_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// 下载进度（camelCase 序列化给前端）。
 #[derive(Debug, Clone, Serialize)]
@@ -323,8 +327,10 @@ async fn get_bytes_with_proxy_fallback(
             }
             if let Ok(resp) = req.send().await {
                 if resp.status().is_success() {
-                    if let Ok(bytes) = resp.bytes().await {
-                        return Ok(bytes.to_vec());
+                    if let Ok(bytes) =
+                        crate::http_body::read_body_capped(resp, RELEASE_JSON_MAX_BYTES).await
+                    {
+                        return Ok(bytes);
                     }
                 }
             }
@@ -344,11 +350,9 @@ async fn get_bytes_with_proxy_fallback(
     if !status.is_success() {
         return Err(format!("GitHub 返回 HTTP {}", status.as_u16()));
     }
-    let bytes = resp
-        .bytes()
+    crate::http_body::read_body_capped(resp, RELEASE_JSON_MAX_BYTES)
         .await
-        .map_err(|e| format!("读取 GitHub 响应失败：{e}"))?;
-    Ok(bytes.to_vec())
+        .map_err(|e| format!("读取 GitHub 响应失败：{e}"))
 }
 
 /// 进度回调接缝：每跨过 1%（无总长时每 1 MiB）调用一次，收尾必补发 100%。
@@ -364,6 +368,18 @@ async fn stream_dmg_to_file(
     dest: &Path,
     proxy_port: Option<u16>,
     on_progress: ProgressCallback<'_>,
+) -> Result<(), String> {
+    stream_dmg_to_file_capped(url, current, dest, proxy_port, on_progress, DMG_MAX_BYTES).await
+}
+
+/// 同 `stream_dmg_to_file`，上限可注入（单测用小上限）。超限是确定性错误：不再回落重试。
+async fn stream_dmg_to_file_capped(
+    url: &str,
+    current: &str,
+    dest: &Path,
+    proxy_port: Option<u16>,
+    on_progress: ProgressCallback<'_>,
+    max_bytes: u64,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
     use std::io::Write;
@@ -389,6 +405,13 @@ async fn stream_dmg_to_file(
             }
         };
         let total = resp.content_length();
+        if let Some(t) = total {
+            if t > max_bytes {
+                return Err(format!(
+                    "安装包过大（Content-Length {t} > {max_bytes} 上限），已拒绝下载"
+                ));
+            }
+        }
         let mut file = match std::fs::File::create(dest) {
             Ok(f) => f,
             Err(e) => return Err(format!("创建下载文件失败：{e}")),
@@ -418,6 +441,13 @@ async fn stream_dmg_to_file(
             file.write_all(&chunk)
                 .map_err(|e| format!("写入下载文件失败：{e}"))?;
             downloaded += chunk.len() as u64;
+            if downloaded > max_bytes {
+                drop(file);
+                let _ = std::fs::remove_file(dest);
+                return Err(format!(
+                    "安装包过大（已下载 {downloaded} > {max_bytes} 上限），已中止"
+                ));
+            }
 
             let percent = total.map(|t| ((downloaded * 100) / t).min(100) as u8);
             let should_emit = match percent {
@@ -1283,6 +1313,109 @@ mod tests {
             pcts.windows(2).all(|w| w[0] < w[1]),
             "百分比必须严格递增: {pcts:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 本地夹具：接一个连接，读掉请求头后写 `response` 并关闭。
+    fn serve_raw_once(response: Vec<u8>) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write as IoWrite};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let h = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let _ = s.set_read_timeout(Some(Duration::from_millis(1000)));
+                let mut buf = [0u8; 4096];
+                let mut got = Vec::new();
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = s.write_all(&response);
+            }
+        });
+        (port, h)
+    }
+
+    fn chunked_body(chunks: usize, chunk_len: usize) -> Vec<u8> {
+        let mut r =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        for _ in 0..chunks {
+            r.extend_from_slice(format!("{chunk_len:x}\r\n").as_bytes());
+            r.extend(std::iter::repeat(b'a').take(chunk_len));
+            r.extend_from_slice(b"\r\n");
+        }
+        r.extend_from_slice(b"0\r\n\r\n");
+        r
+    }
+
+    #[test]
+    fn release_json_read_is_capped() {
+        // 声明 Content-Length 超过 RELEASE_JSON_MAX_BYTES：不读 body 直接拒绝。
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{{}}",
+            RELEASE_JSON_MAX_BYTES + 1
+        );
+        let (port, h) = serve_raw_once(head.into_bytes());
+        let url = format!("http://127.0.0.1:{port}/latest");
+        let r = tauri::async_runtime::block_on(get_bytes_with_proxy_fallback(
+            &url, "test", 3000, 1000, None,
+        ));
+        let _ = h.join();
+        let err = r.expect_err("oversized release JSON must be rejected");
+        assert!(err.contains("too large"), "{err}");
+
+        // 正常大小的 JSON 照常返回。
+        let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_vec();
+        let (port, h) = serve_raw_once(ok);
+        let url = format!("http://127.0.0.1:{port}/latest");
+        let r = tauri::async_runtime::block_on(get_bytes_with_proxy_fallback(
+            &url, "test", 3000, 1000, None,
+        ));
+        let _ = h.join();
+        assert_eq!(r.unwrap(), b"{}");
+    }
+
+    fn dmg_test_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ca-dmg-cap-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn dmg_download_rejects_declared_oversize() {
+        let resp =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\nConnection: close\r\n\r\nabc".to_vec();
+        let (port, h) = serve_raw_once(resp);
+        let dir = dmg_test_dir("cl");
+        let dest = dir.join("t.dmg");
+        let url = format!("http://127.0.0.1:{port}/t.dmg");
+        let r = tauri::async_runtime::block_on(stream_dmg_to_file_capped(
+            &url, "test", &dest, None, &|_| {}, 1024,
+        ));
+        let _ = h.join();
+        let err = r.expect_err("declared oversize DMG must be rejected");
+        assert!(err.contains("过大"), "{err}");
+        assert!(!dest.exists(), "nothing should be written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dmg_download_aborts_when_stream_exceeds_cap() {
+        // 无 Content-Length 的 chunked 流，总 8 KiB > 2 KiB 上限：边下边判、删掉半截文件。
+        let (port, h) = serve_raw_once(chunked_body(8, 1024));
+        let dir = dmg_test_dir("chunked");
+        let dest = dir.join("t.dmg");
+        let url = format!("http://127.0.0.1:{port}/t.dmg");
+        let r = tauri::async_runtime::block_on(stream_dmg_to_file_capped(
+            &url, "test", &dest, None, &|_| {}, 2048,
+        ));
+        let _ = h.join();
+        let err = r.expect_err("oversized DMG stream must abort");
+        assert!(err.contains("过大"), "{err}");
+        assert!(!dest.exists(), "partial file must be removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

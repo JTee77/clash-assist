@@ -3,6 +3,7 @@ mod app_menu;
 mod cli_shim;
 mod cli_serve;
 mod dns;
+mod http_body;
 mod dns_query;
 mod mihomo;
 mod platform;

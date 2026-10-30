@@ -8,34 +8,24 @@ use std::time::Duration;
 use super::http_parse::parse_http_response_bytes;
 use super::types::{UnixHttpResult, MAX_BODY_BYTES};
 
-/// 边读边计数：累计超过 `MAX_BODY_BYTES` 立即中止（旧实现先 `bytes()` 整包读进内存再判断，
-/// 恶意 / 异常的超大响应会先把内存吃满）。`Content-Length` 已声明超限时直接拒绝、不读 body。
+/// 边读边计数：累计超过 `MAX_BODY_BYTES` 立即中止（实现见 `crate::http_body`）。
+/// `Content-Length` 已声明超限时直接拒绝、不读 body。
 async fn read_body_capped(res: reqwest::Response) -> Result<(u16, String), String> {
     read_body_capped_with(res, MAX_BODY_BYTES).await
 }
 
 async fn read_body_capped_with(
-    mut res: reqwest::Response,
+    res: reqwest::Response,
     max: usize,
 ) -> Result<(u16, String), String> {
     let status = res.status().as_u16();
-    let too_large = |n: u64| {
-        format!(
-            "response body too large ({n} bytes > {max} max) — refusing to ship to webview"
-        )
-    };
-    if let Some(len) = res.content_length() {
-        if len > max as u64 {
-            return Err(too_large(len));
+    let buf = crate::http_body::read_body_capped(res, max).await.map_err(|e| {
+        if e.contains("too large") {
+            format!("{e} — refusing to ship to webview")
+        } else {
+            e
         }
-    }
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = res.chunk().await.map_err(|e| format!("read body: {e}"))? {
-        if buf.len() + chunk.len() > max {
-            return Err(too_large((buf.len() + chunk.len()) as u64));
-        }
-        buf.extend_from_slice(&chunk);
-    }
+    })?;
     let body = String::from_utf8_lossy(&buf).into_owned();
     Ok((status, body))
 }
