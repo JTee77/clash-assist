@@ -1,6 +1,6 @@
 [package]
 name = "clash-assist"
-version = "0.2.8"
+version = "0.2.9"
 license = "GPL-3.0-or-later"
 description = "Clash Assist (Clash伴侣) — macOS Apple Silicon proxy egress diagnostics"
 authors = ["JTee77"]
@@ -24,6 +24,12 @@ futures-util = "0.3"
 # 流式下载的按块空闲超时（tauri 运行时即 tokio，这里只取 time 能力）
 tokio = { version = "1", default-features = false, features = ["time"] }
 sys-locale = "0.3"
+# 自更新：按 WHATWG 规则解析并精确比对 Release 下载地址（替代前缀匹配）。
+url = "2"
+# 自更新：进程内计算 DMG SHA-256（不再依赖 /usr/bin/shasum）。
+sha2 = "0.10"
+# 打开 release 页面：macOS `/usr/bin/open --`、Windows ShellExecuteExW，不经 shell 解析。
+open = { version = "5", features = ["shellexecute-on-windows"] }
 
 [target.'cfg(unix)'.dependencies]
 # CLI：Ctrl+C / SIGTERM 时先切回原节点再退出（sigaction / write / _exit）。

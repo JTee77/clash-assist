@@ -39,12 +39,20 @@ export function openReleasePage(url: string): Promise<void> {
   return invoke<void>("open_release_page", { url }).catch(() => {});
 }
 
-/** 阶段 1：下载最新 DMG 到临时目录并完成 SHA-256 校验，返回临时工作目录路径。 */
-export function downloadUpdate(info: UpdateInfo): Promise<string> {
-  return invoke<string>("download_update", {
-    dmgUrl: info.dmg_url ?? null,
-    dmgSha256: info.dmg_sha256 ?? null,
-  });
+/**
+ * 能否走「一键更新」：release 同时提供 .dmg 直链与 SHA-256 摘要才行。
+ * 缺摘要时 Rust 侧会拒绝下载（fail closed），这里提前改走「去下载页」，避免先报错再回落。
+ */
+export function canOneClick(info: UpdateInfo): boolean {
+  return Boolean(info.dmg_url && info.dmg_sha256);
+}
+
+/**
+ * 阶段 1：下载最新 DMG 到临时目录并完成 SHA-256 校验，返回临时工作目录路径。
+ * 不传任何参数：下载地址与期望摘要由 Rust 侧自行从 GitHub release 元数据解析，前端无法指定。
+ */
+export function downloadUpdate(): Promise<string> {
+  return invoke<string>("download_update");
 }
 
 /** 阶段 2：后台静默挂载 DMG、清除 quarantine 并替换当前 .app（不自动退出重启）。 */

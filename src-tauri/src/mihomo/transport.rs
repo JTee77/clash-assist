@@ -8,20 +8,25 @@ use std::time::Duration;
 use super::http_parse::parse_http_response_bytes;
 use super::types::{UnixHttpResult, MAX_BODY_BYTES};
 
+/// 边读边计数：累计超过 `MAX_BODY_BYTES` 立即中止（实现见 `crate::http_body`）。
+/// `Content-Length` 已声明超限时直接拒绝、不读 body。
 async fn read_body_capped(res: reqwest::Response) -> Result<(u16, String), String> {
+    read_body_capped_with(res, MAX_BODY_BYTES).await
+}
+
+async fn read_body_capped_with(
+    res: reqwest::Response,
+    max: usize,
+) -> Result<(u16, String), String> {
     let status = res.status().as_u16();
-    let bytes = res
-        .bytes()
-        .await
-        .map_err(|e| format!("read body: {e}"))?;
-    if bytes.len() > MAX_BODY_BYTES {
-        return Err(format!(
-            "response body too large ({} bytes > {} max) — refusing to ship to webview",
-            bytes.len(),
-            MAX_BODY_BYTES
-        ));
-    }
-    let body = String::from_utf8_lossy(&bytes).into_owned();
+    let buf = crate::http_body::read_body_capped(res, max).await.map_err(|e| {
+        if e.contains("too large") {
+            format!("{e} — refusing to ship to webview")
+        } else {
+            e
+        }
+    })?;
+    let body = String::from_utf8_lossy(&buf).into_owned();
     Ok((status, body))
 }
 
@@ -82,9 +87,17 @@ pub fn http_via_unix(
     if !std::path::Path::new(sock).exists() {
         return Err(format!("unix socket not found: {sock}"));
     }
+    // 请求行是手写拼接的：方法 / 路径带 CR、LF 或空格会注入额外请求头。
+    super::guard::check_controller_method(method)?;
+    if !path.starts_with('/') || !path.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(format!("invalid request path: {path:?}"));
+    }
+    // 0.2.9：拒绝符号链接路径；连接后用对端凭证（peer uid）判定可信，避免 path TOCTOU。
+    crate::platform::ensure_sock_path_trusted(sock)?;
 
     let timeout = Duration::from_millis(timeout_ms);
     let mut stream = UnixStream::connect(sock).map_err(|e| format!("connect {sock}: {e}"))?;
+    crate::platform::ensure_connected_peer_trusted(&stream, sock)?;
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
@@ -110,15 +123,16 @@ pub fn http_via_unix(
             .map_err(|e| format!("write body: {e}"))?;
     }
 
+    // 最多读 MAX_BODY_BYTES + 1 字节：多出的那 1 字节用来判定超限，不会无界增长内存。
     let mut raw = Vec::new();
-    stream
+    (&mut stream)
+        .take(MAX_BODY_BYTES as u64 + 1)
         .read_to_end(&mut raw)
         .map_err(|e| format!("read: {e}"))?;
 
     if raw.len() > MAX_BODY_BYTES {
         return Err(format!(
-            "unix response too large ({} bytes > {} max)",
-            raw.len(),
+            "unix response too large (> {} bytes max)",
             MAX_BODY_BYTES
         ));
     }
@@ -169,7 +183,7 @@ async fn proxy_fetch_inner(
 ) -> Result<UnixHttpResult, String> {
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(super::guard::probe_redirect_policy(10))
         .danger_accept_invalid_certs(false);
 
     if let Some(port) = mixed_port {
@@ -193,6 +207,76 @@ async fn proxy_fetch_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 本地夹具：接一个连接，读掉请求头后原样写 `response`，然后关闭。
+    fn serve_once(response: Vec<u8>) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let h = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let _ = s.set_nonblocking(false);
+                let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(1000)));
+                let mut buf = [0u8; 4096];
+                let mut got = Vec::new();
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = s.write_all(&response);
+            }
+        });
+        (port, h)
+    }
+
+    fn fetch_capped(port: u16, max: usize) -> Result<(u16, String), String> {
+        tauri::async_runtime::block_on(async move {
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let res = client
+                .get(format!("http://127.0.0.1:{port}/"))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            read_body_capped_with(res, max).await
+        })
+    }
+
+    #[test]
+    fn body_cap_enforced_while_streaming_chunked() {
+        // 无 Content-Length 的 chunked 响应，总量 4 KiB > 1 KiB 上限：必须在读流过程中拒绝。
+        let mut resp = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        for _ in 0..8 {
+            resp.extend_from_slice(b"200\r\n");
+            resp.extend_from_slice(&[b'a'; 0x200]);
+            resp.extend_from_slice(b"\r\n");
+        }
+        resp.extend_from_slice(b"0\r\n\r\n");
+        let (port, h) = serve_once(resp);
+        let r = fetch_capped(port, 1024);
+        let _ = h.join();
+        let err = r.expect_err("oversized chunked body must be rejected");
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn body_cap_rejects_declared_content_length() {
+        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\nConnection: close\r\n\r\nabc".to_vec();
+        let (port, h) = serve_once(resp);
+        let r = fetch_capped(port, 1024);
+        let _ = h.join();
+        assert!(r.expect_err("declared oversize must be rejected").contains("too large"));
+    }
+
+    #[test]
+    fn body_under_cap_is_returned() {
+        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_vec();
+        let (port, h) = serve_once(resp);
+        let r = fetch_capped(port, 1024);
+        let _ = h.join();
+        assert_eq!(r.unwrap(), (200, "hello".to_string()));
+    }
 
     #[test]
     fn smoke_http_via_tcp_invalid_port_no_panic() {

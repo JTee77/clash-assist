@@ -54,6 +54,109 @@ pub fn current_uid() -> u32 {
     0
 }
 
+/// 套接字属主 / 对端 uid 是否可信：本人（euid）或 root（Verge 系统服务）。
+/// 别的普通用户一律拒绝，避免把当前用户的控制器 secret 发给他人进程。
+#[cfg(unix)]
+pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
+    owner_uid == current || owner_uid == 0
+}
+
+/// 连接前的路径侧检查（不跟随符号链接）：
+/// - 路径本身是 symlink → 拒绝（防止指向他人 sock 的 TOCTOU 替换）
+/// - lstat 属主不是本人 / root → 拒绝（发现阶段廉价过滤）
+/// 真正的信任判定在连接后的 `ensure_connected_peer_trusted`。
+#[cfg(unix)]
+pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let meta = std::fs::symlink_metadata(sock).map_err(|e| format!("lstat {sock}: {e}"))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("拒绝符号链接套接字路径 {sock}"));
+    }
+    if !meta.file_type().is_socket() {
+        return Err(format!("不是 Unix 套接字：{sock}"));
+    }
+    let owner = meta.uid();
+    let me = current_uid();
+    if sock_owner_trusted(owner, me) {
+        Ok(())
+    } else {
+        Err(format!(
+            "拒绝连接其他用户拥有的套接字 {sock}（属主 uid {owner}，当前 uid {me}）"
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+pub fn ensure_sock_path_trusted(_sock: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// 连接后检查对端进程凭证：peer uid 必须是本人或 root。
+/// Verge service 模式下 sock 文件属主可能是当前用户，但 mihomo 以 root 运行——peer uid=0 应被接受。
+#[cfg(unix)]
+pub fn ensure_connected_peer_trusted(
+    stream: &std::os::unix::net::UnixStream,
+    sock: &str,
+) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    let peer = peer_uid(stream.as_raw_fd()).map_err(|e| format!("peercred {sock}: {e}"))?;
+    let me = current_uid();
+    if sock_owner_trusted(peer, me) {
+        Ok(())
+    } else {
+        Err(format!(
+            "拒绝连接其他用户进程的套接字 {sock}（对端 uid {peer}，当前 uid {me}）"
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn peer_uid(fd: std::os::fd::RawFd) -> Result<u32, String> {
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))]
+    {
+        let mut euid: libc::uid_t = 0;
+        let mut egid: libc::gid_t = 0;
+        // SAFETY: getpeereid writes into the two out-params; fd is a connected unix socket.
+        let rc = unsafe { libc::getpeereid(fd, &mut euid, &mut egid) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(euid as u32)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: getsockopt(SO_PEERCRED) fills ucred for a connected unix socket.
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                &mut cred as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(cred.uid as u32)
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly",
+        target_os = "linux"
+    )))]
+    {
+        let _ = fd;
+        Err("peer credentials unsupported on this OS".into())
+    }
+}
+
 /// `$TMPDIR/verge-mihomo.sock` (or `/tmp/...` when TMPDIR unset).
 pub fn verge_tmpdir_sock() -> String {
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
@@ -68,7 +171,7 @@ pub fn verge_service_sock_for_uid(uid: u32) -> String {
 
 /// Ordered Verge sock candidates (deduped). `yaml_unix_paths` are already expanded.
 ///
-/// Order: service (current uid → other uids under the service dir) → legacy
+/// Order: service (current uid only) → legacy
 /// `/tmp/verge/...` → `$TMPDIR/...` → yaml unix paths → optional extras.
 pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -85,24 +188,8 @@ pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> V
         let uid = current_uid();
         push(verge_service_sock_for_uid(uid));
 
-        // Sibling uids under the service dir (best-effort; ignore permission errors).
-        if let Ok(entries) = std::fs::read_dir(VERGE_SERVICE_USERS_DIR) {
-            let mut others: Vec<String> = entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let name = e.file_name().into_string().ok()?;
-                    let other_uid: u32 = name.parse().ok()?;
-                    if other_uid == uid {
-                        return None;
-                    }
-                    Some(verge_service_sock_for_uid(other_uid))
-                })
-                .collect();
-            others.sort();
-            for p in others {
-                push(p);
-            }
-        }
+        // 0.2.9：不再枚举 service 目录下其他 uid 的套接字——那是别的用户的 mihomo，
+        // 不应把当前用户的 secret 发过去（见 `ensure_sock_path_trusted`）。
 
         push(VERGE_SOCK_PATH.to_string());
         push(verge_tmpdir_sock());
@@ -256,6 +343,72 @@ mod tests {
                 "macOS Verge config path must be byte-identical to pre-seam code"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sock_owner_policy() {
+        assert!(sock_owner_trusted(501, 501));
+        assert!(sock_owner_trusted(0, 501));
+        assert!(!sock_owner_trusted(502, 501));
+        assert!(sock_owner_trusted(0, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn own_socket_path_is_trusted_and_candidates_skip_other_uids() {
+        let dir = std::env::temp_dir().join(format!("ca-sock-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("m.sock");
+        let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(ensure_sock_path_trusted(sock.to_str().unwrap()).is_ok());
+        assert!(ensure_sock_path_trusted("/nonexistent/ca.sock").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let me = current_uid();
+        for c in verge_sock_candidates(&[], &[]) {
+            if let Some(rest) = c.strip_prefix(&format!("{VERGE_SERVICE_USERS_DIR}/")) {
+                assert!(rest.starts_with(&format!("{me}/")), "unexpected other-uid candidate {c}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connected_peer_of_own_listener_is_trusted() {
+        use std::os::unix::net::{UnixListener, UnixStream};
+        let dir = std::env::temp_dir().join(format!("ca-peercred-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("p.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let path = sock.to_str().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+        });
+        let client = UnixStream::connect(&path).unwrap();
+        assert!(ensure_connected_peer_trusted(&client, &path).is_ok());
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sock_path_is_rejected() {
+        use std::os::unix::net::UnixListener;
+        let dir = std::env::temp_dir().join(format!("ca-sock-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.sock");
+        let link = dir.join("link.sock");
+        let _l = UnixListener::bind(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let err = ensure_sock_path_trusted(link.to_str().unwrap()).expect_err("symlink must fail");
+        assert!(err.contains("符号链接") || err.to_lowercase().contains("symlink"), "{err}");
+        assert!(ensure_sock_path_trusted(real.to_str().unwrap()).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
