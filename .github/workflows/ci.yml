@@ -35,8 +35,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14：现有 macOS arm64 基线；windows-2022：Windows x64（x86_64-pc-windows-msvc）
-        os: [macos-14, windows-2022]
+        # macos-15：受支持的 macOS arm64 镜像（macos-14 于 2026-11-02 退役）；windows-2022：Windows x64（x86_64-pc-windows-msvc）
+        os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     # Windows 上 Rust 冷编译明显慢于 macOS
     timeout-minutes: 45
