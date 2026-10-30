@@ -1,7 +1,12 @@
 #[cfg(target_os = "macos")]
 mod app_menu;
+// Windows 首版不提供 CLI（windows-plan §2.5）：shim / serve 整体不编译，
+// 桥命令改为返回 `cli_unavailable::CLI_UNAVAILABLE` 的桩。
+#[cfg(not(windows))]
 mod cli_shim;
+#[cfg(not(windows))]
 mod cli_serve;
+mod cli_unavailable;
 mod dns;
 mod http_body;
 mod dns_query;
@@ -407,9 +412,17 @@ fn show_vite_dead_page(win: &tauri::WebviewWindow, reason: &str) {
 
 
 /// CLI mode: argv as seen by the process (includes binary path).
+#[cfg(not(windows))]
 #[tauri::command]
 fn get_cli_argv() -> Vec<String> {
     std::env::args().collect()
+}
+
+/// Windows 不提供 CLI：恒为空。
+#[cfg(windows)]
+#[tauri::command]
+fn get_cli_argv() -> Vec<String> {
+    Vec::new()
 }
 
 /// CLI 子命令全集。
@@ -468,10 +481,18 @@ pub fn is_cli_mode_args(args: &[String]) -> bool {
 }
 
 /// True when process was launched in CLI mode (see `is_cli_mode_args`).
+#[cfg(not(windows))]
 #[tauri::command]
 fn is_cli_mode() -> bool {
     let args: Vec<String> = std::env::args().collect();
     is_cli_mode_args(&args)
+}
+
+/// Windows 不提供 CLI：无论 argv 如何都按 GUI 启动。
+#[cfg(windows)]
+#[tauri::command]
+fn is_cli_mode() -> bool {
+    false
 }
 
 /// CLI 中断（Ctrl+C / SIGTERM / SIGHUP）。
@@ -576,6 +597,7 @@ struct CliOsInfo {
     major: Option<u32>,
 }
 
+#[cfg(not(windows))]
 #[tauri::command]
 fn cli_os_info() -> CliOsInfo {
     let version = cli_shim::macos_version();
@@ -584,6 +606,17 @@ fn cli_os_info() -> CliOsInfo {
         os: std::env::consts::OS,
         version,
         major,
+    }
+}
+
+/// Windows：没有 macOS 版本号可报（`cli_shim` 不编译），返回占位值。
+#[cfg(windows)]
+#[tauri::command]
+fn cli_os_info() -> CliOsInfo {
+    CliOsInfo {
+        os: std::env::consts::OS,
+        version: None,
+        major: None,
     }
 }
 
@@ -658,19 +691,45 @@ fn relaunch_updated_app() -> Result<(), String> {
 }
 
 /// `--cli install-shim [--dir D]`
+#[cfg(not(windows))]
 #[tauri::command]
 fn cli_install_shim(dir: Option<String>) -> Result<cli_shim::ShimResult, cli_shim::ShimError> {
     cli_shim::install(dir.as_deref())
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn cli_install_shim(
+    dir: Option<String>,
+) -> Result<cli_unavailable::Unavailable, cli_unavailable::ShimError> {
+    let _ = dir;
+    Err(cli_unavailable::ShimError::unavailable())
+}
+
+#[cfg(not(windows))]
 #[tauri::command]
 fn cli_serve_start(port: u16) -> Result<cli_serve::ServeStartInfo, String> {
     cli_serve::serve_start(port)
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn cli_serve_start(port: u16) -> Result<cli_unavailable::Unavailable, String> {
+    let _ = port;
+    Err(cli_unavailable::CLI_UNAVAILABLE.into())
+}
+
+#[cfg(not(windows))]
 #[tauri::command]
 fn cli_serve_poll(timeout_ms: u64) -> Result<Option<cli_serve::ServeJobView>, String> {
     cli_serve::serve_poll(timeout_ms)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn cli_serve_poll(timeout_ms: u64) -> Result<Option<cli_unavailable::Unavailable>, String> {
+    let _ = timeout_ms;
+    Err(cli_unavailable::CLI_UNAVAILABLE.into())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -681,14 +740,29 @@ struct ServeRespondRequest {
     body: String,
 }
 
+#[cfg(not(windows))]
 #[tauri::command]
 fn cli_serve_respond(req: ServeRespondRequest) -> Result<(), String> {
     cli_serve::serve_respond(req.id, req.status, req.body)
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn cli_serve_respond(req: ServeRespondRequest) -> Result<(), String> {
+    let _ = (req.id, req.status, req.body);
+    Err(cli_unavailable::CLI_UNAVAILABLE.into())
+}
+
+#[cfg(not(windows))]
 #[tauri::command]
 fn cli_serve_stop() -> Result<(), String> {
     cli_serve::serve_stop()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn cli_serve_stop() -> Result<(), String> {
+    Err(cli_unavailable::CLI_UNAVAILABLE.into())
 }
 
 /// Exit the process after CLI finishes (code 0 = ok envelope, 1 = error).
@@ -705,8 +779,10 @@ fn cli_exit(code: i32) -> Result<(), String> {
 /// 覆盖 ~/Library/Application Support、~/Library/Caches 下的应用数据，
 /// 以及 ~/Library/WebKit/<id>（前端设置存在 WKWebView 的 localStorage 里）。
 /// 必须在主 webview 创建前调用。Best-effort，失败只记日志。
+#[cfg(target_os = "macos")]
 const LEGACY_IDENTIFIER: &str = "com.egresschecker.app";
 
+#[cfg(target_os = "macos")]
 fn dir_is_empty_or_missing(p: &std::path::Path) -> bool {
     match std::fs::read_dir(p) {
         Ok(mut it) => it.next().is_none(),
@@ -714,6 +790,7 @@ fn dir_is_empty_or_missing(p: &std::path::Path) -> bool {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -729,6 +806,8 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
     Ok(())
 }
 
+/// 只在 macOS 上有旧 bundle id 数据（0.2.0 前只发过 macOS 版），其他平台不迁移（windows-plan §2.6）。
+#[cfg(target_os = "macos")]
 fn migrate_legacy_identifier_dirs(new_id: &str) {
     if new_id == LEGACY_IDENTIFIER {
         return;
@@ -773,6 +852,7 @@ pub fn run() {
     builder
         .setup(|app| {
             use tauri::Manager;
+            #[cfg(target_os = "macos")]
             migrate_legacy_identifier_dirs(&app.config().identifier);
             let frontend_url = app
                 .config()
@@ -931,5 +1011,33 @@ mod cli_mode_tests {
             let want = c["cliMode"].as_bool().expect("cliMode");
             assert_eq!(is_cli_mode_args(&argv), want, "argv={argv:?}");
         }
+    }
+}
+
+/// Windows：CLI 桥命令必须是返回错误的桩（windows-plan §2.5、§6 M0）。
+#[cfg(all(test, windows))]
+mod cli_windows_stub_tests {
+    use super::*;
+    use crate::cli_unavailable::CLI_UNAVAILABLE;
+
+    #[test]
+    fn cli_is_never_enabled_on_windows() {
+        assert!(!is_cli_mode());
+        assert!(get_cli_argv().is_empty());
+        let info = cli_os_info();
+        assert_eq!(info.os, "windows");
+        assert!(info.version.is_none() && info.major.is_none());
+    }
+
+    #[test]
+    fn cli_bridge_commands_return_errors_on_windows() {
+        let shim = cli_install_shim(None).expect_err("install-shim must fail on Windows");
+        assert_eq!(shim.code, "unsupported_platform");
+        assert_eq!(shim.message, CLI_UNAVAILABLE);
+        assert_eq!(cli_serve_start(0).expect_err("serve_start"), CLI_UNAVAILABLE);
+        assert_eq!(cli_serve_poll(0).expect_err("serve_poll"), CLI_UNAVAILABLE);
+        let req = ServeRespondRequest { id: 1, status: 200, body: String::new() };
+        assert_eq!(cli_serve_respond(req).expect_err("serve_respond"), CLI_UNAVAILABLE);
+        assert_eq!(cli_serve_stop().expect_err("serve_stop"), CLI_UNAVAILABLE);
     }
 }
