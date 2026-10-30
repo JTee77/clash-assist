@@ -5,6 +5,8 @@
 //! candidates (service sock on 2.5.6+, legacy `/tmp/verge/...`, `$TMPDIR`, yaml
 //! `external-controller-unix`, optional `-ext-ctl-unix` cmdline). Other clients
 //! read the per-OS table in `crate::platform` and never receive Verge's socket.
+// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
+#![allow(clippy::disallowed_methods)]
 
 use crate::platform;
 use regex::Regex;
