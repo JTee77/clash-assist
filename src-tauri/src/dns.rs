@@ -522,13 +522,30 @@ fn truncate_hint(raw: &str, max_chars: usize) -> String {
 }
 
 pub fn list_dns_resolvers_blocking() -> DnsResolversResult {
-    #[cfg(not(target_os = "macos"))]
+    // Windows：GetAdaptersAddresses + GetBestRoute2（§2.3，M2）。
+    #[cfg(windows)]
+    {
+        match crate::dns_windows::collect() {
+            Ok(facts) => windows_resolvers_result(&facts),
+            Err(e) => DnsResolversResult {
+                resolvers: vec![],
+                source: "win-adapter-error".into(),
+                raw_hint: None,
+                error: Some(format!("读取网卡 DNS 失败：{e}")),
+            },
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         DnsResolversResult {
             resolvers: vec![],
             source: "unsupported-platform".into(),
             raw_hint: None,
-            error: Some("DNS 解析器列表依赖 macOS `scutil --dns`；当前平台不可用。".into()),
+            error: Some(
+                "DNS 解析器列表仅支持 macOS（scutil --dns）与 Windows（网卡 API）；当前平台不可用。"
+                    .into(),
+            ),
         }
     }
 
@@ -587,8 +604,9 @@ pub fn list_dns_resolvers_blocking() -> DnsResolversResult {
 /// Discover the system's default DNS resolver.
 /// - macOS: first nameserver from `scutil --dns` (reuses `list_dns_resolvers_blocking`).
 /// - Linux: first `nameserver` from `/etc/resolv.conf`.
-/// - Windows: fallback to well-known public resolver (8.8.8.8) — the OS DNS API
-///   requires the `windows` crate or `GetAdaptersInfo` and is a separate concern.
+/// - Windows: 网卡 API 选出的第一个可直接查询的解析器（§2.3：TUN 网卡 → 默认路由网卡 →
+///   全部；跳过 IPv6 链路本地）。拿不到时返回 `None`，调用方报「无法确定系统 DNS 解析器」，
+///   **不再回落到 8.8.8.8**（R6）。
 fn find_system_resolver() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
@@ -616,8 +634,8 @@ fn find_system_resolver() -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        // Best-effort fallback; full Windows adapter enumeration deferred.
-        Some("8.8.8.8".to_string())
+        let r = list_dns_resolvers_blocking();
+        r.resolvers.into_iter().find(|s| is_queryable_resolver(s))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
@@ -1146,6 +1164,75 @@ resolver #1
         assert_eq!(
             parse_tun_device("tun:\r\n  enable: true\r\n  device: Mihomo\r\n").as_deref(),
             Some("Mihomo")
+        );
+    }
+
+    // ---- Windows runner 上的实机断言（windows-plan §6 M2 行）----
+
+    #[cfg(windows)]
+    #[test]
+    fn win_runner_source_is_adapter_and_not_hardcoded() {
+        let r = list_dns_resolvers_blocking();
+        eprintln!(
+            "list_dns_resolvers_blocking: source={} resolvers={:?} error={:?}\n{}",
+            r.source,
+            r.resolvers,
+            r.error,
+            r.raw_hint.as_deref().unwrap_or("")
+        );
+        assert!(r.source.starts_with("win-adapter-"), "{}", r.source);
+        assert_ne!(r.source, "win-adapter-error", "{:?}", r.error);
+        assert_ne!(r.source, "win-adapter-none", "runner 上应能找到网卡 DNS");
+        assert!(!r.resolvers.is_empty());
+
+        let sys = find_system_resolver();
+        let sys = sys.expect("find_system_resolver 在 runner 上应返回网卡 DNS");
+        // 必须来自网卡列表（不是写死的地址）。
+        assert!(r.resolvers.contains(&sys), "{sys} 不在 {:?}", r.resolvers);
+        if !r.resolvers.iter().any(|s| s == "8.8.8.8") {
+            assert_ne!(sys, "8.8.8.8");
+        }
+    }
+
+    /// 与 `Get-DnsClientServerAddress` 对照选中网卡的 DNS（真机清单 6 的自动化版本）。
+    #[cfg(windows)]
+    #[test]
+    fn win_runner_matches_get_dnsclientserveraddress() {
+        let facts = crate::dns_windows::collect().expect("collect");
+        let (picked, source) =
+            pick_windows_adapters(&facts.adapters, facts.tun_hint.as_deref(), facts.default_if);
+        eprintln!("source={source} default_if={:?}", facts.default_if);
+        for a in &facts.adapters {
+            eprintln!("{a:?}");
+        }
+        let Some(a) = picked.first() else {
+            panic!("runner 上应选中至少一张网卡");
+        };
+        let script = format!(
+            "(Get-DnsClientServerAddress -InterfaceIndex {} -ErrorAction Stop).ServerAddresses",
+            a.if_index
+        );
+        let out = match std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            other => {
+                eprintln!("跳过：PowerShell 不可用 {other:?}");
+                return;
+            }
+        };
+        let ps: std::collections::BTreeSet<IpAddr> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .filter(is_usable_dns)
+            .collect();
+        let ours: std::collections::BTreeSet<IpAddr> =
+            a.dns.iter().copied().filter(is_usable_dns).collect();
+        assert_eq!(
+            ours, ps,
+            "ifIndex {} 的 DNS 与 PowerShell 不一致",
+            a.if_index
         );
     }
 }
