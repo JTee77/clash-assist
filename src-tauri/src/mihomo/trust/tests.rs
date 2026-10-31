@@ -555,6 +555,13 @@ fn s2_broad_write_hint_is_warning_only() {
     let t = decide(PipeKind::Sidecar, &mut f).unwrap();
     assert_eq!(t.warnings.len(), 1, "{:?}", t.warnings);
     assert!(t.warnings[0].contains("AU=0x0012019B"), "{:?}", t.warnings);
+    // 来源标签的 pipe-open-to-all 只由这一位驱动。
+    assert!(t.open_to_all);
+    assert!(
+        !decide(PipeKind::Sidecar, &mut FakePipe::sidecar_ok())
+            .unwrap()
+            .open_to_all
+    );
 }
 
 #[test]
@@ -814,7 +821,10 @@ fn tcp_verified_requires_unique_whitelisted_me() {
         &FakeProc::mine(),
     );
     assert!(matches!(c, ListenerCheck::Verified { pid: 7, .. }), "{c:?}");
-    assert_eq!(c.source_label(), Some("verge-tcp(listener-verified)"));
+    assert_eq!(
+        crate::mihomo::source_label::tcp_flags(&c, &TcpFallback::Allowed { denied_seen: false }),
+        Some(vec![crate::mihomo::source_label::TcpFlag::ListenerVerified])
+    );
     // 0.0.0.0 也算
     let c = check(v4addr(), vec![row("0.0.0.0", 7)], vec![], &FakeProc::mine());
     assert!(matches!(c, ListenerCheck::Verified { .. }));
@@ -993,7 +1003,15 @@ fn tcp_unverified_branches() {
             matches!(c, ListenerCheck::Unverified { pid: Some(7), .. }),
             "{name}: {c:?}"
         );
-        assert_eq!(c.source_label(), Some("verge-tcp(listener-unverified)"));
+        let flags = crate::mihomo::source_label::tcp_flags(
+            &c,
+            &TcpFallback::Allowed { denied_seen: false },
+        )
+        .unwrap();
+        assert_eq!(
+            flags[0],
+            crate::mihomo::source_label::TcpFlag::ListenerUnverified
+        );
     }
     let c = decide_tcp_listener(
         v4addr(),

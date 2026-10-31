@@ -326,6 +326,11 @@ pub struct PipeTrust {
     pub token: Option<Ident>,
     /// 只告警、不拒绝的诊断（S-2、L2 / L3 不一致、服务模式路径）。
     pub warnings: Vec<String>,
+    /// S-2：DACL 给 BU / AU / WD 授予了写位（[`dacl_broad_write_hint`] 命中）。走到这里说明 F3′
+    /// 已通过，所以这些宽泛主体**不能**创建实例或改写安全描述符（不能冒充），但能以读写方式
+    /// 连上管道、向控制器发请求（如 cvsi 风格 `AU=0x0012019B`）。来源标签里记为
+    /// `;pipe-open-to-all=<name>`：只提示，不拒绝。
+    pub open_to_all: bool,
 }
 
 /// 管道校验失败的内容（`PipeErr::Untrusted` / `PipeErr::InsecureDacl`）。
@@ -475,9 +480,14 @@ pub fn decide_pipe(
     }
 
     let mut warnings = Vec::new();
-    if let Some(h) = dacl_broad_write_hint(&sec.dacl) {
-        warnings.push(h);
-    }
+    // NULL DACL 也会命中 S-2，但它已在上面被 F3′ 拒绝，到这里只剩 ACE 列表的情形。
+    let open_to_all = match dacl_broad_write_hint(&sec.dacl) {
+        Some(h) => {
+            warnings.push(h);
+            true
+        }
+        None => false,
+    };
 
     // ---- 以下只作诊断（V5 S-D′：PID / L2 / L3 不能标识连上的实例） ----
     let server_pid = match facts.server_pid() {
@@ -550,6 +560,7 @@ pub fn decide_pipe(
         image,
         token,
         warnings,
+        open_to_all,
     })
 }
 
@@ -778,17 +789,6 @@ pub enum ListenerCheck {
     NotListening {
         ipv6_dual_stack_hint: bool,
     },
-}
-
-impl ListenerCheck {
-    /// 来源标签：`verge-tcp(listener-verified)` / `verge-tcp(listener-unverified)`。
-    pub fn source_label(&self) -> Option<&'static str> {
-        match self {
-            ListenerCheck::Verified { .. } => Some("verge-tcp(listener-verified)"),
-            ListenerCheck::Unverified { .. } => Some("verge-tcp(listener-unverified)"),
-            _ => None,
-        }
-    }
 }
 
 /// 某个地址族的监听表（已按端口过滤）；`Err` 表示 GetExtendedTcpTable 失败。

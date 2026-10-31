@@ -10,6 +10,7 @@ use crate::platform;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
+use super::source_label::{encode, SourceLabel};
 #[cfg(unix)]
 use super::transport::http_via_unix;
 use super::types::{DiscoverResult, DEFAULT_MIXED, DEFAULT_PORT};
@@ -355,6 +356,8 @@ fn discover_controller_inner() -> DiscoverResult {
         None => (DEFAULT_PORT, false),
     };
 
+    // 路径 / 套接字逐项百分号编码（source_label 模块的语法）；分隔符 `,` `|` 与 `yaml:` 是固定结构。
+    let files = super::source_label::encode_list(&source_files, ',');
     let source = match (
         &sock_path,
         tcp_from_yaml,
@@ -362,19 +365,18 @@ fn discover_controller_inner() -> DiscoverResult {
         parsed.tcp_ec_blank,
     ) {
         (Some(sock), true, false, _) => {
-            format!("verge-config+unix:{}|{}", source_files.join(","), sock)
+            SourceLabel::new("verge-config+unix", format!("{files}|{}", encode(sock)))
         }
         (Some(sock), false, false, _) => {
-            format!("verge-unix:{}|yaml:{}", sock, source_files.join(","))
+            SourceLabel::new("verge-unix", format!("{}|yaml:{files}", encode(sock)))
         }
-        (Some(sock), _, true, _) => format!("verge-unix:{sock}"),
-        (None, true, false, _) => format!("verge-config:{}", source_files.join(",")),
-        (None, false, false, true) => {
-            format!("verge-ec-blank:{}", source_files.join(","))
-        }
-        (None, false, false, false) => format!("verge-config:{}", source_files.join(",")),
-        (None, _, true, _) => "defaults".into(),
-    };
+        (Some(sock), _, true, _) => SourceLabel::new("verge-unix", encode(sock)),
+        (None, true, false, _) => SourceLabel::new("verge-config", files),
+        (None, false, false, true) => SourceLabel::new("verge-ec-blank", files),
+        (None, false, false, false) => SourceLabel::new("verge-config", files),
+        (None, _, true, _) => SourceLabel::bare("defaults"),
+    }
+    .finish();
 
     DiscoverResult {
         host: "127.0.0.1".into(),
@@ -420,6 +422,9 @@ pub(crate) struct WinPipeProbe {
     pub fallback: super::trust::TcpFallback,
     /// 被判为 InsecureDacl 的候选名（Ellie PR50 Q5：即使选中了别的候选也要提示用户）。
     pub insecure: Vec<String>,
+    /// 选中的管道通过了 F3′，但 DACL 给 BU / AU / WD 授予了写数据权限（S-2，`PipeTrust::open_to_all`）。
+    /// 只可能是 `selected` 本身（至多一个）：未选中的候选要么没通过校验，要么根本没被探测。
+    pub open_to_all: Vec<String>,
 }
 
 #[cfg(windows)]
@@ -437,6 +442,7 @@ fn windows_probe_pipes(
                 tried: vec![],
                 fallback: TcpFallback::Blocked(format!("读不到当前用户 SID，不回落 TCP：{e}")),
                 insecure: vec![],
+                open_to_all: vec![],
             }
         }
     };
@@ -458,13 +464,19 @@ fn windows_probe_pipes(
         match r {
             // 校验通过的管道只要回应了 HTTP 就选用（401/403 也说明内核在线）。
             // 之前若有 InsecureDacl 候选，回落状态保持 VerifiedOnly（更保守）。
-            Ok(_) => {
+            Ok((_, trust)) => {
+                let open_to_all = if trust.open_to_all {
+                    vec![cand.clone()]
+                } else {
+                    vec![]
+                };
                 return WinPipeProbe {
                     selected: Some(cand),
                     tried,
                     fallback: tcp_fallback_after_pipes(&errs),
                     insecure: errs_names,
-                }
+                    open_to_all,
+                };
             }
             Err(e) => {
                 let stop = matches!(e, PipeErr::Untrusted(_));
@@ -485,30 +497,58 @@ fn windows_probe_pipes(
         tried,
         fallback: tcp_fallback_after_pipes(&errs),
         insecure: errs_names,
+        open_to_all: vec![],
     }
 }
 
-/// 管道因 InsecureDacl 不可用、TCP 只许 listener-verified（`TcpFallback::VerifiedOnly`）时，
-/// 在 TCP 来源标签里注明 `pipe-insecure`，与普通的 TCP 回落区分开：
-/// `verge-tcp(listener-verified)` → `verge-tcp(listener-verified,pipe-insecure)`。
+/// Windows 发现结论 → 来源标签（纯函数，全平台单测）。
+///
+/// - 选中可信管道：`verge-pipe:<name>`；若该管道 DACL 对所有用户开放（S-2）再加
+///   `;pipe-open-to-all=<name>`。
+/// - M-3 Blocked：`verge-pipe-untrusted:<files>`。
+/// - 没有 yaml：`defaults`。
+/// - yaml 写了端口：按监听者判定给 `verge-tcp(<flags>):<files>`（见 [`tcp_flags`]）；没有监听者
+///   时退回 `verge-config:<files>`，若 IPv4 无监听但 IPv6 表有 `[::]`（S-R12）再加
+///   `;ipv6-dual-stack=<port>`。
+/// - 末尾统一附 `;pipe-insecure-dacl=<names>`（Ellie PR50 Q5，无论最终选中哪条路径）。
+///
+/// `check` 只在 `tcp_from_yaml` 且需要 TCP 时由调用方提供（`None` 表示没做监听者校验）。
 #[cfg(any(windows, test))]
-fn tcp_label_for_fallback(label: &str, fallback: &super::trust::TcpFallback) -> String {
-    match (fallback, label.strip_suffix(')')) {
-        (super::trust::TcpFallback::VerifiedOnly(_), Some(head)) => {
-            format!("{head},pipe-insecure)")
+pub(super) fn windows_source_label(
+    probe_selected: Option<&str>,
+    open_to_all: &[String],
+    insecure: &[String],
+    fallback: &super::trust::TcpFallback,
+    source_files: &[String],
+    tcp: Option<(&super::trust::ListenerCheck, u16)>,
+    ec_blank: bool,
+) -> String {
+    use super::source_label::{tcp_flags, SuffixKey};
+    use super::trust::{ListenerCheck, TcpFallback};
+    let label = if let Some(pipe) = probe_selected {
+        SourceLabel::new("verge-pipe", encode(pipe)).suffix(SuffixKey::PipeOpenToAll, open_to_all)
+    } else if matches!(fallback, TcpFallback::Blocked(_)) {
+        SourceLabel::files("verge-pipe-untrusted", source_files)
+    } else if source_files.is_empty() {
+        SourceLabel::bare("defaults")
+    } else if let Some((check, port)) = tcp {
+        match (check, tcp_flags(check, fallback)) {
+            (_, Some(flags)) => SourceLabel::tcp(&flags, source_files),
+            (
+                ListenerCheck::NotListening {
+                    ipv6_dual_stack_hint: true,
+                },
+                None,
+            ) => SourceLabel::files("verge-config", source_files)
+                .suffix(SuffixKey::Ipv6DualStack, &[port.to_string()]),
+            _ => SourceLabel::files("verge-config", source_files),
         }
-        _ => label.to_string(),
-    }
-}
-
-/// Q5：把 InsecureDacl 提示附在来源标签后（无论最终选中哪条路径）。
-#[cfg(any(windows, test))]
-fn with_insecure_suffix(source: String, insecure: &[String]) -> String {
-    if insecure.is_empty() {
-        source
+    } else if ec_blank {
+        SourceLabel::files("verge-ec-blank", source_files)
     } else {
-        format!("{source};pipe-insecure-dacl={}", insecure.join("|"))
-    }
+        SourceLabel::files("verge-config", source_files)
+    };
+    label.suffix(SuffixKey::PipeInsecureDacl, insecure).finish()
 }
 
 /// 生产入口：读 Verge yaml，探测管道候选，并记入 M-3 状态。
@@ -567,7 +607,7 @@ pub fn read_verge_config_redacted() -> Result<String, String> {
 
 #[cfg(windows)]
 fn discover_controller_inner() -> DiscoverResult {
-    use super::trust::{ListenerCheck, TcpFallback, TrustPolicy};
+    use super::trust::{TcpFallback, TrustPolicy};
 
     let (parsed, source_files) = read_verge_parsed();
     let policy = TrustPolicy::production();
@@ -588,34 +628,27 @@ fn discover_controller_inner() -> DiscoverResult {
         Some(p) => (p, true),
         None => (DEFAULT_PORT, false),
     };
-    let files = source_files.join(",");
-
-    let source = if let Some(pipe) = &probe.selected {
-        format!("verge-pipe:{pipe}")
-    } else if let TcpFallback::Blocked(why) = &probe.fallback {
+    if let (None, TcpFallback::Blocked(why)) = (&probe.selected, &probe.fallback) {
         crate::append_app_log(&format!("[discover] M-3：{why}"));
-        format!("verge-pipe-untrusted:{files}")
-    } else if source_files.is_empty() {
-        "defaults".into()
-    } else if tcp_from_yaml {
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        let check = super::win_tcp::check_listener(&policy, addr);
-        match (&check, check.source_label()) {
-            (_, Some(label)) => {
-                format!("{}:{files}", tcp_label_for_fallback(label, &probe.fallback))
-            }
-            (ListenerCheck::Rejected(r), None) => {
-                format!("verge-tcp(rejected:{}):{files}", r.code())
-            }
-            _ => format!("verge-config:{files}"),
-        }
-    } else if parsed.tcp_ec_blank {
-        format!("verge-ec-blank:{files}")
-    } else {
-        format!("verge-config:{files}")
-    };
-
-    let source = with_insecure_suffix(source, &probe.insecure);
+    }
+    // 只有走到 TCP 分支时才做监听者校验（与 M1 相同的条件）。
+    let check = (probe.selected.is_none()
+        && !matches!(probe.fallback, TcpFallback::Blocked(_))
+        && !source_files.is_empty()
+        && tcp_from_yaml)
+        .then(|| {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            super::win_tcp::check_listener(&policy, addr)
+        });
+    let source = windows_source_label(
+        probe.selected.as_deref(),
+        &probe.open_to_all,
+        &probe.insecure,
+        &probe.fallback,
+        &source_files,
+        check.as_ref().map(|c| (c, port)),
+        parsed.tcp_ec_blank,
+    );
 
     DiscoverResult {
         host: "127.0.0.1".into(),
@@ -635,7 +668,7 @@ pub fn read_controller_yaml(
     default_port: u16,
     default_mixed: u16,
     sock_candidates: &[String],
-    source_prefix: &str,
+    source_prefix: &'static str,
 ) -> DiscoverResult {
     // Unix 套接字候选：只在 Unix 上做存在性检查。非 Unix（Windows）上一律为 None，
     // 绝不对候选调用 `Path::exists`——候选若是管道名，`exists` 会以默认 QoS 打开管道（M-2）。
@@ -673,7 +706,8 @@ pub fn read_controller_yaml(
                 port,
                 secret,
                 mixed_port: mixed,
-                source: format!("{source_prefix}:{}", path.display()),
+                source: SourceLabel::new(source_prefix, encode(&path.display().to_string()))
+                    .finish(),
                 sock_path,
             };
         }
@@ -704,7 +738,11 @@ pub fn read_controller_yaml(
                             port,
                             secret,
                             mixed_port: mixed,
-                            source: format!("{source_prefix}:{}", y.display()),
+                            source: SourceLabel::new(
+                                source_prefix,
+                                encode(&y.display().to_string()),
+                            )
+                            .finish(),
                             sock_path: sock_path.clone(),
                         };
                     }
@@ -718,7 +756,7 @@ pub fn read_controller_yaml(
         port: default_port,
         secret: String::new(),
         mixed_port: default_mixed,
-        source: format!("{source_prefix}:defaults"),
+        source: SourceLabel::new(source_prefix, "defaults".into()).finish(),
         sock_path,
     }
 }
@@ -894,12 +932,13 @@ pub fn discover_flclash_with_paths(
     let secret = parsed.secret;
 
     let source = if sources.is_empty() {
-        "flclash:defaults".to_string()
+        SourceLabel::new("flclash", "defaults".into())
     } else if parsed.tcp_ec_blank && parsed.port.is_none() {
-        format!("flclash-ec-disabled:{}", sources.join(","))
+        SourceLabel::files("flclash-ec-disabled", &sources)
     } else {
-        format!("flclash:{}", sources.join(","))
-    };
+        SourceLabel::files("flclash", &sources)
+    }
+    .finish();
 
     DiscoverResult {
         host: "127.0.0.1".into(),
@@ -942,7 +981,7 @@ fn discover_for_client_inner(client_id: &str) -> DiscoverResult {
         port: 9090,
         secret: String::new(),
         mixed_port: 7890,
-        source: format!("unknown-client:{client_id}"),
+        source: SourceLabel::new("unknown-client", encode(client_id)).finish(),
         sock_path: None,
     }
 }
@@ -1062,47 +1101,179 @@ mixed-port: 7897
             .any(|c| c.is_empty()));
     }
 
+    fn files(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn insecure_pipe_warning_survives_selection() {
+        use super::super::trust::TcpFallback;
+        let ok = TcpFallback::Allowed { denied_seen: false };
+        let f = files(&["C:/v/config.yaml"]);
         assert_eq!(
-            with_insecure_suffix("verge-pipe:a".into(), &[]),
+            windows_source_label(Some("a"), &[], &[], &ok, &f, None, false),
             "verge-pipe:a"
         );
         assert_eq!(
-            with_insecure_suffix("verge-pipe:b".into(), &["a".into(), "c".into()]),
+            windows_source_label(Some("b"), &[], &files(&["a", "c"]), &ok, &f, None, false),
             "verge-pipe:b;pipe-insecure-dacl=a|c"
         );
     }
 
     #[test]
     fn tcp_label_marks_insecure_pipe_fallback() {
-        use super::super::trust::TcpFallback;
+        use super::super::trust::{ListenerCheck, TcpFallback};
         let allowed = TcpFallback::Allowed { denied_seen: false };
         let vo = TcpFallback::VerifiedOnly("dacl".into());
+        let f = files(&["C:/v/config.yaml"]);
+        let verified = ListenerCheck::Verified {
+            pid: 7,
+            image: "verge-mihomo.exe".into(),
+        };
+        let unverified = ListenerCheck::Unverified {
+            pid: Some(7),
+            reasons: vec![],
+            service_mode: false,
+        };
+        let lbl = |c: &ListenerCheck, fb: &TcpFallback, ins: &[String]| {
+            windows_source_label(None, &[], ins, fb, &f, Some((c, 9097)), false)
+        };
         assert_eq!(
-            tcp_label_for_fallback("verge-tcp(listener-verified)", &allowed),
-            "verge-tcp(listener-verified)"
+            lbl(&verified, &allowed, &[]),
+            "verge-tcp(listener-verified):C:/v/config.yaml"
         );
         assert_eq!(
-            tcp_label_for_fallback("verge-tcp(listener-verified)", &vo),
-            "verge-tcp(listener-verified,pipe-insecure)"
+            lbl(&verified, &vo, &[]),
+            "verge-tcp(listener-verified,pipe-insecure):C:/v/config.yaml"
         );
         assert_eq!(
-            tcp_label_for_fallback("verge-tcp(listener-unverified)", &vo),
-            "verge-tcp(listener-unverified,pipe-insecure)"
-        );
-        // 完整来源：标签 + 文件 + Q5 后缀
-        let src = with_insecure_suffix(
-            format!(
-                "{}:{}",
-                tcp_label_for_fallback("verge-tcp(listener-verified)", &vo),
-                "C:/v/config.yaml"
-            ),
-            &["a".into()],
+            lbl(&unverified, &vo, &[]),
+            "verge-tcp(listener-unverified,pipe-insecure):C:/v/config.yaml"
         );
         assert_eq!(
-            src,
+            lbl(&verified, &vo, &files(&["a"])),
             "verge-tcp(listener-verified,pipe-insecure):C:/v/config.yaml;pipe-insecure-dacl=a"
+        );
+    }
+
+    /// C-4：SYSTEM 服务模式的监听者恒为 unverified，括号里多一项 `service-mode`。
+    #[test]
+    fn service_mode_marker() {
+        use super::super::trust::{ListenerCheck, TcpFallback};
+        let f = files(&["C:/v/config.yaml"]);
+        let svc = ListenerCheck::Unverified {
+            pid: Some(4),
+            reasons: vec![],
+            service_mode: true,
+        };
+        let ok = TcpFallback::Allowed { denied_seen: false };
+        let vo = TcpFallback::VerifiedOnly("dacl".into());
+        assert_eq!(
+            windows_source_label(None, &[], &[], &ok, &f, Some((&svc, 9097)), false),
+            "verge-tcp(listener-unverified,service-mode):C:/v/config.yaml"
+        );
+        assert_eq!(
+            windows_source_label(
+                None,
+                &[],
+                &files(&["p"]),
+                &vo,
+                &f,
+                Some((&svc, 9097)),
+                false
+            ),
+            "verge-tcp(listener-unverified,service-mode,pipe-insecure):C:/v/config.yaml;pipe-insecure-dacl=p"
+        );
+    }
+
+    /// S-R12：IPv4 无监听、IPv6 有 `[::]` 时加 `;ipv6-dual-stack=<port>`，排在 pipe-insecure-dacl 前。
+    #[test]
+    fn ipv6_dual_stack_marker() {
+        use super::super::trust::{ListenerCheck, TcpFallback};
+        let f = files(&["C:/v/config.yaml"]);
+        let ok = TcpFallback::Allowed { denied_seen: false };
+        let hint = ListenerCheck::NotListening {
+            ipv6_dual_stack_hint: true,
+        };
+        let none = ListenerCheck::NotListening {
+            ipv6_dual_stack_hint: false,
+        };
+        assert_eq!(
+            windows_source_label(None, &[], &[], &ok, &f, Some((&hint, 9097)), false),
+            "verge-config:C:/v/config.yaml;ipv6-dual-stack=9097"
+        );
+        assert_eq!(
+            windows_source_label(None, &[], &[], &ok, &f, Some((&none, 9097)), false),
+            "verge-config:C:/v/config.yaml"
+        );
+        let vo = TcpFallback::VerifiedOnly("dacl".into());
+        assert_eq!(
+            windows_source_label(
+                None,
+                &[],
+                &files(&["p"]),
+                &vo,
+                &f,
+                Some((&hint, 9097)),
+                false
+            ),
+            "verge-config:C:/v/config.yaml;ipv6-dual-stack=9097;pipe-insecure-dacl=p"
+        );
+    }
+
+    /// S-2：选中的管道对所有用户开放时加 `;pipe-open-to-all=<name>`，在 pipe-insecure-dacl 前。
+    #[test]
+    fn pipe_open_to_all_marker() {
+        use super::super::trust::TcpFallback;
+        let ok = TcpFallback::Allowed { denied_seen: false };
+        let pipe = r"\\.\pipe\verge-mihomo-sidecar-release-ab";
+        assert_eq!(
+            windows_source_label(
+                Some(pipe),
+                &files(&[pipe]),
+                &files(&["x;y"]),
+                &ok,
+                &[],
+                None,
+                false
+            ),
+            format!("verge-pipe:{pipe};pipe-open-to-all={pipe};pipe-insecure-dacl=x%3By")
+        );
+    }
+
+    /// Ellie：base 里的路径 / 管道名也要编码，裸 `;` 会截断 base。
+    #[test]
+    fn base_paths_are_encoded() {
+        use super::super::trust::{ListenerCheck, TcpFallback};
+        let ok = TcpFallback::Allowed { denied_seen: false };
+        let f = files(&[
+            r"C:\Users\a;b=c\config.yaml",
+            r"D:\x,(y)|z%\clash-verge.yaml",
+        ]);
+        let verified = ListenerCheck::Verified {
+            pid: 7,
+            image: "verge-mihomo.exe".into(),
+        };
+        assert_eq!(
+            windows_source_label(None, &[], &[], &ok, &f, Some((&verified, 9097)), false),
+            r"verge-tcp(listener-verified):C:\Users\a%3Bb%3Dc\config.yaml,D:\x%2C%28y%29%7Cz%25\clash-verge.yaml"
+        );
+        assert_eq!(
+            windows_source_label(Some("p;q"), &[], &[], &ok, &f, None, false),
+            "verge-pipe:p%3Bq"
+        );
+        let blocked = TcpFallback::Blocked("x".into());
+        assert_eq!(
+            windows_source_label(None, &[], &[], &blocked, &f, None, false),
+            r"verge-pipe-untrusted:C:\Users\a%3Bb%3Dc\config.yaml,D:\x%2C%28y%29%7Cz%25\clash-verge.yaml"
+        );
+        assert_eq!(
+            windows_source_label(None, &[], &[], &ok, &[], None, false),
+            "defaults"
+        );
+        assert_eq!(
+            windows_source_label(None, &[], &[], &ok, &files(&["a;b"]), None, true),
+            "verge-ec-blank:a%3Bb"
         );
     }
 
