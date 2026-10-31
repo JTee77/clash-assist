@@ -13,9 +13,6 @@
       "insecurePipes": [],
       "notices": [
         {
-          "kind": "tcp-unverified"
-        },
-        {
           "kind": "service-mode"
         }
       ],
@@ -47,9 +44,6 @@
           "pipes": [
             "\\\\.\\pipe\\verge-mihomo"
           ]
-        },
-        {
-          "kind": "tcp-unverified"
         },
         {
           "kind": "service-mode"
@@ -222,9 +216,6 @@
           "pipes": [
             "\\\\.\\pipe\\verge-mihomo"
           ]
-        },
-        {
-          "kind": "tcp-unverified"
         },
         {
           "kind": "service-mode"

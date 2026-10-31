@@ -189,7 +189,7 @@ function suffixTruncated(source: string, key: string): boolean {
 }
 
 /**
- * 汇总一次刷新里所有候选的来源标签，返回去重后的提示。顺序：InsecureDacl、不可信管道、
+ * 汇总一次刷新里所有候选的来源标签，返回去重后的提示；service-mode 出现时不再单独出 tcp-unverified。顺序：InsecureDacl、不可信管道、
  * 管道对所有用户开放、TCP 未验证、服务模式、TCP 拒绝原因、IPv6 双栈。
  * 传入多个来源：自动嗅探时最终选中的候选可能不是带标记的那个。
  */
@@ -245,7 +245,9 @@ export function sourceNoticesOf(sources: readonly (string | null | undefined)[])
         : { kind: "pipe-open-to-all", pipes: openPipes },
     );
   }
-  if (unverified) out.push({ kind: "tcp-unverified" });
+  // 服务模式恒为 listener-unverified（C-4）：两者同时出现时只显示 service-mode，它的文案已包含
+  // 「无法验证监听方、已拒绝连接」（Pit，PR #56）。
+  if (unverified && !serviceMode) out.push({ kind: "tcp-unverified" });
   if (serviceMode) out.push({ kind: "service-mode" });
   for (const code of rejected) out.push({ kind: "tcp-rejected", code });
   if (ipv6) out.push({ kind: "ipv6-dual-stack", ports });

@@ -203,14 +203,15 @@ describe("后端生成的来源标签样本（Rust backend_labels_match_frontend
     expect(insecurePipesOf(s.label)).toEqual(["\\\\.\\pipe\\verge-mihomo"]);
   });
 
-  it("新标记的值不会被当成管道名，service-mode 不影响 listener-unverified 识别", () => {
+  it("新标记的值不会被当成管道名；样本里有服务模式，tcp-unverified 并入 service-mode", () => {
     const all = sourceNoticesOf(backendLabels.labels.map((s) => s.label));
     const insecure = all.find((n) => n.kind === "insecure-dacl");
     expect(insecure && "pipes" in insecure ? insecure.pipes : []).toEqual([
       "\\\\.\\pipe\\verge-mihomo",
       "\\\\.\\pipe\\a;b",
     ]);
-    expect(all.some((n) => n.kind === "tcp-unverified")).toBe(true);
+    expect(all.some((n) => n.kind === "tcp-unverified")).toBe(false);
+    expect(all.some((n) => n.kind === "service-mode")).toBe(true);
   });
 });
 
@@ -282,7 +283,7 @@ describe("PR #53 新标记：service-mode / ipv6-dual-stack / pipe-open-to-all",
     }
   });
 
-  it("多个来源合并去重，顺序固定：InsecureDacl → 不可信 → 开放管道 → TCP 未验证 → 服务模式 → 拒绝 → IPv6", () => {
+  it("多个来源合并去重，顺序固定：InsecureDacl → 不可信 → 开放管道 →（TCP 未验证 / 服务模式）→ 拒绝 → IPv6", () => {
     expect(
       sourceNoticesOf([
         "verge-config:x;ipv6-dual-stack=9097",
@@ -298,7 +299,6 @@ describe("PR #53 新标记：service-mode / ipv6-dual-stack / pipe-open-to-all",
       { kind: "insecure-dacl", pipes: ["q"] },
       { kind: "untrusted-pipe" },
       { kind: "pipe-open-to-all", pipes: ["p"] },
-      { kind: "tcp-unverified" },
       { kind: "service-mode" },
       { kind: "tcp-rejected", code: "token-mismatch" },
       { kind: "ipv6-dual-stack", ports: [9097] },
@@ -311,7 +311,6 @@ describe("PR #53 新标记：service-mode / ipv6-dual-stack / pipe-open-to-all",
       "insecure-dacl",
       "untrusted-pipe",
       "pipe-open-to-all",
-      "tcp-unverified",
       "service-mode",
       "tcp-rejected",
       "ipv6-dual-stack",
@@ -365,5 +364,25 @@ describe("截断占位项 (truncated) 不是名字（PR #54 Ellie）", () => {
     expect(sourceMarkersOf("verge-config:C:\\(truncated)\\config.yaml").truncated).toBe(false);
     expect(sourceMarkersOf("verge-config:C:\\v\\%28truncated%29x.yaml").truncated).toBe(false);
     expect(insecurePipesOf("verge-pipe:b;pipe-insecure-dacl=%28truncated%29x")).toEqual(["(truncated)x"]);
+  });
+});
+
+describe("tcp-unverified 与 service-mode 合并（PR #56）", () => {
+  it("同一来源两者都有：只出 service-mode", () => {
+    expect(sourceNoticesOf(["verge-tcp(listener-unverified,service-mode):C:/v/config.yaml"])).toEqual([
+      { kind: "service-mode" },
+    ]);
+  });
+  it("分属不同来源也只出 service-mode", () => {
+    expect(
+      sourceNoticesOf(["verge-tcp(listener-unverified):C:/a/config.yaml", "verge-tcp(listener-unverified,service-mode):C:/b/config.yaml"]),
+    ).toEqual([{ kind: "service-mode" }]);
+  });
+  it("只有 listener-unverified：照旧只出 tcp-unverified", () => {
+    expect(sourceNoticesOf(["verge-tcp(listener-unverified):C:/v/config.yaml"])).toEqual([{ kind: "tcp-unverified" }]);
+    expect(sourceNoticesOf(["verge-tcp(listener-unverified,pipe-insecure):C:/v/config.yaml"])).toEqual([
+      { kind: "insecure-dacl", pipes: [] },
+      { kind: "tcp-unverified" },
+    ]);
   });
 });

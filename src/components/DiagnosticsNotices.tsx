@@ -35,7 +35,8 @@ export function noticeView(n: SourceNotice): NoticeView {
     case "tcp-unverified":
       return { level: "warn", message: "diag.tcpUnverified" };
     case "service-mode":
-      return { level: "info", message: "diag.serviceMode" };
+      // 取代 tcp-unverified（连接已被拒绝），所以与它同为警告
+      return { level: "warn", message: "diag.serviceMode" };
     case "ipv6-dual-stack":
       // 端口唯一时带端口；值解析失败或多个端口时用通用句
       return n.ports.length === 1
@@ -91,7 +92,7 @@ export async function openVergeWithFeedback(
  * InsecureDacl 只要任一来源带 `pipe-insecure-dacl` 后缀 / TCP 项 `pipe-insecure` 就显示，
  * 即使最终选中了别的候选（Ellie PR50 Q5）。macOS 来源不会命中任何提示。
  * 文案每条一句话（PR52）：InsecureDacl 只有固定句 + 升级按钮 + 重新检测；其余提示各一句 + 重新检测。
- * PR #53 新标记：pipe-open-to-all 为警告（不阻止连接），service-mode / ipv6-dual-stack 为说明。
+ * PR #53 新标记：pipe-open-to-all 为警告（不阻止连接），service-mode 为警告（取代 tcp-unverified），ipv6-dual-stack 为说明。
  */
 export function DiagnosticsNotices({
   sources,

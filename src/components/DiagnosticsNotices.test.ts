@@ -55,8 +55,8 @@ describe("noticeView：提示级别与文案", () => {
     }
   });
 
-  it("service-mode / ipv6-dual-stack 是说明；端口唯一时带端口，否则用通用句", () => {
-    expect(noticeView({ kind: "service-mode" })).toEqual({ level: "info", message: "diag.serviceMode" });
+  it("service-mode 是警告（取代 tcp-unverified），ipv6-dual-stack 是说明；端口唯一时带端口，否则用通用句", () => {
+    expect(noticeView({ kind: "service-mode" })).toEqual({ level: "warn", message: "diag.serviceMode" });
     expect(noticeView({ kind: "ipv6-dual-stack", ports: [9097] })).toEqual({
       level: "info",
       message: "diag.ipv6DualStack",
@@ -65,7 +65,7 @@ describe("noticeView：提示级别与文案", () => {
     expect(noticeView({ kind: "ipv6-dual-stack", ports: [] }).message).toBe("diag.ipv6DualStackGeneric");
     expect(noticeView({ kind: "ipv6-dual-stack", ports: [1, 2] }).message).toBe("diag.ipv6DualStackGeneric");
     expect(format("zh-Hans", "diag.ipv6DualStack", { port: 9097 })).toBe(
-      "控制端口 9097 只监听了 IPv6，请在 Clash Verge 中把外部控制地址改为 127.0.0.1:9097 后重新检测。",
+      "控制端口 9097 只监听了 IPv6，请在 Clash Verge 设置中把外部控制器地址改为 127.0.0.1:9097 后重新检测。",
     );
   });
 
@@ -119,5 +119,30 @@ describe("sourceItemsText：截断占位项显示为本地化的「已截断」�
     const text = sourceItemsText(files, false, tr(zhHans));
     expect(text.endsWith(", …（已截断）")).toBe(true);
     expect(text).not.toContain("(truncated)");
+  });
+});
+
+describe("PR #56 文案", () => {
+  it("service-mode 文案包含「无法验证监听方」及对应译文，并说明已拒绝连接", () => {
+    expect(zhHans["diag.serviceMode"]).toContain("无法验证监听方");
+    expect(zhHant["diag.serviceMode"]).toContain("無法驗證監聽方");
+    expect(en["diag.serviceMode"]).toMatch(/listener can't be verified/);
+    expect(zhHans["diag.serviceMode"]).toContain("已拒绝连接");
+    expect(zhHant["diag.serviceMode"]).toContain("已拒絕連線");
+    expect(en["diag.serviceMode"]).toContain("connection was refused");
+  });
+  it("IPv6 文案用「外部控制器」设置名，不写死点击路径", () => {
+    expect(format("zh-Hans", "diag.ipv6DualStack", { port: 9097 })).toBe(
+      "控制端口 9097 只监听了 IPv6，请在 Clash Verge 设置中把外部控制器地址改为 127.0.0.1:9097 后重新检测。",
+    );
+    for (const m of [zhHans, zhHant]) {
+      expect(m["diag.ipv6DualStack"]).toContain("外部控制器");
+      expect(m["diag.ipv6DualStackGeneric"]).toContain("外部控制器");
+    }
+    expect(en["diag.ipv6DualStack"]).toContain("external controller");
+    expect(en["diag.ipv6DualStackGeneric"]).toContain("external controller");
+    for (const m of [zhHans, zhHant, en]) {
+      expect(m["diag.ipv6DualStack"] + m["diag.ipv6DualStackGeneric"]).not.toMatch(/→|>|->/);
+    }
   });
 });

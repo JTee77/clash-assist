@@ -32,9 +32,9 @@ export const en: Messages = {
   "diag.tcpRejected.imageMismatch": "The program on the control port isn't a Verge core, so the connection was refused; restart the core in Clash Verge and check again.",
   "diag.tcpRejected.other": "The control port failed verification ({code}), so the connection was refused; restart the core in Clash Verge and check again.",
   "diag.pipeOpenToAll": "Verge's control pipe is open to every user on this PC, so anyone here can control the mihomo core through it.",
-  "diag.serviceMode": "Clash Verge runs the core in service mode, so the control port can't be confirmed as yours.",
-  "diag.ipv6DualStack": "Control port {port} only listens on IPv6; set Verge's external controller to 127.0.0.1:{port} and check again.",
-  "diag.ipv6DualStackGeneric": "The control port only listens on IPv6; set Verge's external controller to 127.0.0.1 and check again.",
+  "diag.serviceMode": "Clash Verge runs the core in service mode, so the listener can't be verified as yours and the connection was refused; turn off service mode in Clash Verge and check again.",
+  "diag.ipv6DualStack": "Control port {port} only listens on IPv6; in Clash Verge settings, set the external controller address to 127.0.0.1:{port} and check again.",
+  "diag.ipv6DualStackGeneric": "The control port only listens on IPv6; in Clash Verge settings, set the external controller address to 127.0.0.1 (same port) and check again.",
   "diag.truncated": "… (list truncated)",
 
   "crash.title": "Something went wrong",
