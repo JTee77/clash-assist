@@ -1635,7 +1635,11 @@ resolver #1
         {
             Ok(o) if o.status.success() => o,
             other => {
-                eprintln!("跳过：PowerShell 不可用 {other:?}");
+                // PR #51 M-1：CI 上不允许静默跳过（通过的测试不显示 stderr，看不出是否真的对照过）。
+                if std::env::var_os("CI").is_some() {
+                    panic!("CI 上 PowerShell 对照必须执行，但调用失败：{other:?}");
+                }
+                eprintln!("跳过（非 CI）：PowerShell 不可用 {other:?}");
                 return;
             }
         };
