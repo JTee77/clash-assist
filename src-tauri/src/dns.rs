@@ -354,7 +354,9 @@ pub struct WinPick<'a> {
     pub source: &'static str,
     /// 选择理由（PR #51 M-2）。
     pub reasons: Vec<String>,
-    /// 需要用户注意的情况（如 TUN 不是默认路由网卡）。
+    /// 需要用户注意的情况（如 TUN 不是默认路由网卡）。目前只写进 raw_hint。
+    // TODO(后续 PR，与 M3 前端一起)：把 warnings 做成 DnsResolversResult 的结构化字段，
+    // 前端在 TUN 非默认路由且 whoami 判「未泄漏」时把 DNS 卡降为 warn（PR #51 r2 建议）。
     pub warnings: Vec<String>,
 }
 
@@ -1655,5 +1657,18 @@ resolver #1
             "ifIndex {} 的 DNS 与 PowerShell 不一致",
             a.if_index
         );
+        // PR #51 r2 建议：把「真的比对过」留在 CI 日志里。通过的测试的 stdout 会被 cargo
+        // 吞掉，所以有 GITHUB_STEP_SUMMARY 时同时写进 job summary。
+        let marker = format!(
+            "[win-dns-crosscheck] 已执行：{} ifIndex {} 的 DNS {:?} 与 Get-DnsClientServerAddress 一致",
+            pick.source, a.if_index, ours
+        );
+        println!("{marker}");
+        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+            use std::io::Write as _;
+            let mut f = crate::safe_fs::open_append(std::path::Path::new(&path))
+                .expect("打开 GITHUB_STEP_SUMMARY");
+            writeln!(f, "- {marker}").expect("写 GITHUB_STEP_SUMMARY");
+        }
     }
 }
