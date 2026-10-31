@@ -10,7 +10,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetAdaptersAddresses, GetBestRoute2, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST,
-    IP_ADAPTER_ADDRESSES_LH, MIB_IPFORWARD_ROW2,
+    IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_IPV4_ENABLED, MIB_IPFORWARD_ROW2,
 };
 use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows_sys::Win32::Networking::WinSock::{
@@ -116,7 +116,9 @@ unsafe fn walk(buf: &AlignedBuf) -> Vec<AdapterDns> {
             if_type: a.IfType,
             oper_up: a.OperStatus == IfOperStatusUp,
             dns,
+            ipv4_enabled: a.Anonymous2.Flags & IP_ADAPTER_IPV4_ENABLED != 0,
             ipv4_metric: a.Ipv4Metric,
+            ipv6_metric: a.Ipv6Metric,
         });
         p = a.Next;
     }
