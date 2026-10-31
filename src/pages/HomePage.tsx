@@ -4,6 +4,7 @@ import { ThemeToggle } from "../components/ThemeToggle";
 import { LanguageToggle } from "../components/LanguageToggle";
 import { useI18n } from "../i18n";
 import { NodeCard } from "../components/NodeCard";
+import { DiagnosticsNotices } from "../components/DiagnosticsNotices";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CLIENT_OPTIONS,
@@ -25,6 +26,7 @@ export function HomePage({
   connection,
   busy,
   nodes,
+  discoverySources = [],
   clientId,
   onClientIdChange,
   onRefresh,
@@ -33,6 +35,8 @@ export function HomePage({
   connection: ConnectionState;
   busy?: boolean;
   nodes: ProxyNode[];
+  /** 最近一次刷新里所有候选的发现来源（Windows 诊断提示）。 */
+  discoverySources?: string[];
   clientId: ClientId | null;
   onClientIdChange: (id: ClientId) => void;
   onRefresh?: (explicitClientId?: ClientId | null) => Promise<unknown> | void;
@@ -194,6 +198,12 @@ export function HomePage({
           <ThemeToggle />
         </div>
       </header>
+
+      <DiagnosticsNotices
+        sources={discoverySources}
+        busy={!!busy || refreshing || running}
+        onRecheck={() => void refreshAndGate()}
+      />
 
       {gate?.ok && orderedNodes.length > 0 ? (
         <>

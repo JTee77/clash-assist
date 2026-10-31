@@ -2,9 +2,11 @@ import { useCallback, useRef, useState } from "react";
 import {
   CLIENT_OPTIONS,
   CLIENT_STORAGE_KEY,
+  baseSource,
   defaultConfig,
   discoverAndProbe,
   getProxies,
+  hasInsecureDacl,
   mockNodes,
   normalizeClientId,
   type ClientId,
@@ -48,11 +50,18 @@ function sniffCandidateOrder(preferred: ClientId | null): ClientId[] {
   return selectable;
 }
 
-/** 判断某客户端是否在本地硬盘上留下了真实配置/Socket 痕迹（而非纯默认回退） */
-function hasClientFootprint(state: ConnectionState): boolean {
+/**
+ * 判断某客户端是否在本地硬盘上留下了真实配置/Socket 痕迹（而非纯默认回退）。
+ * Windows（Ellie PR50 第 4 条，M3 定）：带 `;pipe-insecure-dacl=` 后缀 / `pipe-insecure` 的来源
+ * 不算「已安装」——它的控制管道已被拒绝，由诊断提示单独说明；`defaults`（含带后缀的
+ * `defaults;pipe-insecure-dacl=…`）同样不算。
+ */
+export function hasClientFootprint(state: ConnectionState): boolean {
   const src = state.config?.source ?? "";
-  if (!src || src === "defaults" || src === "unset-default") return false;
-  if (src.endsWith(":defaults") || src.startsWith("preset-")) return false;
+  if (hasInsecureDacl(src)) return false;
+  const base = baseSource(src);
+  if (!base || base === "defaults" || base === "unset-default") return false;
+  if (base.endsWith(":defaults") || base.startsWith("preset-")) return false;
   return true;
 }
 
@@ -86,6 +95,8 @@ export function useConnection() {
     proxiesError: null,
   });
   const [nodes, setNodes] = useState<ProxyNode[]>([]);
+  /** 最近一次刷新里所有候选的发现来源（诊断提示用：InsecureDacl 等不能只看最终选中的那个）。 */
+  const [discoverySources, setDiscoverySources] = useState<string[]>([]);
   const [manual, setManual] = useState<Partial<ControllerConfig>>({});
   const [busy, setBusy] = useState(false);
   const refreshGen = useRef(0);
@@ -133,6 +144,7 @@ export function useConnection() {
           if (gen !== refreshGen.current) return next;
           setState(next);
           setNodes(list);
+          setDiscoverySources([]);
           return next;
         }
 
@@ -144,6 +156,7 @@ export function useConnection() {
           setClientId(explicitClientId);
           const next = await discoverAndProbe(manualArg, explicitClientId);
           if (gen !== refreshGen.current) return next;
+          setDiscoverySources(next.config?.source ? [next.config.source] : []);
 
           if (
             !next.config ||
@@ -200,6 +213,9 @@ export function useConnection() {
             break;
           }
         }
+        setDiscoverySources(
+          results.flatMap((r) => (r.state.config?.source ? [r.state.config.source] : [])),
+        );
 
         // 2a) 有软件在线响应：直接选中并拉取节点
         if (connectedHit && connectedHit.state.config) {
@@ -300,6 +316,7 @@ export function useConnection() {
         if (gen === refreshGen.current) {
           setState(next);
           setNodes([]);
+          setDiscoverySources([]);
         }
         return next;
       } finally {
@@ -322,6 +339,7 @@ export function useConnection() {
   return {
     state,
     nodes,
+    discoverySources,
     busy,
     manual,
     forceMock,
