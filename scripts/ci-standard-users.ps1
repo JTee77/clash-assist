@@ -735,6 +735,13 @@ function Get-ProfileDiagnostics([string]$Sid) {
       })
     $parts.Add("被占用的文件（$($locked.Count)）=$(($locked | Select-Object -First 15) -join ',')")
   }
+  # 用户配置文件服务的 1530：“注册表文件仍被其他应用程序或服务使用”，消息里列出持有句柄的进程
+  try {
+    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Microsoft-Windows-User Profiles Service'; Id = 1530 } -MaxEvents 5 -ErrorAction Stop |
+        Where-Object { $_.Message -match [regex]::Escape($Sid) })
+    foreach ($e in $ev) { $parts.Add("事件 1530 @$($e.TimeCreated.ToString('o'))：$((($e.Message -replace '\s+', ' ')).Trim())") }
+    if ($ev.Count -eq 0) { $parts.Add('无相关 1530 事件') }
+  } catch { $parts.Add("1530 事件：$($_.Exception.Message)") }
   return ($parts -join '; ')
 }
 
