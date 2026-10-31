@@ -9,6 +9,8 @@ mod cli_shim;
 mod cli_unavailable;
 mod dns;
 mod dns_query;
+#[cfg(windows)]
+mod dns_windows;
 mod http_body;
 mod mihomo;
 mod platform;

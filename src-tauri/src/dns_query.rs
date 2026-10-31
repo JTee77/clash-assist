@@ -180,6 +180,26 @@ fn parse_txt_rdata(rdata: &[u8]) -> Result<Vec<String>, DnsError> {
     Ok(strings)
 }
 
+/// `server_ip`（IPv4、IPv6 或 `[IPv6]`）→ `ip:53`。
+///
+/// 先按 `IpAddr` 解析再拼端口：原来的 `format!("{bare}:53").parse::<SocketAddr>()`
+/// 对裸 IPv6（如 `2001:4860:4860::8888`）会得到 `…::8888:53`，解析失败，
+/// 导致 IPv6 解析器永远查不了（Windows 网卡常同时配有 IPv6 DNS，M2）。
+fn resolver_socket_addr(server_ip: &str) -> io::Result<SocketAddr> {
+    // Strip brackets if caller passes "[::1]" form
+    let bare = server_ip
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let ip: std::net::IpAddr = bare.parse().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("bad resolver addr: {e}"),
+        )
+    })?;
+    Ok(SocketAddr::new(ip, DNS_PORT))
+}
+
 /// Send a DNS query over UDP to `server_ip:53`, wait for response with `timeout`.
 /// Returns the raw response bytes. Auto-selects IPv4/IPv6 socket family.
 fn send_udp_query(
@@ -191,14 +211,7 @@ fn send_udp_query(
     if cancelled() {
         return Err(DnsError::Cancelled);
     }
-    // Strip brackets if caller passes "[::1]" form
-    let bare = server_ip.trim_start_matches('[').trim_end_matches(']');
-    let addr: SocketAddr = format!("{bare}:{DNS_PORT}").parse().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("bad resolver addr: {e}"),
-        )
-    })?;
+    let addr = resolver_socket_addr(server_ip)?;
 
     let bind_addr: SocketAddr = if addr.is_ipv4() {
         "0.0.0.0:0".parse().unwrap()
@@ -261,6 +274,26 @@ pub fn dns_txt_lookup(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolver_socket_addr_accepts_v4_v6_and_brackets() {
+        assert_eq!(
+            resolver_socket_addr("192.168.1.1").unwrap().to_string(),
+            "192.168.1.1:53"
+        );
+        assert_eq!(
+            resolver_socket_addr("2001:4860:4860::8888")
+                .unwrap()
+                .to_string(),
+            "[2001:4860:4860::8888]:53"
+        );
+        assert_eq!(
+            resolver_socket_addr("[::1]").unwrap().to_string(),
+            "[::1]:53"
+        );
+        assert!(resolver_socket_addr("not-an-ip").is_err());
+        assert!(resolver_socket_addr("").is_err());
+    }
+
     use super::*;
 
     const MAX_NAME_EXPANSION_DEPTH: u32 = 10;

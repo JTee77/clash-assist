@@ -42,6 +42,21 @@ export interface CheckCard {
   unverified?: boolean;
   /** Machine-readable probe outputs; scoring reads these instead of parsing copy. */
   metrics?: CheckCardMetrics;
+  /**
+   * Windows DNS 卡的网卡摘要（后端 raw_hint，含网卡名、描述、内网 DNS）。只用于展示：
+   * 不拼进 `process`，所以评分的关键词匹配读不到它（PR #51 M-4：中文 Windows 的
+   * PPPoE 网卡叫「宽带连接」）；写结果缓存前会被去掉（PR #51 S-3）。
+   * macOS 的 scutil 原文仍按原样放在 `process` 里，行为不变。
+   */
+  adapterHint?: string;
+}
+
+/** 卡片「过程」区展示的全文：`process`（或旧字段 `detail`）后接网卡摘要。 */
+export function cardProcessText(card: CheckCard): string | undefined {
+  const base = card.process ?? card.detail;
+  if (!card.adapterHint) return base;
+  const hint = `网卡摘要：\n${card.adapterHint}`;
+  return base ? `${base}\n${hint}` : hint;
 }
 
 export interface ExitIpInfo {

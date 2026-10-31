@@ -99,11 +99,30 @@ function readRawEntry(scope: string): CachedResultEntry | null {
   }
 }
 
+/**
+ * 写缓存前去掉 Windows 的网卡摘要（`adapterHint`：网卡名、描述、内网 DNS），
+ * 不在 localStorage 里留 7 天（PR #51 S-3）。缓存结果没有这一段时，卡片只是不显示网卡摘要。
+ */
+function stripAdapterHint(cards: CheckCard[]): CheckCard[] {
+  return cards.map((c) => {
+    if (!c || c.adapterHint === undefined) return c;
+    const { adapterHint: _dropped, ...rest } = c;
+    return rest;
+  });
+}
+
 function writeRawEntry(scope: string, entry: CachedResultEntry): void {
   const ls = getStorage();
   if (!ls) return;
   try {
-    ls.setItem(keyFor(scope), JSON.stringify(entry));
+    const sanitized: CachedResultEntry = {
+      ...entry,
+      envCards: stripAdapterHint(entry.envCards),
+      scores: entry.scores.map((s) =>
+        s && Array.isArray(s.cards) ? { ...s, cards: stripAdapterHint(s.cards) } : s,
+      ),
+    };
+    ls.setItem(keyFor(scope), JSON.stringify(sanitized));
   } catch {
     /* ignore quota / storage errors */
   }
