@@ -5,6 +5,7 @@ import {
   baseSource,
   hasInsecureDacl,
   insecurePipesOf,
+  parseSource,
   sourceNoticesOf,
 } from "./sourceDiagnostics";
 
@@ -25,6 +26,62 @@ describe("InsecureDacl 来源识别", () => {
     expect(insecurePipesOf("verge-pipe:b;pipe-insecure-dacl=a|c")).toEqual(["a", "c"]);
     expect(baseSource("verge-pipe:b")).toBe("verge-pipe:b");
     expect(insecurePipesOf("verge-pipe:b")).toEqual([]);
+  });
+});
+
+describe("后缀结构化解析（PR52 Ellie must-fix 1）", () => {
+  it("路径 / 管道名里出现 pipe-insecure 字样不误报", () => {
+    expect(hasInsecureDacl("verge-config:C:/pipe-insecure/config.yaml")).toBe(false);
+    expect(hasInsecureDacl("verge-pipe:pipe-insecure-dacl")).toBe(false);
+    expect(hasInsecureDacl("verge-tcp(listener-verified):C:/pipe-insecure/config.yaml")).toBe(false);
+    expect(hasInsecureDacl("verge-tcp(listener-verified,pipe-insecure-x):C:/v/config.yaml")).toBe(false);
+    expect(hasInsecureDacl("verge-pipe:b;pipe-open-to-all=pipe-insecure")).toBe(false);
+    expect(hasInsecureDacl("verge-pipe:b;x-pipe-insecure-dacl=a")).toBe(false);
+    expect(sourceNoticesOf(["verge-config:C:/pipe-insecure/config.yaml"])).toEqual([]);
+  });
+
+  it("TCP 括号内只有整项 pipe-insecure 才算", () => {
+    expect(hasInsecureDacl("verge-tcp(pipe-insecure,listener-unverified):x")).toBe(true);
+    expect(hasInsecureDacl("verge-tcp( listener-verified , pipe-insecure ):x")).toBe(true);
+  });
+
+  it("未知键与新键（ipv6-dual-stack / pipe-open-to-all）忽略，不当成管道名", () => {
+    const s = "verge-pipe:b;ipv6-dual-stack=9097;pipe-insecure-dacl=a|c;pipe-open-to-all=b;future=1";
+    expect(baseSource(s)).toBe("verge-pipe:b");
+    expect(insecurePipesOf(s)).toEqual(["a", "c"]);
+    expect(sourceNoticesOf([s])).toEqual([{ kind: "insecure-dacl", pipes: ["a", "c"] }]);
+    const noDacl = "verge-config:C:/v/config.yaml;ipv6-dual-stack=9097;pipe-open-to-all=x|y;zzz";
+    expect(hasInsecureDacl(noDacl)).toBe(false);
+    expect(insecurePipesOf(noDacl)).toEqual([]);
+    expect(sourceNoticesOf([noDacl])).toEqual([]);
+  });
+
+  it("值按百分号解码", () => {
+    const s = "verge-pipe:b;pipe-insecure-dacl=verge%3Bmihomo|a%7Cb|c%2Cd%29%3De%25";
+    expect(insecurePipesOf(s)).toEqual(["verge;mihomo", "a|b", "c,d)=e%"]);
+    expect(parseSource(s)).toEqual({
+      base: "verge-pipe:b",
+      tcpItems: null,
+      insecureDacl: true,
+      insecurePipes: ["verge;mihomo", "a|b", "c,d)=e%"],
+    });
+  });
+
+  it("值解析失败（坏编码 / 未编码保留字符 / 空值 / 缺 =）仍显示通用 InsecureDacl 提示", () => {
+    for (const s of [
+      "verge-pipe:b;pipe-insecure-dacl=%E4%B8",
+      "verge-pipe:b;pipe-insecure-dacl=a|%zz",
+      "verge-pipe:b;pipe-insecure-dacl=a=b",
+      "verge-pipe:b;pipe-insecure-dacl=a,b",
+      "verge-pipe:b;pipe-insecure-dacl=a||b",
+      "verge-pipe:b;pipe-insecure-dacl=",
+      "verge-pipe:b;pipe-insecure-dacl",
+    ]) {
+      expect(hasInsecureDacl(s), s).toBe(true);
+      expect(insecurePipesOf(s), s).toEqual([]);
+      expect(sourceNoticesOf([s]), s).toEqual([{ kind: "insecure-dacl", pipes: [] }]);
+      expect(baseSource(s), s).toBe("verge-pipe:b");
+    }
   });
 });
 
