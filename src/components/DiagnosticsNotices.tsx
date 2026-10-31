@@ -30,7 +30,7 @@ export async function openVergeWithFeedback(
  * 连接诊断提示（windows-plan §2.7）：根据本次刷新所有候选的发现来源标签展示。
  * InsecureDacl 只要任一来源带 `pipe-insecure-dacl` 后缀 / TCP 项 `pipe-insecure` 就显示，
  * 即使最终选中了别的候选（Ellie PR50 Q5）。macOS 来源不会命中任何提示。
- * 文案每条一句话（PR52）：InsecureDacl 只有固定句 + 升级按钮 + 重新检测。
+ * 文案每条一句话（PR52）：InsecureDacl 只有固定句 + 升级按钮 + 重新检测；其余提示各一句 + 重新检测。
  */
 export function DiagnosticsNotices({
   sources,
@@ -104,10 +104,8 @@ export function DiagnosticsNotices({
         const reasonKey = REJECT_KEYS[n.code];
         return (
           <div key={noticeKey(n)} className="gate-banner diag-notice diag-notice-warn" role="status">
-            <div className="gate-banner-title">{t("diag.tcpRejected.title")}</div>
             <div className="gate-banner-msg">
-              {reasonKey ? t(reasonKey) : t("diag.tcpRejected.other", { code: n.code })}{" "}
-              {t("diag.tcpRejected.guide")}
+              {reasonKey ? t(reasonKey) : t("diag.tcpRejected.other", { code: n.code })}
             </div>
             <div className="diag-notice-actions">{recheck}</div>
           </div>
