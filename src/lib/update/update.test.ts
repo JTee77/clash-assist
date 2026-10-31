@@ -83,6 +83,26 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     expect(canOneClick(base)).toBe(false);
   });
 
+  it("canOneClick: Windows 无 one_click 时走发布页；one_click / portable 由 Rust 决定（M5）", () => {
+    const base = {
+      current: "0.2.8",
+      latest: "0.2.9",
+      update_available: true,
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.2.9",
+      dmg_url:
+        "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/Clash.Assist_0.2.9_aarch64.dmg",
+      dmg_sha256: "sha256:abcd",
+    };
+    // Windows：Mac 的 DMG 字段不能触发一键更新
+    expect(canOneClick(base, true)).toBe(false);
+    expect(canOneClick(base, false)).toBe(true);
+    // Rust 显式给出 one_click 时以它为准
+    expect(canOneClick({ ...base, one_click: true, install_kind: "nsis" }, true)).toBe(true);
+    expect(canOneClick({ ...base, one_click: false }, false)).toBe(false);
+    // portable 永远只去发布页
+    expect(canOneClick({ ...base, one_click: true, install_kind: "portable" }, true)).toBe(false);
+  });
+
   it("openReleasePage swallows errors gracefully", async () => {
     h.invoke.mockRejectedValue(new Error("blocked"));
     await expect(

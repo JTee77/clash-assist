@@ -13,6 +13,12 @@ export const zhHant: Messages = {
   "update.relaunch": "立即重新啟動",
   "update.restarting": "正在重新啟動…",
   "update.fallbackOpened": "已為你開啟下載頁",
+  "update.goPortable": "前往發布頁下載",
+  "update.pending": "上次更新未完成",
+  "update.retry": "重試",
+  "update.openRelease": "前往發布頁",
+  "update.readyWin": "新版本 {v} 已下載好",
+  "update.readyHintWin": "點「立即重新啟動」完成安裝，安裝期間軟體會短暫關閉",
   close: "關閉",
 
   "crash.title": "介面出錯了",

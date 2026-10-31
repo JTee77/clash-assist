@@ -13,6 +13,12 @@ export const en: Messages = {
   "update.relaunch": "Restart now",
   "update.restarting": "Restarting…",
   "update.fallbackOpened": "Opened download page",
+  "update.goPortable": "Download from release page",
+  "update.pending": "Last update did not finish",
+  "update.retry": "Retry",
+  "update.openRelease": "Release page",
+  "update.readyWin": "Version {v} is downloaded",
+  "update.readyHintWin": "Click “Restart now” to install; the app closes briefly while installing",
   close: "Close",
 
   "crash.title": "Something went wrong",

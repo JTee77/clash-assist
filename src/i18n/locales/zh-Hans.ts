@@ -11,6 +11,12 @@ export const zhHans = {
   "update.relaunch": "立即重启",
   "update.restarting": "正在重启…",
   "update.fallbackOpened": "已为你打开下载页",
+  "update.goPortable": "前往发布页下载",
+  "update.pending": "上次更新未完成",
+  "update.retry": "重试",
+  "update.openRelease": "前往发布页",
+  "update.readyWin": "新版本 {v} 已下载好",
+  "update.readyHintWin": "点「立即重启」完成安装，安装期间软件会短暂关闭",
   close: "关闭",
 
   "crash.title": "界面出错了",

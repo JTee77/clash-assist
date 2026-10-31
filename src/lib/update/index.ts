@@ -5,6 +5,22 @@
  * 3) `relaunchUpdatedApp`：由用户主动点击「立即重启」时拉起新版并退出（若不点，下次重开自动生效）。
  */
 import { invoke } from "@tauri-apps/api/core";
+import { isWindows } from "../platform";
+
+/**
+ * 安装形态（windows-plan §2.4 / M5，由 Rust 判定）：portable 只能去发布页手动下载。
+ * 旧版 Rust（M5 之前）不返回该字段。
+ */
+export type InstallKind = "dmg" | "nsis" | "portable";
+
+/**
+ * 上次更新未完成（windows-plan §2.4-8，M5 由 Rust 启动对账后填入）：
+ * 前端据此在更新条里提示「上次更新未完成」，提供「重试」与「前往发布页」。
+ */
+export type UpdatePending = {
+  from: string;
+  to: string;
+};
 
 export type UpdateInfo = {
   current: string;
@@ -14,6 +30,10 @@ export type UpdateInfo = {
   fake?: boolean;
   dmg_url?: string;
   dmg_sha256?: string;
+  /** M5：Rust 判定能否一键更新（有此字段时以它为准）。 */
+  one_click?: boolean;
+  install_kind?: InstallKind;
+  pending?: UpdatePending | null;
 };
 
 let once: Promise<UpdateInfo | null> | null = null;
@@ -40,10 +60,16 @@ export function openReleasePage(url: string): Promise<void> {
 }
 
 /**
- * 能否走「一键更新」：release 同时提供 .dmg 直链与 SHA-256 摘要才行。
- * 缺摘要时 Rust 侧会拒绝下载（fail closed），这里提前改走「去下载页」，避免先报错再回落。
+ * 能否走「一键更新」：
+ * - Rust 返回了 `one_click`（M5）→ 以它为准；portable 一律不行（只能去发布页下载）；
+ * - Windows 上 Rust 尚未给出 `one_click` → 不走一键更新（Mac 的 DMG 安装链在 Windows 不可用），直接去发布页；
+ * - Mac：release 同时提供 .dmg 直链与 SHA-256 摘要才行。缺摘要时 Rust 侧会拒绝下载（fail closed），
+ *   这里提前改走「去下载页」，避免先报错再回落。
  */
-export function canOneClick(info: UpdateInfo): boolean {
+export function canOneClick(info: UpdateInfo, windows: boolean = isWindows()): boolean {
+  if (info.install_kind === "portable") return false;
+  if (typeof info.one_click === "boolean") return info.one_click;
+  if (windows) return false;
   return Boolean(info.dmg_url && info.dmg_sha256);
 }
 
