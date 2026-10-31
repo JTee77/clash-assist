@@ -58,8 +58,8 @@ const LEVEL_CLASS: Record<NoticeLevel, string> = {
 };
 
 /**
- * 这条提示是否带「重新检测」按钮。pipe-open-to-all 不带（PR #56 Ellie S-2）：它只是提醒、不影响使用，
- * 重新检测也改变不了结果（要靠升级 Clash Verge）。
+ * 这条提示是否带「重新检测」按钮。pipe-open-to-all 不带（PR #56 Ellie S-2 / M-2）：它只是警告、照常连接，
+ * 重新检测也改变不了结果（管道 DACL 由上游决定，目前上游尚无修复）。
  */
 export function noticeHasRecheck(n: SourceNotice): boolean {
   return n.kind !== "pipe-open-to-all";

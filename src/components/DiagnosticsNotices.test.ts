@@ -47,7 +47,7 @@ describe("noticeView：提示级别与文案", () => {
     });
     expect(noticeView({ kind: "pipe-open-to-all", pipes: [] }).level).toBe("warn");
     expect(zhHans["diag.pipeOpenToAll"]).toBe(
-      "Clash Verge 的控制管道权限过宽，不影响本应用的使用，建议升级 Clash Verge。",
+      "Clash Verge 的控制管道对本机所有用户开放，其他用户可借此操控内核，目前上游尚无修复。",
     );
     // 不阻止连接：文案不能说已拒绝 / 已停止
     for (const m of [zhHans, zhHant, en]) {
@@ -128,11 +128,14 @@ describe("PR #56 文案", () => {
     expect(zhHant["diag.ipv6DualStackGeneric"]).toContain("127.0.0.1:<原連接埠>");
     expect(en["diag.ipv6DualStackGeneric"]).toContain("127.0.0.1:<original port>");
   });
-  it("pipe-open-to-all（S-2）：一句话说明权限过宽、不影响使用、建议升级；不让用户重新检测，也不带重新检测按钮", () => {
-    expect(zhHans["diag.pipeOpenToAll"]).toMatch(/权限过宽.*不影响本应用的使用.*建议升级 Clash Verge/);
-    expect(zhHant["diag.pipeOpenToAll"]).toMatch(/權限過寬.*不影響本應用程式的使用.*建議升級 Clash Verge/);
-    expect(en["diag.pipeOpenToAll"]).toMatch(/too broad.*doesn't affect using this app.*recommend upgrading Clash Verge/);
+  it("pipe-open-to-all（S-2 / M-2）：一句话说明管道对所有用户开放、可被操控内核、上游尚无修复；不让用户重新检测，也不带重新检测按钮", () => {
+    expect(zhHans["diag.pipeOpenToAll"]).toBe("Clash Verge 的控制管道对本机所有用户开放，其他用户可借此操控内核，目前上游尚无修复。");
+    expect(zhHant["diag.pipeOpenToAll"]).toBe("Clash Verge 的控制管道對本機所有使用者開放，其他使用者可藉此操控核心，目前上游尚無修復。");
+    expect(en["diag.pipeOpenToAll"]).toBe("Clash Verge's control pipe is open to all users on this PC, so other users can control the core through it; there is no upstream fix yet.");
     for (const m of [zhHans, zhHant, en]) {
+      // M-2：升级不能消除问题，也不能淡化风险
+      expect(m["diag.pipeOpenToAll"]).not.toMatch(/升级|升級|upgrade/i);
+      expect(m["diag.pipeOpenToAll"]).not.toMatch(/不影响|不影響|doesn't affect|does not affect/i);
       expect(m["diag.pipeOpenToAll"]).not.toMatch(/重新检测|重新檢測|check again/i);
     }
     expect(noticeHasRecheck({ kind: "pipe-open-to-all", pipes: [] })).toBe(false);

@@ -29,7 +29,7 @@ export const zhHans = {
   "diag.tcpRejected.tokenMismatch": "监听控制端口的程序不是你本人运行的，已拒绝连接，请在 Clash Verge 中重启内核后重新检测。",
   "diag.tcpRejected.imageMismatch": "监听控制端口的程序不是 Verge 内核，已拒绝连接，请在 Clash Verge 中重启内核后重新检测。",
   "diag.tcpRejected.other": "控制端口未通过校验（{code}），已拒绝连接，请在 Clash Verge 中重启内核后重新检测。",
-  "diag.pipeOpenToAll": "Clash Verge 的控制管道权限过宽，不影响本应用的使用，建议升级 Clash Verge。",
+  "diag.pipeOpenToAll": "Clash Verge 的控制管道对本机所有用户开放，其他用户可借此操控内核，目前上游尚无修复。",
   "diag.serviceMode": "Clash Verge 正以服务模式运行内核，无法验证监听方是否为你本人，已拒绝连接，请在 Clash Verge 中关闭服务模式后重新检测。",
   "diag.ipv6DualStack": "控制端口 {port} 只监听了 IPv6，请在 Clash Verge 设置中把外部控制器地址改为 127.0.0.1:{port} 后重新检测。",
   "diag.ipv6DualStackGeneric": "控制端口只监听了 IPv6，请在 Clash Verge 设置中把外部控制器地址改为 127.0.0.1:<原端口> 后重新检测。",
