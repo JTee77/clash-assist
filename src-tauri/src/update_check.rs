@@ -271,6 +271,16 @@ fn active_local_proxy_port() -> Option<u16> {
     None
 }
 
+/// 异步调用方用这个（M4c）：`active_local_proxy_port` 是同步的（读配置、探测管道、短连接），
+/// Windows 上的管道探测内部用 `block_on`，在 tokio 工作线程上直接调用会 panic
+/// （"Cannot start a runtime from within a runtime"；release 为 `panic = "abort"`，进程以 0xC0000409 退出）。
+async fn active_local_proxy_port_async() -> Option<u16> {
+    tauri::async_runtime::spawn_blocking(active_local_proxy_port)
+        .await
+        .ok()
+        .flatten()
+}
+
 fn build_http_client(
     current: &str,
     timeout_ms: Option<u64>,
@@ -328,7 +338,7 @@ async fn get_bytes_with_proxy_fallback(
         timeout_ms,
         connect_ms,
         accept_header,
-        active_local_proxy_port(),
+        active_local_proxy_port_async().await,
     )
     .await
 }
@@ -844,7 +854,7 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建临时更新目录失败：{e}"))?;
 
     let dmg_path = work_dir.join("update.dmg");
-    let proxy_port = active_local_proxy_port();
+    let proxy_port = active_local_proxy_port_async().await;
     if let Err(e) = stream_dmg_to_file(
         &resolved_url,
         env!("CARGO_PKG_VERSION"),
@@ -933,6 +943,17 @@ pub fn relaunch_updated_app() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M4c 回归：在 tokio 工作线程上（与 `check_update` 命令相同的上下文）探测代理端口不得 panic。
+    /// 旧实现在工作线程上同步调用 discovery，Windows 的管道探测内部 `block_on`，panic
+    /// "Cannot start a runtime from within a runtime"（release 下即 0xC0000409 闪退）。
+    #[test]
+    fn proxy_port_probe_is_safe_on_runtime_worker() {
+        let r = tauri::async_runtime::block_on(async {
+            tauri::async_runtime::spawn(active_local_proxy_port_async()).await
+        });
+        assert!(r.is_ok(), "在工作线程上探测代理端口 panic：{r:?}");
+    }
 
     #[test]
     fn semver_compare() {
