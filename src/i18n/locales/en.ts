@@ -31,6 +31,10 @@ export const en: Messages = {
   "diag.tcpRejected.tokenMismatch": "The program on the control port wasn't started by you, so the connection was refused; restart the core in Clash Verge and check again.",
   "diag.tcpRejected.imageMismatch": "The program on the control port isn't a Verge core, so the connection was refused; restart the core in Clash Verge and check again.",
   "diag.tcpRejected.other": "The control port failed verification ({code}), so the connection was refused; restart the core in Clash Verge and check again.",
+  "diag.pipeOpenToAll": "Clash Verge's control pipe is open to all users on this PC, so other users can control the core through it; there is no upstream fix yet.",
+  "diag.serviceMode": "Clash Verge runs the core in service mode, so the listener can't be verified as yours and the connection was refused; turn off service mode in Clash Verge and check again.",
+  "diag.ipv6DualStack": "Control port {port} only listens on IPv6; in Clash Verge settings, set the external controller address to 127.0.0.1:{port} and check again.",
+  "diag.ipv6DualStackGeneric": "The control port only listens on IPv6; in Clash Verge settings, set the external controller address to 127.0.0.1:<original port> and check again.",
 
   "crash.title": "Something went wrong",
   "crash.body": "The app didn't fully crash, but this page failed to render. Try reloading, or quit and run it from a single terminal:",
