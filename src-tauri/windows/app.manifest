@@ -1,5 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <!-- tauri-build 默认清单：Common Controls v6（对话框等需要）。 -->
+  <!-- Same as the tauri-build default manifest: Common Controls v6 (needed by dialogs). -->
   <dependency>
     <dependentAssembly>
       <assemblyIdentity
@@ -12,7 +13,8 @@
       />
     </dependentAssembly>
   </dependency>
-  <!-- windows-plan §2.7 / V11：声明 Per-Monitor v2 DPI 感知（CI 用 mt.exe 导出清单校验）。 -->
+  <!-- windows-plan 2.7 / V11: declare Per-Monitor v2 DPI awareness (CI extracts it with mt.exe).
+       Keep this file ASCII-only: mt.exe failed to read it with CJK comments (c101008c). -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
