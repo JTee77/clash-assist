@@ -290,6 +290,9 @@ impl SourceLabel {
             let mut order: Vec<usize> = (0..segs.len()).collect();
             order.sort_by_key(|&i| segs[i].len());
             let mut left = MAX_LABEL_BYTES.saturating_sub(fixed);
+            // 注意：macOS 的 body 是固定结构 `<sock>|yaml:<files>`，truncate_list 也会在这个 `|`
+            // 处切，极端情况下（socket 路径本身就接近上限）会把整个 `yaml:` 段截掉。概率很低，
+            // 且标签只用于展示 / 诊断，不参与判定，所以不做特殊处理。
             for (n, &i) in order.iter().enumerate() {
                 let share = left / (order.len() - n);
                 // 空 body（如 `defaults`）保持为空。
@@ -311,6 +314,12 @@ impl SourceLabel {
             out.push('=');
             out.push_str(&v);
         }
+        // 固定部分远小于上限（见 MAX_LABEL_BYTES 的说明），截断后总长必然不超过上限。
+        debug_assert!(
+            out.len() <= MAX_LABEL_BYTES,
+            "source label {} bytes > MAX_LABEL_BYTES",
+            out.len()
+        );
         out
     }
 }
