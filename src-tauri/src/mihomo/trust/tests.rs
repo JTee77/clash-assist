@@ -1221,3 +1221,76 @@ fn single_request_can_only_tighten_fallback() {
     let nf = tcp_fallback_after_pipes(&[PipeErr::NotFound]);
     assert_eq!(tighten_fallback(Some(&blocked()), nf), None);
 }
+
+/// Ellie PR50 r2 非阻塞 #1：可信管道上的单次 Io / 超时只收紧到 VerifiedOnly；
+/// Untrusted 仍 Blocked，InsecureDacl 仍 VerifiedOnly，信任判定前的 Io 仍 Blocked。
+#[test]
+fn single_request_io_on_trusted_pipe_only_tightens_to_verified_only() {
+    let io = PipeErr::Io("read timed out".into());
+    let after = tcp_fallback_after_single_request(&io, PipeStage::AfterTrust);
+    assert!(
+        matches!(after, Some(TcpFallback::VerifiedOnly(_))),
+        "{after:?}"
+    );
+    // 经 tighten_fallback：空缓存 / Allowed → VerifiedOnly；VerifiedOnly、Blocked 保持
+    assert!(matches!(
+        tighten_fallback(None, after.clone().unwrap()),
+        Some(TcpFallback::VerifiedOnly(_))
+    ));
+    assert!(matches!(
+        tighten_fallback(
+            Some(&TcpFallback::Allowed { denied_seen: false }),
+            after.clone().unwrap()
+        ),
+        Some(TcpFallback::VerifiedOnly(_))
+    ));
+    assert_eq!(
+        tighten_fallback(
+            Some(&TcpFallback::VerifiedOnly("x".into())),
+            after.clone().unwrap()
+        ),
+        None
+    );
+    assert_eq!(
+        tighten_fallback(Some(&TcpFallback::Blocked("x".into())), after.unwrap()),
+        None
+    );
+
+    // 信任判定之前（打开阶段）的未知 Io：仍 Blocked
+    assert!(matches!(
+        tcp_fallback_after_single_request(&io, PipeStage::Opening),
+        Some(TcpFallback::Blocked(_))
+    ));
+    // 请求本身不合法（还没碰管道）：不影响 M-3
+    assert_eq!(
+        tcp_fallback_after_single_request(&io, PipeStage::BeforeOpen),
+        None
+    );
+
+    let u = Untrusted {
+        reason: "owner-mismatch",
+        detail: String::new(),
+        owner_sid: None,
+        server_pid: None,
+    };
+    assert!(matches!(
+        tcp_fallback_after_single_request(&PipeErr::Untrusted(u), PipeStage::Opening),
+        Some(TcpFallback::Blocked(_))
+    ));
+    let ins = Untrusted {
+        reason: "dacl-null",
+        detail: String::new(),
+        owner_sid: None,
+        server_pid: None,
+    };
+    assert!(matches!(
+        tcp_fallback_after_single_request(&PipeErr::InsecureDacl(ins), PipeStage::Opening),
+        Some(TcpFallback::VerifiedOnly(_))
+    ));
+    // NotFound / Busy（打开超时）/ Denied → Allowed，经 tighten_fallback 不写
+    for e in [PipeErr::NotFound, PipeErr::Busy, PipeErr::Denied] {
+        let f = tcp_fallback_after_single_request(&e, PipeStage::Opening).unwrap();
+        assert!(matches!(f, TcpFallback::Allowed { .. }), "{e:?}");
+        assert_eq!(tighten_fallback(None, f), None);
+    }
+}

@@ -18,7 +18,9 @@ use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 use windows_sys::Win32::Storage::FileSystem::SECURITY_ANONYMOUS;
 
 use super::guard::PipeName;
-use super::trust::{tcp_fallback_after_pipes, PipeErr, PipeKind, PipeTrust, TrustPolicy};
+use super::trust::{
+    tcp_fallback_after_single_request, PipeErr, PipeKind, PipeStage, PipeTrust, TrustPolicy,
+};
 use super::types::UnixHttpResult;
 use crate::win::facts::OsPipeFacts;
 use crate::win::identity;
@@ -90,11 +92,29 @@ pub async fn http_via_pipe_with(
     body: Option<&str>,
     timeout_ms: u64,
 ) -> Result<(UnixHttpResult, PipeTrust), PipeErr> {
+    http_via_pipe_staged(name, kind, policy, method, path, body, timeout_ms)
+        .await
+        .map_err(|(e, _)| e)
+}
+
+/// 同 `http_via_pipe_with`，失败时附带失败发生的阶段（供 M-3 收紧使用）。
+pub(crate) async fn http_via_pipe_staged(
+    name: &PipeName,
+    kind: PipeKind,
+    policy: &TrustPolicy,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    timeout_ms: u64,
+) -> Result<(UnixHttpResult, PipeTrust), (PipeErr, PipeStage)> {
     // 先校验请求本身，再碰管道。
-    super::transport::check_raw_request(method, path).map_err(PipeErr::Io)?;
+    super::transport::check_raw_request(method, path)
+        .map_err(|e| (PipeErr::Io(e), PipeStage::BeforeOpen))?;
     let started = Instant::now();
     let budget = Duration::from_millis(timeout_ms);
-    let (client, trust) = open_verified(name, kind, policy, started + budget).await?;
+    let (client, trust) = open_verified(name, kind, policy, started + budget)
+        .await
+        .map_err(|e| (e, PipeStage::Opening))?;
     let left = budget
         .saturating_sub(started.elapsed())
         .max(Duration::from_millis(1));
@@ -107,12 +127,13 @@ pub async fn http_via_pipe_with(
         left.as_millis() as u64,
     )
     .await
-    .map_err(PipeErr::Io)?;
+    .map_err(|e| (PipeErr::Io(e), PipeStage::AfterTrust))?;
     Ok((res, trust))
 }
 
 /// 生产入口（同步，供 `spawn_blocking` 中的调用方使用）：生产 TrustPolicy，失败时把结果
-/// **收紧**进 M-3 回落状态（Ellie PR50 M-a：单次请求的成功 / NotFound 不放宽缓存）。
+/// **收紧**进 M-3 回落状态（Ellie PR50 M-a：单次请求的成功 / NotFound 不放宽缓存；
+/// r2 非阻塞 #1：可信管道上的 Io / 超时只收紧到 VerifiedOnly，见 `tcp_fallback_after_single_request`）。
 pub fn http_via_pipe_blocking(
     name: &PipeName,
     kind: PipeKind,
@@ -122,13 +143,15 @@ pub fn http_via_pipe_blocking(
     timeout_ms: u64,
 ) -> Result<(UnixHttpResult, PipeTrust), PipeErr> {
     let policy = TrustPolicy::production();
-    let r = tauri::async_runtime::block_on(http_via_pipe_with(
+    let r = tauri::async_runtime::block_on(http_via_pipe_staged(
         name, kind, &policy, method, path, body, timeout_ms,
     ));
-    if let Err(e) = &r {
-        super::win_tcp::tighten_pipe_outcome(tcp_fallback_after_pipes(std::slice::from_ref(e)));
-    }
-    r
+    r.map_err(|(e, stage)| {
+        if let Some(f) = tcp_fallback_after_single_request(&e, stage) {
+            super::win_tcp::tighten_pipe_outcome(f);
+        }
+        e
+    })
 }
 
 #[cfg(test)]

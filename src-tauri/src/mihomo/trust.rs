@@ -636,6 +636,33 @@ pub fn tighten_fallback(current: Option<&TcpFallback>, new: TcpFallback) -> Opti
     (fallback_rank(&new) > cur).then_some(new)
 }
 
+/// 单次管道请求失败发生在哪一步（Ellie PR50 r2 非阻塞 #1）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipeStage {
+    /// 还没碰管道（请求本身不合法）：与管道是否可信无关，不影响 M-3 状态。
+    BeforeOpen,
+    /// 打开 / 信任判定阶段（含打开时的未知 I/O 错误）：沿用 `tcp_fallback_after_pipes`。
+    Opening,
+    /// 管道已通过 `decide_pipe`（可信）之后的读写失败或超时。
+    AfterTrust,
+}
+
+/// 单次管道请求失败后**应收紧到**的 M-3 状态（再经 `tighten_fallback` 只升不降）。
+///
+/// 可信管道上的一次 Io / 超时只说明这次请求没成功，不说明有人冒充：只收紧到
+/// `VerifiedOnly`（TCP 仍可用，但仅限 listener-verified），而不是 `Blocked`——否则 TTL 内会
+/// 跳过完整探测，TCP 回落被封 30 秒（可用性问题）。Untrusted 仍 `Blocked`，InsecureDacl 仍
+/// `VerifiedOnly`；信任判定之前的 Io 无法区分「坏管道」与「临时故障」，仍按 `Blocked` 处理。
+pub fn tcp_fallback_after_single_request(e: &PipeErr, stage: PipeStage) -> Option<TcpFallback> {
+    match (stage, e) {
+        (PipeStage::BeforeOpen, _) => None,
+        (PipeStage::AfterTrust, PipeErr::Io(why)) => Some(TcpFallback::VerifiedOnly(format!(
+            "可信命名管道上的单次请求失败（I/O / 超时），TCP 暂时仅限已验证的监听者：{why}"
+        ))),
+        _ => Some(tcp_fallback_after_pipes(std::slice::from_ref(e))),
+    }
+}
+
 pub fn tcp_fallback_after_pipes(errs: &[PipeErr]) -> TcpFallback {
     let mut denied_seen = false;
     let mut insecure = None;
