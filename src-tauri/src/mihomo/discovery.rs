@@ -316,6 +316,7 @@ fn read_verge_parsed() -> (ParsedControllerYaml, Vec<String>) {
     // Prefer clash-verge.yaml first (live EC fields), then config.yaml (often stale).
     for path in [&clash_verge_path, &config_path] {
         if let Some(p) = read_and_parse(path) {
+            // `display()` 把非法 UTF-16 / UTF-8 换成 U+FFFD：来源标签里的路径只是展示值，不能还原成路径。
             source_files.push(path.display().to_string());
             merge_parsed(&mut parsed, p);
         }
@@ -706,6 +707,7 @@ pub fn read_controller_yaml(
                 port,
                 secret,
                 mixed_port: mixed,
+                // `display()` 有损（非法 UTF-16 / UTF-8 → U+FFFD）：标签只作展示。
                 source: SourceLabel::new(source_prefix, encode(&path.display().to_string()))
                     .finish(),
                 sock_path,

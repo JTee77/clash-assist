@@ -166,6 +166,16 @@ describe("InsecureDacl 文案与 Rust 常量逐字一致（Ellie 复核 §4）",
 });
 
 
+describe("百分号解码与 Rust 测试解码器一致", () => {
+  it("%+1 等非十六进制转义整体解析失败（Rust pct_decode 同样拒绝）", () => {
+    for (const bad of ["%+1", "%-1", "%1", "%", "a%g0", "%E4%B8"]) {
+      expect(insecurePipesOf(`verge-pipe:b;pipe-insecure-dacl=${bad}`)).toEqual([]);
+      expect(hasInsecureDacl(`verge-pipe:b;pipe-insecure-dacl=${bad}`)).toBe(true);
+    }
+    expect(insecurePipesOf("verge-pipe:b;pipe-insecure-dacl=a%2cb%2C")).toEqual(["a,b,"]);
+  });
+});
+
 describe("后端生成的来源标签样本（Rust backend_labels_match_frontend_fixture 逐字校验同一份样本）", () => {
   for (const s of backendLabels.labels) {
     it(s.name, () => {
@@ -183,6 +193,14 @@ describe("后端生成的来源标签样本（Rust backend_labels_match_frontend
       expect(baseSource(s.label)).toBe(s.base);
     });
   }
+
+  it("超长标签截断后仍有 pipe-insecure-dacl，且不超过后端上限 1024 字节", () => {
+    const s = backendLabels.labels.find((x) => x.name === "truncated-huge-file-list")!;
+    expect(new TextEncoder().encode(s.label).length).toBeLessThanOrEqual(1024);
+    expect(s.base.endsWith(",%28truncated%29")).toBe(true);
+    expect(hasInsecureDacl(s.label)).toBe(true);
+    expect(insecurePipesOf(s.label)).toEqual(["\\\\.\\pipe\\verge-mihomo"]);
+  });
 
   it("新标记的值不会被当成管道名，service-mode 不影响 listener-unverified 识别", () => {
     const all = sourceNoticesOf(backendLabels.labels.map((s) => s.label));
