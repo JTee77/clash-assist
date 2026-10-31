@@ -6,7 +6,6 @@ import {
   defaultConfig,
   discoverAndProbe,
   getProxies,
-  hasInsecureDacl,
   mockNodes,
   normalizeClientId,
   type ClientId,
@@ -52,14 +51,12 @@ function sniffCandidateOrder(preferred: ClientId | null): ClientId[] {
 
 /**
  * 判断某客户端是否在本地硬盘上留下了真实配置/Socket 痕迹（而非纯默认回退）。
- * Windows（Ellie PR50 第 4 条，M3 定）：带 `;pipe-insecure-dacl=` 后缀 / `pipe-insecure` 的来源
- * 不算「已安装」——它的控制管道已被拒绝，由诊断提示单独说明；`defaults`（含带后缀的
- * `defaults;pipe-insecure-dacl=…`）同样不算。
+ * 只看去掉 `;key=value` 后缀后的标签（PR52 Ellie must-fix 2）：`verge-pipe:b;pipe-insecure-dacl=a`
+ * 是「b 可信且已选中、a 被拒」，算已安装；被拒管道的警告由 DiagnosticsNotices 按全部候选来源单独显示。
+ * `defaults` / `unset-default` / `*:defaults` / `preset-*`（含带后缀的 `defaults;…`）不算。
  */
 export function hasClientFootprint(state: ConnectionState): boolean {
-  const src = state.config?.source ?? "";
-  if (hasInsecureDacl(src)) return false;
-  const base = baseSource(src);
+  const base = baseSource(state.config?.source ?? "");
   if (!base || base === "defaults" || base === "unset-default") return false;
   if (base.endsWith(":defaults") || base.startsWith("preset-")) return false;
   return true;
