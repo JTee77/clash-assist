@@ -326,10 +326,9 @@ describe("PR #53 新标记：service-mode / ipv6-dual-stack / pipe-open-to-all",
 describe("截断占位项 (truncated) 不是名字（PR #54 Ellie）", () => {
   const huge = backendLabels.labels.find((x) => x.name === "truncated-huge-file-list")!;
 
-  it("样本 truncated-huge-file-list：标记为已截断，占位项不进任何名字列表或提示", () => {
+  it("样本 truncated-huge-file-list：占位项不进任何名字列表或提示", () => {
     expect(huge.label).toContain("%28truncated%29");
     const m = sourceMarkersOf(huge.label);
-    expect(m.truncated).toBe(true);
     expect(m.openToAllPipes).not.toContain(TRUNCATED_ITEM);
     expect(insecurePipesOf(huge.label)).not.toContain(TRUNCATED_ITEM);
     const notices = sourceNoticesOf([huge.label]);
@@ -337,32 +336,30 @@ describe("截断占位项 (truncated) 不是名字（PR #54 Ellie）", () => {
     expect(JSON.stringify(notices)).not.toContain("truncated");
   });
 
-  it("后缀值被截断：占位项从管道名里剔除，提示带 truncated", () => {
+  it("后缀值被截断：占位项从管道名里剔除，提示照常显示", () => {
     const s = "verge-pipe:b;pipe-open-to-all=a%7Cx|%28truncated%29;pipe-insecure-dacl=c|%28truncated%29";
     expect(insecurePipesOf(s)).toEqual(["c"]);
     const m = sourceMarkersOf(s);
     expect(m.openToAllPipes).toEqual(["a|x"]);
-    expect(m.truncated).toBe(true);
     expect(sourceNoticesOf([s])).toEqual([
-      { kind: "insecure-dacl", pipes: ["c"], truncated: true },
-      { kind: "pipe-open-to-all", pipes: ["a|x"], truncated: true },
+      { kind: "insecure-dacl", pipes: ["c"] },
+      { kind: "pipe-open-to-all", pipes: ["a|x"] },
     ]);
   });
 
   it("整段只剩占位项：管道名为空，提示照常显示", () => {
     const s = "verge-pipe:b;pipe-insecure-dacl=%28truncated%29";
     expect(insecurePipesOf(s)).toEqual([]);
-    expect(sourceNoticesOf([s])).toEqual([{ kind: "insecure-dacl", pipes: [], truncated: true }]);
+    expect(sourceNoticesOf([s])).toEqual([{ kind: "insecure-dacl", pipes: [] }]);
   });
 
   it("ipv6 端口后跟占位项：保留能解析的端口", () => {
     const m = sourceMarkersOf("verge-config:C:\\v\\config.yaml;ipv6-dual-stack=9097|%28truncated%29");
-    expect(m).toMatchObject({ ipv6DualStack: true, ipv6Ports: [9097], truncated: true });
+    expect(m).toEqual({ serviceMode: false, ipv6DualStack: true, ipv6Ports: [9097], openToAll: false, openToAllPipes: [] });
   });
 
-  it("只有字面上恰为占位项才算截断；文件名里含 truncated 字样不算", () => {
-    expect(sourceMarkersOf("verge-config:C:\\(truncated)\\config.yaml").truncated).toBe(false);
-    expect(sourceMarkersOf("verge-config:C:\\v\\%28truncated%29x.yaml").truncated).toBe(false);
+  it("只有字面上恰为占位项才剔除；名字里含 truncated 字样照常保留", () => {
+    expect(sourceMarkersOf("verge-pipe:b;pipe-open-to-all=%28truncated%29x").openToAllPipes).toEqual(["(truncated)x"]);
     expect(insecurePipesOf("verge-pipe:b;pipe-insecure-dacl=%28truncated%29x")).toEqual(["(truncated)x"]);
   });
 });

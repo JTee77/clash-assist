@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { openVergeWithFeedback, noticeView, sourceItemsText } from "./DiagnosticsNotices";
+import { openVergeWithFeedback, noticeHasRecheck, noticeView } from "./DiagnosticsNotices";
 import { format } from "../i18n";
 import { zhHans } from "../i18n/locales/zh-Hans";
 import { zhHant } from "../i18n/locales/zh-Hant";
 import { en } from "../i18n/locales/en";
-import { sourceNoticesOf } from "../lib/mihomo";
+import { sourceNoticesOf, type SourceNotice } from "../lib/mihomo";
 import backendLabels from "../lib/mihomo/backendSourceLabels.fixture.json";
 
 describe("openVergeWithFeedback（升级按钮失败要有反馈）", () => {
@@ -47,7 +47,7 @@ describe("noticeView：提示级别与文案", () => {
     });
     expect(noticeView({ kind: "pipe-open-to-all", pipes: [] }).level).toBe("warn");
     expect(zhHans["diag.pipeOpenToAll"]).toBe(
-      "当前 Verge 控制管道对本机所有用户开放，任何本机用户都能通过它操控 mihomo 内核。",
+      "Clash Verge 的控制管道权限过宽，不影响本应用的使用，建议升级 Clash Verge。",
     );
     // 不阻止连接：文案不能说已拒绝 / 已停止
     for (const m of [zhHans, zhHant, en]) {
@@ -97,31 +97,6 @@ describe("noticeView：提示级别与文案", () => {
   });
 });
 
-describe("sourceItemsText：截断占位项显示为本地化的「已截断」（PR #54 Ellie）", () => {
-  const tr = (m: Record<string, string>) => (k: string) => m[k] ?? k;
-  it("占位项不当成名字显示", () => {
-    expect(sourceItemsText(["a", "(truncated)"], false, tr(zhHans))).toBe("a, …（已截断）");
-    expect(sourceItemsText(["(truncated)"], false, tr(zhHant))).toBe("…（已截斷）");
-    expect(sourceItemsText(["a", "b"], true, tr(en))).toBe("a, b, … (list truncated)");
-    expect(sourceItemsText(["a", "b"], false, tr(en))).toBe("a, b");
-    expect(sourceItemsText([], false, tr(en))).toBe("");
-  });
-  it("三种语言都有「已截断」文案，且都以省略号开头、不含原始占位项", () => {
-    for (const m of [zhHans, zhHant, en]) {
-      expect(m["diag.truncated"]).toMatch(/^…/);
-      expect(m["diag.truncated"]).not.toContain("(truncated)");
-    }
-  });
-  it("样本 truncated-huge-file-list 的文件列表：末项显示为「已截断」", () => {
-    const s = backendLabels.labels.find((x) => x.name === "truncated-huge-file-list")!;
-    const files = s.base.slice(s.base.indexOf(":") + 1).split(",").map((f) => decodeURIComponent(f));
-    expect(files[files.length - 1]).toBe("(truncated)");
-    const text = sourceItemsText(files, false, tr(zhHans));
-    expect(text.endsWith(", …（已截断）")).toBe(true);
-    expect(text).not.toContain("(truncated)");
-  });
-});
-
 describe("PR #56 文案", () => {
   it("service-mode 文案包含「无法验证监听方」及对应译文，并说明已拒绝连接", () => {
     expect(zhHans["diag.serviceMode"]).toContain("无法验证监听方");
@@ -142,7 +117,38 @@ describe("PR #56 文案", () => {
     expect(en["diag.ipv6DualStack"]).toContain("external controller");
     expect(en["diag.ipv6DualStackGeneric"]).toContain("external controller");
     for (const m of [zhHans, zhHant, en]) {
-      expect(m["diag.ipv6DualStack"] + m["diag.ipv6DualStackGeneric"]).not.toMatch(/→|>|->/);
+      // 不写死点击路径（「设置 → 外部控制器」之类）；<原端口> 这样的字面占位不算
+      expect(m["diag.ipv6DualStack"] + m["diag.ipv6DualStackGeneric"]).not.toMatch(/→|->|\s>\s/);
     }
+  });
+  it("无端口的 IPv6 通用句写成 127.0.0.1:<原端口>（S-3），不含未替换的变量", () => {
+    expect(format("zh-Hans", "diag.ipv6DualStackGeneric")).toBe(
+      "控制端口只监听了 IPv6，请在 Clash Verge 设置中把外部控制器地址改为 127.0.0.1:<原端口> 后重新检测。",
+    );
+    expect(zhHant["diag.ipv6DualStackGeneric"]).toContain("127.0.0.1:<原連接埠>");
+    expect(en["diag.ipv6DualStackGeneric"]).toContain("127.0.0.1:<original port>");
+  });
+  it("pipe-open-to-all（S-2）：一句话说明权限过宽、不影响使用、建议升级；不让用户重新检测，也不带重新检测按钮", () => {
+    expect(zhHans["diag.pipeOpenToAll"]).toMatch(/权限过宽.*不影响本应用的使用.*建议升级 Clash Verge/);
+    expect(zhHant["diag.pipeOpenToAll"]).toMatch(/權限過寬.*不影響本應用程式的使用.*建議升級 Clash Verge/);
+    expect(en["diag.pipeOpenToAll"]).toMatch(/too broad.*doesn't affect using this app.*recommend upgrading Clash Verge/);
+    for (const m of [zhHans, zhHant, en]) {
+      expect(m["diag.pipeOpenToAll"]).not.toMatch(/重新检测|重新檢測|check again/i);
+    }
+    expect(noticeHasRecheck({ kind: "pipe-open-to-all", pipes: [] })).toBe(false);
+    const others: SourceNotice[] = [
+      { kind: "insecure-dacl", pipes: [] },
+      { kind: "untrusted-pipe" },
+      { kind: "tcp-unverified" },
+      { kind: "service-mode" },
+      { kind: "tcp-rejected", code: "token-mismatch" },
+      { kind: "ipv6-dual-stack", ports: [9097] },
+    ];
+    for (const n of others) {
+      expect(noticeHasRecheck(n), n.kind).toBe(true);
+    }
+  });
+  it("截断文案已随 sourceItemsText 一起删除（S-1）", () => {
+    for (const m of [zhHans, zhHant, en] as Record<string, string>[]) expect(m["diag.truncated"]).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 {
-  "_comment": "后端（Rust source_label / discovery::windows_source_label）生成的来源标签样本。Rust 测试 backend_labels_match_frontend_fixture 逐字校验 label，前端 sourceDiagnostics.test.ts 用同一份样本校验解析结果。改动任何一侧都要两边一起过。 markers / notices 为前端期望（Rust 测试只校验 label 与条数）；markers.truncated 表示标签里有截断占位项 %28truncated%29。",
+  "_comment": "后端（Rust source_label / discovery::windows_source_label）生成的来源标签样本。Rust 测试 backend_labels_match_frontend_fixture 逐字校验 label，前端 sourceDiagnostics.test.ts 用同一份样本校验解析结果。改动任何一侧都要两边一起过。 markers / notices 为前端期望（Rust 测试只校验 label 与条数）；截断占位项 %28truncated%29 不是名字，不会出现在任何管道名列表里。",
   "labels": [
     {
       "name": "service-mode",
@@ -21,8 +21,7 @@
         "ipv6DualStack": false,
         "ipv6Ports": [],
         "openToAll": false,
-        "openToAllPipes": [],
-        "truncated": false
+        "openToAllPipes": []
       }
     },
     {
@@ -54,8 +53,7 @@
         "ipv6DualStack": false,
         "ipv6Ports": [],
         "openToAll": false,
-        "openToAllPipes": [],
-        "truncated": false
+        "openToAllPipes": []
       }
     },
     {
@@ -88,8 +86,7 @@
           9097
         ],
         "openToAll": false,
-        "openToAllPipes": [],
-        "truncated": false
+        "openToAllPipes": []
       }
     },
     {
@@ -122,8 +119,7 @@
         "openToAll": true,
         "openToAllPipes": [
           "\\\\.\\pipe\\verge-mihomo-sidecar-release-ab"
-        ],
-        "truncated": false
+        ]
       }
     },
     {
@@ -148,8 +144,7 @@
         "openToAll": true,
         "openToAllPipes": [
           "\\\\.\\pipe\\verge-mihomo-production-ab"
-        ],
-        "truncated": false
+        ]
       }
     },
     {
@@ -169,8 +164,7 @@
         "ipv6DualStack": false,
         "ipv6Ports": [],
         "openToAll": false,
-        "openToAllPipes": [],
-        "truncated": false
+        "openToAllPipes": []
       }
     },
     {
@@ -193,8 +187,7 @@
         "ipv6DualStack": false,
         "ipv6Ports": [],
         "openToAll": false,
-        "openToAllPipes": [],
-        "truncated": false
+        "openToAllPipes": []
       }
     },
     {
@@ -226,8 +219,7 @@
         "ipv6DualStack": false,
         "ipv6Ports": [],
         "openToAll": false,
-        "openToAllPipes": [],
-        "truncated": true
+        "openToAllPipes": []
       }
     }
   ]

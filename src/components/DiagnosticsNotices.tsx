@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useI18n, type MessageKey } from "../i18n";
-import { sourceNoticesOf, TRUNCATED_ITEM, type SourceNotice } from "../lib/mihomo";
+import { sourceNoticesOf, type SourceNotice } from "../lib/mihomo";
 import { openVergeReleasePage } from "../lib/update";
 
 const REJECT_KEYS: Record<string, MessageKey> = {
@@ -58,20 +58,11 @@ const LEVEL_CLASS: Record<NoticeLevel, string> = {
 };
 
 /**
- * 来源标签里的管道名 / 文件名列表的展示文本（PR #54 Ellie）：后端截断占位项 `(truncated)` 不是名字，
- * 一律显示为本地化的「…（已截断）」，放在末尾；`truncated` 为真（解析层已剔除占位项）时同样追加。
+ * 这条提示是否带「重新检测」按钮。pipe-open-to-all 不带（PR #56 Ellie S-2）：它只是提醒、不影响使用，
+ * 重新检测也改变不了结果（要靠升级 Clash Verge）。
  */
-export function sourceItemsText(
-  items: readonly string[],
-  truncated: boolean,
-  translate: (key: MessageKey) => string,
-  sep = ", ",
-): string {
-  const names = items.filter((i) => i !== TRUNCATED_ITEM);
-  const cut = truncated || names.length !== items.length;
-  if (!cut) return names.join(sep);
-  const mark = translate("diag.truncated");
-  return names.length ? `${names.join(sep)}${sep}${mark}` : mark;
+export function noticeHasRecheck(n: SourceNotice): boolean {
+  return n.kind !== "pipe-open-to-all";
 }
 
 /** 打开 Verge 发布页；失败时 setFailed(true)，让按钮旁出一句提示（不吞错误）。 */
@@ -91,7 +82,8 @@ export async function openVergeWithFeedback(
  * 连接诊断提示（windows-plan §2.7）：根据本次刷新所有候选的发现来源标签展示。
  * InsecureDacl 只要任一来源带 `pipe-insecure-dacl` 后缀 / TCP 项 `pipe-insecure` 就显示，
  * 即使最终选中了别的候选（Ellie PR50 Q5）。macOS 来源不会命中任何提示。
- * 文案每条一句话（PR52）：InsecureDacl 只有固定句 + 升级按钮 + 重新检测；其余提示各一句 + 重新检测。
+ * 文案每条一句话（PR52）：InsecureDacl 只有固定句 + 升级按钮 + 重新检测；pipe-open-to-all 只有一句、不带按钮；
+ * 其余提示各一句 + 重新检测。
  * PR #53 新标记：pipe-open-to-all 为警告（不阻止连接），service-mode 为警告（取代 tcp-unverified），ipv6-dual-stack 为说明。
  */
 export function DiagnosticsNotices({
@@ -135,7 +127,7 @@ export function DiagnosticsNotices({
                   {t("diag.insecureDaclAction")}
                 </button>
               ) : null}
-              {recheck}
+              {noticeHasRecheck(n) ? recheck : null}
               {n.kind === "insecure-dacl" && openFailed ? (
                 <span className="ws-error" role="alert">
                   {t("diag.openVergeFailed")}
