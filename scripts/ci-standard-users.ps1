@@ -709,6 +709,13 @@ function Invoke-Stop {
 
 # ---------------------------------------------------------------- Cleanup
 
+function Get-SidProcesses([string]$Sid) {
+  foreach ($p in Get-CimInstance -ClassName Win32_Process) {
+    $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+    if ($o -and $o.ReturnValue -eq 0 -and $o.Sid -eq $Sid) { "$($p.Name)#$($p.ProcessId)" }
+  }
+}
+
 # 配置文件删不掉时的诊断（只读）：是否仍加载、谁还以该 SID 运行、哪个配置单元文件被占用
 function Get-ProfileDiagnostics([string]$Sid) {
   $parts = New-Object System.Collections.Generic.List[string]
@@ -722,13 +729,7 @@ function Get-ProfileDiagnostics([string]$Sid) {
     } else { $parts.Add('无 Win32_UserProfile 记录') }
   } catch { $parts.Add("Win32_UserProfile：$($_.Exception.Message)") }
   $parts.Add("HKU 已加载=$(Test-Path -LiteralPath "Registry::HKEY_USERS\$Sid")")
-  try {
-    $procs = @(foreach ($p in Get-CimInstance -ClassName Win32_Process) {
-        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
-        if ($o -and $o.ReturnValue -eq 0 -and $o.Sid -eq $Sid) { "$($p.Name)#$($p.ProcessId)" }
-      })
-    $parts.Add("该 SID 的进程=$($procs -join ',')")
-  } catch { $parts.Add("枚举进程：$($_.Exception.Message)") }
+  try { $parts.Add("该 SID 的进程=$((@(Get-SidProcesses $Sid)) -join ',')") } catch { $parts.Add("枚举进程：$($_.Exception.Message)") }
   if ($path -and (Test-Path -LiteralPath $path)) {
     $locked = @(foreach ($f in @(Get-ChildItem -LiteralPath $path -Recurse -Force -File -ErrorAction SilentlyContinue)) {
         try { $fs = [IO.File]::Open($f.FullName, 'Open', 'Read', 'None'); $fs.Dispose() } catch { $f.FullName.Substring($path.Length) }
@@ -791,8 +792,9 @@ function Invoke-Cleanup {
       if ($known) { $sid = $known.Sid }
     }
     if ($sid) {
-      # 进程刚被结束时，用户配置单元（NTUSER.DAT 等）要等用户配置文件服务在登录会话结束后异步卸载，
-      # 立即删除可能报“文件正被另一进程使用”（MUST-4 回放 run 41145959660）；重试约 10 秒，仍失败则输出诊断
+      # 进程结束后用户配置单元（NTUSER.DAT / UsrClass.dat）可能仍被系统加载，删除报“文件正被另一进程使用”。
+      # MUST-4 回放（run 41145959660、41148005305、41148617738）实测：该 SID 已无任何进程、HKU\<SID> 仍加载、
+      # 无 1530 事件，换新进程重试同样失败——持有者是系统服务而非本脚本。先重试约 10 秒
       $profileErr = $null
       for ($i = 0; $i -lt 5; $i++) {
         try {
@@ -806,7 +808,14 @@ function Invoke-Cleanup {
       }
       if ($profileErr) {
         Write-Info "配置文件 $name 诊断：$(Get-ProfileDiagnostics $sid)"
-        $failures.Add("删除 $name 的配置文件：$profileErr")
+        $stillLoaded = [bool](@(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Where-Object { $_.Loaded }).Count)
+        $live = @(Get-SidProcesses $sid)
+        if ($stillLoaded -and $live.Count -eq 0) {
+          # 上述已知情形：不算清理失败（用户已删除、无残留进程；配置文件目录随一次性 runner 销毁）
+          Write-Warning "未删除 $name 的配置文件：配置单元仍由系统加载、该 SID 已无进程（$profileErr）"
+        } else {
+          $failures.Add("删除 $name 的配置文件：$profileErr")
+        }
       }
     }
   }
