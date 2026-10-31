@@ -48,6 +48,34 @@ beforeEach(() => {
   localeCountry.mockReturnValue(null);
 });
 
+describe("checkDnsResolvers 的 raw_hint 去向（PR #51 M-4）", () => {
+  it("Windows（win-adapter-*）：网卡摘要进 adapterHint，不进 process", async () => {
+    listDnsResolvers.mockResolvedValue({
+      resolvers: ["198.18.0.2"],
+      source: "win-adapter-tun",
+      rawHint: "选中网卡（win-adapter-tun）：Mihomo (ifIndex 23)\n- 宽带连接 #18 [WAN Miniport (PPPOE)]",
+    });
+    dnsWhoami.mockResolvedValue({ ok: true, clientIp: "9.9.9.9", via: "system", raw: "" });
+    const card = await checkDnsResolvers(exitInfo("9.9.9.9"), null);
+    expect(card.adapterHint).toContain("宽带连接");
+    expect(card.process).not.toContain("宽带连接");
+    expect(card.process).not.toContain("raw_hint");
+    expect(card.process).toContain("source win-adapter-tun");
+  });
+
+  it("macOS（scutil）：raw_hint 照旧拼进 process，没有 adapterHint", async () => {
+    listDnsResolvers.mockResolvedValue({
+      resolvers: ["1.1.1.1"],
+      source: "scutil",
+      rawHint: "resolver #1\n  nameserver[0] : 1.1.1.1",
+    });
+    dnsWhoami.mockResolvedValue({ ok: true, clientIp: "9.9.9.9", via: "system", raw: "" });
+    const card = await checkDnsResolvers(exitInfo("9.9.9.9"), null);
+    expect(card.adapterHint).toBeUndefined();
+    expect(card.process).toContain("raw_hint:\nresolver #1");
+  });
+});
+
 describe("checkDnsResolvers 判定与启发式解耦（v0.1.9）", () => {
   it("whoami 出口 == 代理出口 → pass，且 Cloudflare 缺席不改判", async () => {
     dnsWhoami.mockResolvedValue({ ok: true, clientIp: "9.9.9.9", via: "system", raw: "" });

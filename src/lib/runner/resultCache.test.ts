@@ -111,6 +111,34 @@ describe("resultCache", () => {
     expect(expired).toBeNull();
   });
 
+  it("strips the Windows adapterHint before caching (PR #51 S-3)", () => {
+    const t0 = "2026-10-18T06:00:00.000Z";
+    const envCards: CheckCard[] = [
+      {
+        id: "dns-leak",
+        title: "DNS 解析器",
+        level: "pass",
+        conclusion: "正常",
+        process: "配置解析器：10.0.0.1（source win-adapter-default）",
+        adapterHint: "- 以太网 #7 [Intel] type 6 up dns 10.0.0.1",
+      },
+    ];
+    saveCachedEnvCards("verge", envCards, t0);
+    const node = makeScore("HK 01", 4, 80);
+    node.cards = [{ ...envCards[0], id: "x" }];
+    saveCachedScores("verge", [node], t0);
+
+    const raw = localStorage.getItem("clash-assist.results.v1.verge") ?? "";
+    expect(raw).not.toContain("adapterHint");
+    expect(raw).not.toContain("以太网 #7");
+
+    const fresh = loadCachedResults("verge", ["HK 01"], Date.parse(t0) + 1000);
+    expect(fresh?.envCards[0].adapterHint).toBeUndefined();
+    expect(fresh?.envCards[0].process).toContain("win-adapter-default");
+    // 内存里的卡片不被改动（只影响写入缓存的副本）。
+    expect(envCards[0].adapterHint).toContain("以太网");
+  });
+
   it("mergeScoreList preserves untested region scores during filtered subset reset", () => {
     const prev = [
       makeScore("HK 01", 4.5, 88),

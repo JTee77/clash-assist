@@ -26,6 +26,19 @@ function tierFromScore(score: number): VpnTier {
   return "有问题";
 }
 
+/** 「DNS 像运营商解析」的关键词。 */
+const ISP_DNS_RE = /运营商|ISP DNS|电信|联通|移动|宽带/;
+
+/**
+ * 关键词匹配只看 conclusion 与 process（M2 之前就匹配的字段）。
+ * Windows 的网卡摘要放在 `adapterHint`，故意不参与：中文 Windows 的 PPPoE 网卡默认叫
+ * 「宽带连接」，TUN 模式下它仍在网卡列表里，会把 DNS 分误压到 45（PR #51 M-4）。
+ */
+function looksLikeIspDns(dns: CheckCard | undefined): boolean {
+  if (!dns) return false;
+  return ISP_DNS_RE.test(`${dns.conclusion ?? ""} ${dns.process ?? ""}`);
+}
+
 /** 彩蛋级「完美」：显式门槛，默认几乎拿不到。 */
 export function qualifiesPerfect(
   selected: NodeScoreResult,
@@ -48,8 +61,7 @@ export function qualifiesPerfect(
   if (!bare || bare.level !== "pass") return false;
   if (!dns || dns.level !== "pass") return false;
   if (!split || split.level !== "pass") return false;
-  const dnsText = `${dns.conclusion} ${dns.process ?? ""}`;
-  if (/运营商|ISP DNS|电信|联通|移动|宽带/.test(dnsText)) return false;
+  if (looksLikeIspDns(dns)) return false;
   if (ipv6 && (ipv6.level === "fail" || ipv6.level === "warn")) return false;
   if (webrtc && (webrtc.level === "fail" || webrtc.level === "warn")) return false;
 
@@ -126,8 +138,7 @@ export function scoreVpn(
 
   const dnsScore = dns ? levelScore(dns.level) : 45;
   const dnsNote = dns?.conclusion ?? "尚未做环境 DNS 检查";
-  const dnsText = `${dns?.conclusion ?? ""} ${dns?.process ?? ""}`;
-  const ispDns = /运营商|ISP DNS|电信|联通|移动|宽带/.test(dnsText);
+  const ispDns = looksLikeIspDns(dns);
   const dnsAdjusted = ispDns ? Math.min(dnsScore, 45) : dnsScore;
 
   const splitScore = split ? levelScore(split.level) : 50;

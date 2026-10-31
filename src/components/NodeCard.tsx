@@ -1,6 +1,6 @@
 import { useI18n } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
-import type { CheckCard } from "../lib/egress/types";
+import { cardProcessText, type CheckCard } from "../lib/egress/types";
 import { formatCardBrief } from "../lib/egress/cardBrief";
 import {
   isServiceSummaryId,
@@ -78,7 +78,7 @@ export function NodeCard({
   }, [detailId]);
 
   const detailCard = detailId ? cards.find((c) => c.id === detailId) : undefined;
-  const detailProcess = detailCard?.process ?? detailCard?.detail;
+  const detailProcess = detailCard ? cardProcessText(detailCard) : undefined;
   const hasProcess = !!(detailProcess && detailProcess.trim());
   // 汇总卡徽章用「全通/部分/…」；其它卡仍用 conclusion。
   const detailBadgeConclusion = detailCard

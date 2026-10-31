@@ -1,13 +1,13 @@
 import { useI18n } from "../i18n";
 import { useState } from "react";
-import type { CheckCard } from "../lib/egress/types";
+import { cardProcessText, type CheckCard } from "../lib/egress/types";
 import { StatusBadge } from "./StatusBadge";
 
 export function CheckCardView({ card }: { card: CheckCard }) {
   const { t, td } = useI18n();
   const conclusionRaw = card.conclusion ?? card.summary ?? "尚未检测";
   const conclusion = td(conclusionRaw);
-  const process = card.process ?? card.detail;
+  const process = cardProcessText(card);
   const suggestion = card.suggestion ?? card.tip;
   const [processOpen, setProcessOpen] = useState(false);
   const hasProcess = !!(process && process.trim());
