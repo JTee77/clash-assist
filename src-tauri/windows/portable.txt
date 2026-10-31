@@ -1,0 +1,15 @@
+Clash伴侣（Clash Assist）便携版
+
+- 解压后直接运行 clash-assist.exe，不需要安装。
+- 便携版不提供一键更新。有新版本时，请到发布页下载：
+  https://github.com/JTee77/clash-assist/releases
+- 便携版使用系统自带的 WebView2 运行时（Windows 10 1803 及以后版本、Windows 11 均已自带）。
+- 本文件只是说明，可以删除。
+
+Clash Assist portable edition
+
+- Unzip and run clash-assist.exe; no installation needed.
+- The portable edition has no one-click update. Download new versions from:
+  https://github.com/JTee77/clash-assist/releases
+- It uses the WebView2 runtime that ships with Windows 10 1803+ and Windows 11.
+- This file is informational only and can be deleted.
