@@ -15,6 +15,9 @@
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
   4c. 冒烟诊断（M4c）：WER LocalDumps 只能在 build job 里配置；名为 smoke-diagnostics 的 artifact
      只能由 build job 上传，retention-days ≤ 7；
+     M4d：smoke-diagnostics 的 path 必须排除 dumps/ 与 **/*.dmp（仓库公开，常规 artifact 不得含内存转储）；
+     minidump 只能由 smoke-crash-dumps 上传，其 if 必须是 failure() && steps.smoke.outcome == 'failure'
+     （id: smoke 为冒烟测试步骤），retention-days ≤ 7；
   7. 文本中不得出现 `--clobber`、`secrets.`（只允许 github.token）。
 
 用法：python3 scripts/check-release-workflow.py [文件]   （默认 .github/workflows/release-windows.yml）
@@ -165,6 +168,29 @@ def check(doc, text):
                 rd = w.get("retention-days")
                 if not isinstance(rd, int) or not 1 <= rd <= 7:
                     errs.append(f"smoke-diagnostics 的 retention-days 必须是 1–7 的整数，实际：{rd!r}")
+                lines = [l.strip() for l in str(w.get("path", "")).splitlines() if l.strip()]
+                if not any(l.startswith("!") and l.rstrip("/").endswith("smoke-diag/dumps") for l in lines) or not any(
+                    l.startswith("!") and l.endswith("smoke-diag/**/*.dmp") for l in lines
+                ):
+                    errs.append("smoke-diagnostics 的 path 必须排除 smoke-diag/dumps/ 与 smoke-diag/**/*.dmp（常规 artifact 不得含内存转储）")
+            if str(x.get("uses", "")).startswith("actions/upload-artifact@") and isinstance(w, dict) and w.get("name") != "smoke-diagnostics":
+                path = str(w.get("path", ""))
+                if ("dumps" in path or ".dmp" in path or "smoke-diag" in path) and w.get("name") != "smoke-crash-dumps":
+                    errs.append(f"job {name}：artifact {w.get('name')!r} 不得上传冒烟诊断 / minidump（只能由 smoke-crash-dumps 上传）")
+                if w.get("name") == "smoke-crash-dumps":
+                    if name != "build":
+                        errs.append(f"job {name}：smoke-crash-dumps 只能由 build job 上传")
+                    cond = str(x.get("if", "")).replace(" ", "").replace('"', "'")
+                    if cond.startswith("${{") and cond.endswith("}}"):
+                        cond = cond[3:-2]
+                    if cond != "failure()&&steps.smoke.outcome=='failure'":
+                        errs.append(f"smoke-crash-dumps 只能在冒烟失败时上传（if: failure() && steps.smoke.outcome == 'failure'），实际：{x.get('if')!r}")
+                    rd = w.get("retention-days")
+                    if not isinstance(rd, int) or not 1 <= rd <= 7:
+                        errs.append(f"smoke-crash-dumps 的 retention-days 必须是 1–7 的整数，实际：{rd!r}")
+    smoke = [x for x in build_steps if "smoke-windows.ps1" in str(x.get("run", ""))]
+    if len(smoke) != 1 or smoke[0].get("id") != "smoke":
+        errs.append("build job 必须恰有一个冒烟测试步骤（smoke-windows.ps1），且 id 为 smoke")
 
     if "--clobber" in text:
         errs.append("不得使用 --clobber（不得覆盖已有资产）")
@@ -215,6 +241,20 @@ def self_test(path):
     def diag_upload(d):
         return next(x for x in d["jobs"]["build"]["steps"] if (x.get("with") or {}).get("name") == "smoke-diagnostics")
 
+    def dumps_upload(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if (x.get("with") or {}).get("name") == "smoke-crash-dumps")
+
+    def drop_dmp_exclusion(d):
+        w = diag_upload(d)["with"]
+        w["path"] = "\n".join(l for l in w["path"].splitlines() if ".dmp" not in l)
+
+    def drop_dumps_exclusion(d):
+        w = diag_upload(d)["with"]
+        w["path"] = "\n".join(l for l in w["path"].splitlines() if not l.rstrip("/").endswith("dumps"))
+
+    def smoke_step(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if "smoke-windows.ps1" in str(x.get("run", "")))
+
     def dumps_step(d):
         return next(x for x in d["jobs"]["build"]["steps"] if "LocalDumps" in str(x.get("run", "")))
 
@@ -254,6 +294,13 @@ def self_test(path):
         ("installer.nsi 扫描挪到 tauri build 之前", lambda d, t: (move_nsi_first(d), t), "之后"),
         ("smoke-diagnostics 保留 30 天", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", 30), t), "retention-days"),
         ("smoke-diagnostics 保留期是表达式", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", "${{ 3 }}"), t), "retention-days"),
+        ("smoke-diagnostics 不排除 .dmp", lambda d, t: (drop_dmp_exclusion(d), t), "不得含内存转储"),
+        ("smoke-diagnostics 不排除 dumps/", lambda d, t: (drop_dumps_exclusion(d), t), "不得含内存转储"),
+        ("smoke-crash-dumps 总是上传", lambda d, t: (dumps_upload(d).__setitem__("if", "${{ !cancelled() }}"), t), "冒烟失败时"),
+        ("smoke-crash-dumps 任一步失败就上传", lambda d, t: (dumps_upload(d).__setitem__("if", "failure()"), t), "冒烟失败时"),
+        ("smoke-crash-dumps 保留 30 天", lambda d, t: (dumps_upload(d)["with"].__setitem__("retention-days", 30), t), "smoke-crash-dumps 的 retention-days"),
+        ("另一个 artifact 上传 dumps", lambda d, t: (dumps_upload(d)["with"].__setitem__("name", "dumps"), t), "只能由 smoke-crash-dumps"),
+        ("冒烟步骤没有 id: smoke", lambda d, t: (smoke_step(d).pop("id"), t), "id 为 smoke"),
         ("release job 配 LocalDumps", lambda d, t: (d["jobs"]["release"]["steps"].append(copy.deepcopy(dumps_step(d))), t), "LocalDumps"),
         ("release job 上传 smoke-diagnostics", lambda d, t: (d["jobs"]["release"]["steps"].append(copy.deepcopy(diag_upload(d))), t), "只能由 build job"),
         ("--clobber", lambda d, t: (None, t + "\n# gh release upload --clobber\n"), "--clobber"),

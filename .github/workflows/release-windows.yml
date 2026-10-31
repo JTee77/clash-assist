@@ -65,6 +65,16 @@ jobs:
           # S-R2：完整历史，祖先校验不受 shallow 边界影响
           fetch-depth: 0
 
+      # #57 跟进（M4d）：演练时按固定的上游提交下载 tauri-cli 的 NSIS 模板，去掉 M4b 段后与
+      # src-tauri/windows/installer.nsi 逐字比对，有任何差异即失败（上游提交与 URL 固定在脚本里）。
+      - name: 上游 NSIS 模板比对（仅演练）
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          python scripts/check-nsis-template.py --fetch-upstream
+          exit $LASTEXITCODE
+
       - name: tag 必须指向 main 上已合并的提交（仅 tag push）
         if: github.event_name == 'push'
         shell: bash
@@ -182,6 +192,7 @@ jobs:
           Get-ItemProperty -Path $key | Format-List DumpFolder, DumpType, DumpCount | Out-String | Write-Host
 
       - name: 冒烟测试（静默安装 / 启动 / /UPDATE / 卸载 / 便携版）
+        id: smoke
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -193,13 +204,27 @@ jobs:
             -DiagDir (Join-Path $env:RUNNER_TEMP 'smoke-diag')
           exit $LASTEXITCODE
 
-      # 冒烟失败时也上传：stdout/stderr、Application 事件、应用日志、minidump。只保留 3 天。
+      # 冒烟失败时也上传：stdout/stderr、Application 事件、应用日志。只保留 3 天。
+      # 仓库公开，常规诊断 artifact 不得含内存转储（M4d）：这里排除 dumps/ 与所有 .dmp。
       - name: 上传冒烟诊断
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-diagnostics
-          path: ${{ runner.temp }}/smoke-diag/
+          path: |
+            ${{ runner.temp }}/smoke-diag/
+            !${{ runner.temp }}/smoke-diag/dumps/
+            !${{ runner.temp }}/smoke-diag/**/*.dmp
+          if-no-files-found: ignore
+          retention-days: 3
+
+      # minidump 只在冒烟测试失败时单独上传（M4d），同样只保留 3 天。
+      - name: 上传冒烟崩溃转储（仅冒烟失败）
+        if: ${{ failure() && steps.smoke.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-crash-dumps
+          path: ${{ runner.temp }}/smoke-diag/dumps/*.dmp
           if-no-files-found: ignore
           retention-days: 3
 

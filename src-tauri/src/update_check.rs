@@ -8,7 +8,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/JTee77/clash-assist/releases/latest";
@@ -274,21 +274,51 @@ pub fn resolve_download_target(info: &UpdateInfo) -> Result<DownloadTarget, Stri
     Ok(DownloadTarget { url, sha256 })
 }
 
+/// 代理端口探测的总时限（M4d）：每个候选的发现（读配置 / 管道探测）最坏约 800 ms，
+/// 几个候选串行下来会明显拖慢检查更新与下载。超时即视为未发现代理端口，走原有的直连回退。
+const PROXY_PORT_PROBE_BUDGET: Duration = Duration::from_secs(2);
+
 /// 检测本机可能正在监听的代理混合端口（Verge 7897 / FlClash 7890），用于加速 GitHub API 与 Release 下载。
 fn active_local_proxy_port() -> Option<u16> {
     use std::net::{SocketAddr, TcpStream};
+    probe_local_proxy_port(
+        Instant::now() + PROXY_PORT_PROBE_BUDGET,
+        |client| crate::mihomo::discover_for_client(client).mixed_port,
+        |port| {
+            let addr = SocketAddr::from(([127, 0, 0, 1], port));
+            TcpStream::connect_timeout(&addr, Duration::from_millis(40)).is_ok()
+        },
+    )
+}
+
+/// `active_local_proxy_port` 的可测试内核：每一步（发现、连接）开始前检查 `deadline`，
+/// 过期即停止并返回 `None`（与未发现端口相同）。
+fn probe_local_proxy_port(
+    deadline: Instant,
+    discover: impl Fn(&str) -> u16,
+    reachable: impl Fn(u16) -> bool,
+) -> Option<u16> {
+    let expired = || Instant::now() >= deadline;
     let mut candidates = vec![7897u16, 7890u16];
-    let verge = crate::mihomo::discover_for_client("verge").mixed_port;
+    if expired() {
+        return None;
+    }
+    let verge = discover("verge");
     if verge > 0 && !candidates.contains(&verge) {
         candidates.insert(0, verge);
     }
-    let flclash = crate::mihomo::discover_for_client("flclash").mixed_port;
+    if expired() {
+        return None;
+    }
+    let flclash = discover("flclash");
     if flclash > 0 && !candidates.contains(&flclash) {
         candidates.push(flclash);
     }
     for port in candidates {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(40)).is_ok() {
+        if expired() {
+            return None;
+        }
+        if reachable(port) {
             return Some(port);
         }
     }
@@ -298,10 +328,21 @@ fn active_local_proxy_port() -> Option<u16> {
 /// 异步调用方用这个（M4c）：`active_local_proxy_port` 是同步的（读配置、探测管道、短连接），
 /// Windows 上的管道探测内部用 `block_on`，在 tokio 工作线程上直接调用会 panic
 /// （"Cannot start a runtime from within a runtime"；release 为 `panic = "abort"`，进程以 0xC0000409 退出）。
+/// M4d：外层再套 `PROXY_PORT_PROBE_BUDGET` 总时限，超时按未发现端口处理。
 async fn active_local_proxy_port_async() -> Option<u16> {
-    tauri::async_runtime::spawn_blocking(active_local_proxy_port)
+    run_probe_with_budget(PROXY_PORT_PROBE_BUDGET, active_local_proxy_port).await
+}
+
+/// 在阻塞线程池上运行 `probe`，最多等待 `budget`；超时（或任务失败）返回 `None`。
+/// 超时后阻塞任务不会被强行中止，但同步内核自身也会在截止时间后停止。
+async fn run_probe_with_budget<F>(budget: Duration, probe: F) -> Option<u16>
+where
+    F: FnOnce() -> Option<u16> + Send + 'static,
+{
+    tokio::time::timeout(budget, tauri::async_runtime::spawn_blocking(probe))
         .await
         .ok()
+        .and_then(|r| r.ok())
         .flatten()
 }
 
@@ -1012,6 +1053,62 @@ mod tests {
             tauri::async_runtime::spawn(active_local_proxy_port_async()).await
         });
         assert!(r.is_ok(), "在工作线程上探测代理端口 panic：{r:?}");
+    }
+
+    /// M4d：同步内核在截止时间过后不再继续发现 / 连接，按未发现端口处理。
+    #[test]
+    fn proxy_port_probe_stops_after_deadline() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::new());
+        let r = probe_local_proxy_port(
+            Instant::now() + Duration::from_millis(20),
+            |client| {
+                calls.borrow_mut().push(client.to_string());
+                std::thread::sleep(Duration::from_millis(60));
+                7999
+            },
+            |_| panic!("截止时间已过，不应再尝试连接"),
+        );
+        assert_eq!(r, None);
+        assert_eq!(*calls.borrow(), vec!["verge".to_string()]);
+        // 已过期的截止时间：一步都不做。
+        let r = probe_local_proxy_port(
+            Instant::now(),
+            |_| panic!("不应调用发现"),
+            |_| panic!("不应尝试连接"),
+        );
+        assert_eq!(r, None);
+        // 时间充裕时行为不变：返回第一个可达候选。
+        let r = probe_local_proxy_port(
+            Instant::now() + Duration::from_secs(60),
+            |client| if client == "verge" { 7999 } else { 0 },
+            |port| port == 7890,
+        );
+        assert_eq!(r, Some(7890));
+    }
+
+    /// M4d：异步外层总时限——阻塞探测超时即返回 `None`，不等探测结束。
+    #[test]
+    fn proxy_port_probe_async_budget_times_out() {
+        let (r, elapsed) = tauri::async_runtime::block_on(async {
+            let start = Instant::now();
+            let r = run_probe_with_budget(Duration::from_millis(50), || {
+                std::thread::sleep(Duration::from_secs(2));
+                Some(7897)
+            })
+            .await;
+            (r, start.elapsed())
+        });
+        assert_eq!(r, None);
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "未按时限返回：{elapsed:?}"
+        );
+        let r =
+            tauri::async_runtime::block_on(run_probe_with_budget(Duration::from_secs(30), || {
+                Some(7897)
+            }));
+        assert_eq!(r, Some(7897));
     }
 
     #[test]
