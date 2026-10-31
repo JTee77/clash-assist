@@ -7,8 +7,14 @@
 ;   $DeleteAppDataCheckboxState - 1 only when the user ticked "delete app data"
 ;                                 on the uninstall page (always 0 for /S).
 ;   $UpdateMode                 - 1 when run with /UPDATE (one-click update).
+;   ${BUNDLEID}                 - the bundle identifier (com.clashassist.app).
 ;
-; Only NSIS_HOOK_POSTUNINSTALL does anything. It removes our own data dir
+; M4b: the app-data deletion of the template itself (RmDir /r on
+; $APPDATA\${BUNDLEID} and $LOCALAPPDATA\${BUNDLEID}) is replaced by
+; CA_DELETE_TAURI_APP_DATA below, via our copy of the template
+; (src-tauri/windows/installer.nsi, bundle.windows.nsis.template).
+;
+; Only NSIS_HOOK_POSTUNINSTALL runs as a hook. It removes our own data dir
 ; %LOCALAPPDATA%\ClashAssist\ (logs\, updates\, update-pending.json), and never
 ; during an update. It must not touch Clash Verge's directories and must not
 ; stop verge-mihomo.exe.
@@ -26,8 +32,9 @@
 ;  directory -> leave it alone. Entries inside are handled the same way:
 ;  reparse points (or entries whose attributes cannot be read) are removed with
 ;  non-recursive RMDir / Delete, which only drop the link itself.
-;  Only called with the fixed path $LOCALAPPDATA\ClashAssist (and, recursively,
-;  plain sub-directories of it); it does not validate the path itself.
+;  Only called with fixed paths: $LOCALAPPDATA\ClashAssist, $APPDATA\${BUNDLEID}
+;  and $LOCALAPPDATA\${BUNDLEID} (and, recursively, plain sub-directories of
+;  them); it does not validate the path itself.
 Function un.CA_RmTreeNoFollow
   Exch $R0
   Push $R1
@@ -75,6 +82,22 @@ ca_rmtree_done:
   Pop $R1
   Pop $R0
 FunctionEnd
+
+; Used by src-tauri/windows/installer.nsi in place of the template's
+;   RmDir /r "$APPDATA\${BUNDLEID}" / RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+; inside its "delete app data ticked and not /UPDATE" branch, right after
+; SetShellVarContext current.
+!macro CA_DELETE_TAURI_APP_DATA
+  ; Never let an empty variable turn these into "\${BUNDLEID}" at the drive root.
+  ${If} $APPDATA != ""
+    Push "$APPDATA\${BUNDLEID}"
+    Call un.CA_RmTreeNoFollow
+  ${EndIf}
+  ${If} $LOCALAPPDATA != ""
+    Push "$LOCALAPPDATA\${BUNDLEID}"
+    Call un.CA_RmTreeNoFollow
+  ${EndIf}
+!macroend
 
 !macro NSIS_HOOK_PREINSTALL
 !macroend

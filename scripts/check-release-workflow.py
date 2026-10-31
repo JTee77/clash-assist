@@ -138,6 +138,8 @@ def check(doc, text):
             errs.append("installer.nsi 扫描必须在 tauri build 之后")
         if "release/nsis/x64/installer.nsi" not in r:
             errs.append("installer.nsi 扫描必须扫 release/nsis/x64/installer.nsi")
+        if "Include=@('src-tauri/windows/hooks.nsh')" not in r:
+            errs.append("installer.nsi 扫描必须同时扫 hooks.nsh（Include = @('src-tauri/windows/hooks.nsh')）")
         if "Strict=($env:EVENT_NAME-eq'push')" not in r:
             errs.append("installer.nsi 扫描必须在 tag push 时 strict（Strict = ($env:EVENT_NAME -eq 'push')）")
         if "exit$LASTEXITCODE" not in r:
@@ -221,6 +223,7 @@ def self_test(path):
         ("actions/cache", lambda d, t: (d["jobs"]["build"]["steps"].insert(1, {"uses": "actions/cache@" + "0" * 40, "with": {"path": "x"}}), t), "不得使用缓存"),
         ("删掉 installer.nsi 扫描", lambda d, t: (d["jobs"]["build"].__setitem__("steps", [x for x in d["jobs"]["build"]["steps"] if "scan-nsis-rmdir" not in str(x.get("run", ""))]), t), "缺少 installer.nsi"),
         ("installer.nsi 扫描不 strict", lambda d, t: (nsi_step(d).__setitem__("run", nsi_step(d)["run"].replace("Strict = ($env:EVENT_NAME -eq 'push')", "Strict = $false")), t), "strict"),
+        ("installer.nsi 扫描不带 hooks.nsh", lambda d, t: (nsi_step(d).__setitem__("run", nsi_step(d)["run"].replace(" Include = @('src-tauri/windows/hooks.nsh');", "")), t), "hooks.nsh"),
         ("installer.nsi 扫描 continue-on-error", lambda d, t: (nsi_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
         ("installer.nsi 扫描加 if", lambda d, t: (nsi_step(d).__setitem__("if", "false"), t), "不得有 if"),
         ("installer.nsi 扫描挪到 tauri build 之前", lambda d, t: (move_nsi_first(d), t), "之后"),

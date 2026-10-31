@@ -134,11 +134,12 @@ jobs:
           ./scripts/scan-exe-markers.ps1 @scan
           exit $LASTEXITCODE
 
-      # Ellie PR55 r2：NSIS 的 RmDir /r 会跟随 junction。Tauri 模板自带的「删除应用数据」仍对
-      # $APPDATA / $LOCALAPPDATA 下的目录用 RmDir /r：在 win/m4b-nsis-nofollow 修掉之前，tag 构建在这里失败，演练只记 warning。
+      # Ellie PR55 r2 / r3：NSIS 的 RmDir /r 会跟随 junction。M4b 起用自带模板（src-tauri/windows/installer.nsi），
+      # 「删除应用数据」改走 hooks.nsh 的 CA_DELETE_TAURI_APP_DATA。生成的 installer.nsi 与 hooks.nsh 里除 $INSTDIR 外
+      # 出现任何 RmDir /r，tag 构建在这里失败，演练只记 warning；没用上自带模板或 hooks.nsh（正向对照）一律失败。
       - name: 扫描生成的 installer.nsi（APPDATA / LOCALAPPDATA 上不得有 RmDir /r）
         run: |
-          $scan = @{ Nsi = "src-tauri/target/$env:TARGET/release/nsis/x64/installer.nsi"; Strict = ($env:EVENT_NAME -eq 'push') }
+          $scan = @{ Nsi = "src-tauri/target/$env:TARGET/release/nsis/x64/installer.nsi"; Include = @('src-tauri/windows/hooks.nsh'); Strict = ($env:EVENT_NAME -eq 'push') }
           ./scripts/scan-nsis-rmdir.ps1 @scan
           exit $LASTEXITCODE
 
@@ -177,12 +178,14 @@ jobs:
             -Version $env:VERSION -HooksFile src-tauri/windows/hooks.nsh
           exit $LASTEXITCODE
 
-      # 静默卸载走不到「删除应用数据」分支，这里用 tauri build 下载的同一个 makensis 实跑卸载 hook（含 junction）。
-      # 冒烟测试的 finally 已清掉 %LOCALAPPDATA%\ClashAssist。
+      # 静默卸载走不到「删除应用数据」分支，这里用 tauri build 下载的同一个 makensis 实跑卸载 hook 和
+      # CA_DELETE_TAURI_APP_DATA（含 junction / 目录 symlink）。冒烟测试的 finally 已清掉 %LOCALAPPDATA%\ClashAssist；
+      # 冒烟失败时也照跑（只读写测试目录，目录已存在时脚本拒绝运行），好在同一次演练里看到两边的结果。
       - name: NSIS 卸载 hook 实跑（S-12，含 junction）
+        if: ${{ !cancelled() }}
         run: |
-          # 指定 tauri build 下载的那一份 makensis（找不到就失败），日志里打印其版本
-          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh -MakeNsis (Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe')
+          # 指定 tauri build 下载的那一份 makensis（找不到就失败）并断言版本：tauri-cli 2.11.4 下载的是 nsis-3.11
+          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh -MakeNsis (Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe') -ExpectVersion v3.11
           exit $LASTEXITCODE
 
       - name: 生成发布说明（不得含系统安全拦截相关文案）
