@@ -15,6 +15,12 @@ pub const LATEST_RELEASE_API: &str =
 pub const RELEASES_PAGE: &str = "https://github.com/JTee77/clash-assist/releases";
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/JTee77/clash-assist/releases/download/";
 pub const FAKE_LATEST_ENV: &str = "CLASH_ASSIST_FAKE_LATEST";
+/// Windows 的应用内更新在 M5 之前一律关闭（Ellie：M5 的第一个前提）。打开它属于 M5 的工作：
+/// 届时需要 NSIS 安装器链路、对账与签名校验，且 `CLASH_ASSIST_FAKE_LATEST` 要先做 cfg 门控（M-7）。
+pub const WINDOWS_UPDATER_ENABLED: bool = false;
+/// 关闭时 check / download / apply / relaunch 立即返回的错误（不发网络请求、不下载、不运行安装器）。
+pub const UPDATER_UNSUPPORTED: &str =
+    "updater_unsupported：Windows 版暂不支持应用内更新，请前往发布页手动下载新版本";
 const TIMEOUT_MS: u64 = 5000;
 /// 下载进度事件名（前端 TitleBar 监听）。
 pub const DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
@@ -48,6 +54,24 @@ pub struct UpdateInfo {
     /// GitHub Release 中的 .dmg SHA-256 摘要（形如 "sha256:..."，若存在）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dmg_sha256: Option<String>,
+}
+
+/// 更新器闸门（纯函数，便于在所有平台上测试两种取值）。
+fn updater_gate_for(windows: bool) -> Result<(), String> {
+    if windows && !WINDOWS_UPDATER_ENABLED {
+        Err(UPDATER_UNSUPPORTED.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// 每个更新入口（check / download_to_staging / apply_staged_update / relaunch_updated_app）的第一步。
+///
+/// `black_box`：不让编译器把 Windows 上闸门之后的代码当死代码删掉。否则 `LATEST_RELEASE_API`
+/// 与 `CLASH_ASSIST_FAKE_LATEST` 会从 exe 中消失，`scan-exe-markers.ps1` 的 UTF-8 正向对照失败，
+/// M-7 的 FAKE_LATEST 规则（tag 构建发现即失败，cfg 门控在 M5）也会悄悄失效。运行时行为不变：闸门照样先返回。
+fn updater_gate() -> Result<(), String> {
+    updater_gate_for(std::hint::black_box(cfg!(windows)))
 }
 
 /// "v1.2.3" / "1.2.3-beta.1" → (1,2,3, 是否预发布)。不合法返回 None。
@@ -271,6 +295,16 @@ fn active_local_proxy_port() -> Option<u16> {
     None
 }
 
+/// 异步调用方用这个（M4c）：`active_local_proxy_port` 是同步的（读配置、探测管道、短连接），
+/// Windows 上的管道探测内部用 `block_on`，在 tokio 工作线程上直接调用会 panic
+/// （"Cannot start a runtime from within a runtime"；release 为 `panic = "abort"`，进程以 0xC0000409 退出）。
+async fn active_local_proxy_port_async() -> Option<u16> {
+    tauri::async_runtime::spawn_blocking(active_local_proxy_port)
+        .await
+        .ok()
+        .flatten()
+}
+
 fn build_http_client(
     current: &str,
     timeout_ms: Option<u64>,
@@ -328,7 +362,7 @@ async fn get_bytes_with_proxy_fallback(
         timeout_ms,
         connect_ms,
         accept_header,
-        active_local_proxy_port(),
+        active_local_proxy_port_async().await,
     )
     .await
 }
@@ -511,6 +545,8 @@ async fn stream_dmg_to_file_capped(
 }
 
 pub async fn check(current: &str) -> Result<UpdateInfo, String> {
+    // 闸门在 FAKE_LATEST 之前：Windows 上连测试用的假版本也不接受。
+    updater_gate()?;
     if let Ok(fake) = std::env::var(FAKE_LATEST_ENV) {
         let fake = normalize(&fake);
         if !fake.is_empty() {
@@ -824,6 +860,7 @@ fn staging_base_dir() -> PathBuf {
 /// 下载地址与期望摘要只由 Rust 侧重新查询 GitHub release 元数据得到（[`resolve_download_target`]），
 /// 不接受前端传入；release 未提供摘要时 fail closed，引导用户去下载页手动更新。
 pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<String, String> {
+    updater_gate()?;
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let _target_app = resolve_target_app_bundle(&exe)?;
 
@@ -844,7 +881,7 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("创建临时更新目录失败：{e}"))?;
 
     let dmg_path = work_dir.join("update.dmg");
-    let proxy_port = active_local_proxy_port();
+    let proxy_port = active_local_proxy_port_async().await;
     if let Err(e) = stream_dmg_to_file(
         &resolved_url,
         env!("CARGO_PKG_VERSION"),
@@ -875,6 +912,7 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
 
 /// 阶段 2（后台静默安装）：从临时工作目录挂载 `update.dmg`，清除隔离属性并替换当前 `.app`（不自动退出重启）。
 pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String> {
+    updater_gate()?;
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let target_app = resolve_target_app_bundle(&exe)?;
 
@@ -912,6 +950,7 @@ pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String>
 
 /// 阶段 3（用户主动点击「立即重启」）：拉起已替换的新版 `.app` 并退出当前进程。
 pub fn relaunch_updated_app() -> Result<(), String> {
+    updater_gate()?;
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let target_app = resolve_target_app_bundle(&exe)?;
     if std::env::var("CLASH_ASSIST_NO_RELAUNCH").ok().as_deref() != Some("1") {
@@ -933,6 +972,47 @@ pub fn relaunch_updated_app() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_gate_blocks_windows_until_m5() {
+        // M5 之前 Windows 更新器必须关闭（打开 WINDOWS_UPDATER_ENABLED 会让这里失败，需同时改测试）。
+        assert_eq!(updater_gate_for(true), Err(UPDATER_UNSUPPORTED.to_string()));
+        assert_eq!(updater_gate_for(false), Ok(()));
+    }
+
+    /// Windows：四个入口都立即返回 UPDATER_UNSUPPORTED（FAKE_LATEST 也不放行；不联网、不碰文件）。
+    #[cfg(windows)]
+    #[test]
+    fn windows_updater_entry_points_are_disabled() {
+        let want = Err(UPDATER_UNSUPPORTED.to_string());
+        std::env::set_var(FAKE_LATEST_ENV, "99.0.0");
+        let c = tauri::async_runtime::block_on(check("0.0.1")).map(|_| ());
+        std::env::remove_var(FAKE_LATEST_ENV);
+        assert_eq!(c, want);
+        let progress = |_: DownloadProgress| panic!("禁用时不得开始下载");
+        let d = tauri::async_runtime::block_on(download_to_staging(&progress)).map(|_| ());
+        assert_eq!(d, want);
+        let a = tauri::async_runtime::block_on(apply_staged_update(
+            std::env::temp_dir()
+                .join("clash-assist-update-x")
+                .display()
+                .to_string(),
+        ))
+        .map(|_| ());
+        assert_eq!(a, want);
+        assert_eq!(relaunch_updated_app(), want);
+    }
+
+    /// M4c 回归：在 tokio 工作线程上（与 `check_update` 命令相同的上下文）探测代理端口不得 panic。
+    /// 旧实现在工作线程上同步调用 discovery，Windows 的管道探测内部 `block_on`，panic
+    /// "Cannot start a runtime from within a runtime"（release 下即 0xC0000409 闪退）。
+    #[test]
+    fn proxy_port_probe_is_safe_on_runtime_worker() {
+        let r = tauri::async_runtime::block_on(async {
+            tauri::async_runtime::spawn(active_local_proxy_port_async()).await
+        });
+        assert!(r.is_ok(), "在工作线程上探测代理端口 panic：{r:?}");
+    }
 
     #[test]
     fn semver_compare() {

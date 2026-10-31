@@ -14,6 +14,10 @@
      标记文件应保留；
   ⑤ 便携 zip 解压到干净目录后启动，同 ③ 的判据（V14：验证是否需要随包提供 WebView2Loader.dll）。
 
+  ③ / ⑤ 的存活判据（M4c）：每 0.5 秒检查一次，StartupSeconds 秒内进程一直存活才算通过；
+  中途退出时记录退出时刻与退出码（0xC0000409 等同时以十六进制打印），并（给了 -DiagDir 时）收集诊断。
+  中途以退出码 0 正常退出也算失败：GUI 主程序不应自行退出。
+
   说明：$DeleteAppDataCheckboxState 只能在卸载界面勾选，静默模式下恒为 0，所以“勾选后删除”
   这条路径 CI 无法触发，留给真机清单第 14 项。
 
@@ -30,6 +34,9 @@ param(
   [Parameter(Mandatory)] [string] $Version,
   [string] $HooksFile,
   [int] $StartupSeconds = 15,
+  # 诊断输出目录（M4c）：每次启动的 stdout/stderr、进程退出后的 Application 事件日志、应用自己的日志。
+  # 设置后同时置 RUST_BACKTRACE=1（子进程继承）。WER LocalDumps 由调用方（CI）配置，转储也应写到这里。
+  [string] $DiagDir,
   [int] $UninstallTimeoutSeconds = 120
 )
 
@@ -69,18 +76,60 @@ function Stop-Tree([int] $RootPid) {
   Start-Sleep -Seconds 2
 }
 
-# 启动 exe，等待 StartupSeconds 秒，断言进程存活且有 msedgewebview2.exe 子孙进程；最后结束整棵进程树
-function Test-Launch([string] $Exe, [string] $Label) {
-  $p = Start-Process -FilePath $Exe -WorkingDirectory (Split-Path $Exe) -PassThru
-  Write-Host "  启动 $Label（PID $($p.Id)），等待 $StartupSeconds 秒"
-  Start-Sleep -Seconds $StartupSeconds
-  $p.Refresh()
-  Assert (-not $p.HasExited) "$Label 启动 $StartupSeconds 秒后仍在运行$(if ($p.HasExited) { "（已退出，退出码 $($p.ExitCode)）" })"
-  if (-not $p.HasExited) {
-    $wv = @(Get-Descendants $p.Id | Where-Object { $_.Name -ieq 'msedgewebview2.exe' })
-    Assert ($wv.Count -gt 0) "$Label 有 msedgewebview2.exe 子进程（$($wv.Count) 个）"
-    Stop-Tree $p.Id
+$AppLogDir = Join-Path $env:APPDATA 'logs\ClashAssist'   # platform::app_log_dir()（dirs::data_dir() = Roaming）
+if ($DiagDir) {
+  New-Item -ItemType Directory -Force -Path $DiagDir | Out-Null
+  $DiagDir = (Resolve-Path -LiteralPath $DiagDir).Path
+  $env:RUST_BACKTRACE = '1'
+}
+
+# 进程退出后：打印并保存这段时间内与 exe 相关的 Application Error / WER 事件
+function Save-CrashEvents([datetime] $Since, [string] $ExeName, [string] $Tag) {
+  if (-not $DiagDir) { return }
+  Start-Sleep -Seconds 3   # WER 写事件有延迟
+  $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $Since } -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProviderName -in @('Application Error', 'Windows Error Reporting', 'Application Hang', '.NET Runtime', 'SideBySide') -and $_.Message -match [regex]::Escape($ExeName) })
+  $text = ($ev | ForEach-Object { "[$($_.TimeCreated.ToString('o'))] $($_.ProviderName) id=$($_.Id)`n$($_.Message)`n" }) -join "`n"
+  Set-Content -LiteralPath (Join-Path $DiagDir "$Tag-events.txt") -Value $text -Encoding utf8
+  Write-Host "  ---- Application 事件（$($ev.Count) 条，$Tag）----"
+  if ($text) { $text -split "`n" | Select-Object -First 80 | ForEach-Object { Write-Host "  | $_" } }
+}
+
+function Show-DiagFile([string] $Path, [string] $Title, [int] $Max = 80) {
+  if ((Test-Path -LiteralPath $Path) -and (Get-Item -LiteralPath $Path).Length -gt 0) {
+    Write-Host "  ---- $Title（$Path）----"
+    Get-Content -LiteralPath $Path -Tail $Max | ForEach-Object { Write-Host "  | $_" }
   }
+}
+
+# 启动 exe，StartupSeconds 秒内每 0.5 秒检查一次，要求一直存活且有 msedgewebview2.exe 子孙进程；最后结束整棵进程树
+function Test-Launch([string] $Exe, [string] $Label, [string] $Tag) {
+  $since = Get-Date
+  $sp = @{ FilePath = $Exe; WorkingDirectory = (Split-Path $Exe); PassThru = $true }
+  if ($DiagDir) {
+    $sp.RedirectStandardOutput = Join-Path $DiagDir "$Tag-stdout.txt"
+    $sp.RedirectStandardError = Join-Path $DiagDir "$Tag-stderr.txt"
+  }
+  $p = Start-Process @sp
+  Write-Host "  启动 $Label（PID $($p.Id)），观察 $StartupSeconds 秒"
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  while ($sw.Elapsed.TotalSeconds -lt $StartupSeconds -and -not $p.HasExited) { Start-Sleep -Milliseconds 500; $p.Refresh() }
+  $p.Refresh()
+  if ($p.HasExited) {
+    $code = $p.ExitCode
+    Fail ("$Label 在 {0:N1} 秒时退出（要求 $StartupSeconds 秒内一直运行），退出码 $code（0x{1:X8}）" -f $sw.Elapsed.TotalSeconds, $code)
+    Save-CrashEvents $since (Split-Path -Leaf $Exe) $Tag
+    if ($DiagDir) {
+      Show-DiagFile (Join-Path $DiagDir "$Tag-stderr.txt") "$Tag stderr"
+      Show-DiagFile (Join-Path $DiagDir "$Tag-stdout.txt") "$Tag stdout"
+    }
+    Show-DiagFile (Join-Path $AppLogDir 'app.log') 'app.log（末尾）' 40
+    return
+  }
+  Pass "$Label 启动 $StartupSeconds 秒内一直在运行"
+  $wv = @(Get-Descendants $p.Id | Where-Object { $_.Name -ieq 'msedgewebview2.exe' })
+  Assert ($wv.Count -gt 0) "$Label 有 msedgewebview2.exe 子进程（$($wv.Count) 个）"
+  Stop-Tree $p.Id
 }
 
 function Read-UninstallKey {
@@ -138,7 +187,7 @@ try {
   }
 
   Step '③ 启动检查（安装版）'
-  if ($exe -and (Test-Path -LiteralPath $exe)) { Test-Launch $exe '安装版' } else { Fail '无法定位主程序，跳过启动检查' }
+  if ($exe -and (Test-Path -LiteralPath $exe)) { Test-Launch $exe '安装版' 'installed' } else { Fail '无法定位主程序，跳过启动检查' }
 
   Step '⑩ S-12：/UPDATE 重装不删应用数据'
   if ($HooksFile) {
@@ -178,10 +227,19 @@ try {
   Assert ($pexe.Count -eq 1) "便携 zip 根目录恰有一个 exe（实际 $($pexe.Count) 个）"
   Assert (Test-Path -LiteralPath (Join-Path $portableDir 'portable.txt')) '便携 zip 含 portable.txt'
   Assert ($null -eq (Read-UninstallKey)) '启动便携版前没有安装版（Uninstall 键不存在）'
-  if ($pexe.Count -eq 1) { Test-Launch $pexe[0].FullName '便携版' }
+  if ($pexe.Count -eq 1) { Test-Launch $pexe[0].FullName '便携版' 'portable' }
 }
 finally {
   Step '清理'
+  if ($DiagDir) {
+    foreach ($d in @($AppLogDir, (Join-Path $AppDataDir 'logs'))) {
+      if (Test-Path -LiteralPath $d) {
+        $dest = Join-Path $DiagDir ('applogs-' + ($d -replace '[:\\]+', '_'))
+        Copy-Item -LiteralPath $d -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  已复制 $d → $dest"
+      }
+    }
+  }
   Get-Process -ErrorAction SilentlyContinue | Where-Object {
     $_.Path -and ($_.Path.StartsWith($ExpectedInstallDir, [StringComparison]::OrdinalIgnoreCase) -or
       ($portableDir -and $_.Path.StartsWith($portableDir, [StringComparison]::OrdinalIgnoreCase)))

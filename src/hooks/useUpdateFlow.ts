@@ -8,6 +8,7 @@ import {
   downloadUpdate,
   openReleasePage,
   relaunchUpdatedApp,
+  updaterSupported,
   type UpdateInfo,
 } from "../lib/update";
 
@@ -203,17 +204,20 @@ function errMsg(err: unknown, fallback: string): string {
 export function useUpdateFlow({ windows }: { windows: boolean }) {
   const [state, dispatch] = useReducer(updateFlowReducer, initialUpdateFlowState);
   const { update, stage } = state;
+  const supported = updaterSupported(windows);
   const oneClick = update ? canOneClick(update, windows) : false;
 
+  // 更新器关闭（M5 之前的 Windows）：不做启动检查，状态停在 idle 且无 update → 不显示任何入口。
   useEffect(() => {
+    if (!supported) return;
     let alive = true;
-    void checkUpdateOnce().then((r) => {
+    void checkUpdateOnce(windows).then((r) => {
       if (alive) dispatch({ type: "checked", info: r });
     });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [supported, windows]);
 
   // 下载阶段订阅进度事件；离开阶段即退订（reducer 在离开 downloading 时清零百分比）。
   useEffect(() => {
@@ -239,7 +243,7 @@ export function useUpdateFlow({ windows }: { windows: boolean }) {
   };
 
   const primary = async () => {
-    if (!update) return;
+    if (!update || !supported) return;
     const action = primaryActionOf(state, oneClick);
     if (action === "open-release") {
       void openReleasePage(update.url);

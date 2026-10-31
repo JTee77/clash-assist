@@ -36,16 +36,29 @@ export type UpdateInfo = {
   pending?: UpdatePending | null;
 };
 
+/**
+ * Windows 的应用内更新在 M5 之前关闭（与 Rust `update_check::WINDOWS_UPDATER_ENABLED` 一致）：
+ * 不自动检查、不显示更新条；Rust 侧四个更新命令也会直接返回 updater_unsupported。
+ */
+export const WINDOWS_UPDATER_ENABLED = false;
+
+export function updaterSupported(windows: boolean = isWindows()): boolean {
+  return !windows || WINDOWS_UPDATER_ENABLED;
+}
+
 let once: Promise<UpdateInfo | null> | null = null;
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-/** 每次启动只发一次请求（React StrictMode 双调用 / 重挂载都复用同一个 Promise）。 */
-export function checkUpdateOnce(): Promise<UpdateInfo | null> {
+/**
+ * 每次启动只发一次请求（React StrictMode 双调用 / 重挂载都复用同一个 Promise）。
+ * 更新器关闭的平台（M5 之前的 Windows）不调用 check_update，直接视为「无更新」。
+ */
+export function checkUpdateOnce(windows: boolean = isWindows()): Promise<UpdateInfo | null> {
   if (!once) {
-    once = isTauri()
+    once = isTauri() && updaterSupported(windows)
       ? invoke<UpdateInfo>("check_update").then(
           (r) => r,
           () => null,
