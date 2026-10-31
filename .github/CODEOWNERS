@@ -1,0 +1,3 @@
+# 发布与安装器相关文件需要仓库所有者评审（#57 跟进，M4d）。
+/src-tauri/windows/ @JTee77
+/.github/workflows/release-windows.yml @JTee77

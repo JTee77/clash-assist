@@ -4,6 +4,7 @@
 > 适用范围：首个 Windows 版本起（x64，`x86_64-pc-windows-msvc`）。
 > 下列名称被发布流水线（M4）、更新器（M5）、安装器钩子与冒烟测试共同依赖，
 > **改动任何一项都必须同时改这几处，并在 PR 中说明。**
+> NSIS 模板随 tauri-cli 升级的同步步骤见 [windows-nsis-template.md](windows-nsis-template.md)。
 
 ## 发布资产
 
