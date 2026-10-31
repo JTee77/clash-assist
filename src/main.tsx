@@ -29,7 +29,7 @@ class ErrorBoundary extends React.Component<
         <div
           style={{
             fontFamily:
-              '-apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif',
+              '-apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
             maxWidth: 520,
             margin: "64px auto",
             padding: 24,
@@ -84,7 +84,7 @@ async function start() {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    rootEl.innerHTML = `<div style="font-family:-apple-system,sans-serif;padding:24px;color:#e7ecf3;background:#0f1419"><h1 style="color:#ffb454">CLI 启动失败</h1><pre>${msg.replace(/</g, "&lt;")}</pre></div>`;
+    rootEl.innerHTML = `<div style="font-family:-apple-system,'Segoe UI','Microsoft YaHei UI','Microsoft YaHei',sans-serif;padding:24px;color:#e7ecf3;background:#0f1419"><h1 style="color:#ffb454">CLI 启动失败</h1><pre>${msg.replace(/</g, "&lt;")}</pre></div>`;
     return;
   }
 
@@ -98,7 +98,7 @@ async function start() {
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    rootEl.innerHTML = `<div style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;max-width:520px;margin:64px auto;padding:24px;line-height:1.6;color:#e7ecf3;background:#0f1419">
+    rootEl.innerHTML = `<div style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI','Microsoft YaHei UI','Microsoft YaHei',sans-serif;max-width:520px;margin:64px auto;padding:24px;line-height:1.6;color:#e7ecf3;background:#0f1419">
     <h1 style="font-size:20px;color:#ffb454;margin:0 0 12px">${tStatic("boot.title")}</h1>
     <p>${tStatic("boot.body", { cmd: '<code style="background:#1c2430;padding:2px 6px;border-radius:4px">pnpm tauri dev</code>' })}</p>
     <pre style="white-space:pre-wrap;font-size:12px;opacity:.75;margin-top:16px">${msg.replace(/</g, "&lt;")}</pre>

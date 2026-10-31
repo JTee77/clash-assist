@@ -4,6 +4,7 @@
  * Never log secrets.
  */
 
+import { isWindows } from "../platform";
 import type { ControllerConfig } from "./types";
 
 export type ClientId =
@@ -23,7 +24,7 @@ export type ClientOption = {
   disabled?: boolean;
 };
 
-export const CLIENT_OPTIONS: ClientOption[] = [
+const ALL_CLIENT_OPTIONS: ClientOption[] = [
   {
     id: "verge",
     label: "Clash Verge / Clash Verge Rev",
@@ -35,6 +36,13 @@ export const CLIENT_OPTIONS: ClientOption[] = [
     hint: "选好后点刷新，按该软件自动连接",
   },
 ];
+
+/** Windows 只支持 Clash Verge（windows-plan §2.7）；其余平台保持现有列表。 */
+export function clientOptionsFor(windows: boolean): ClientOption[] {
+  return windows ? ALL_CLIENT_OPTIONS.filter((o) => o.id === "verge") : ALL_CLIENT_OPTIONS;
+}
+
+export const CLIENT_OPTIONS: ClientOption[] = clientOptionsFor(isWindows());
 
 const ALL_IDS: ClientId[] = [
   "verge",
@@ -94,7 +102,7 @@ export function clientPreset(id: ClientId): Partial<ControllerConfig> {
         secret: "",
         mixedPort: 7890,
         source: "preset-mihomo_party",
-        sockPath: "/tmp/mihomo-party.sock",
+        sockPath: mihomoPartySock(),
       };
     case "nyanpasu":
       return {
@@ -113,17 +121,18 @@ export function isClientId(v: unknown): v is ClientId {
 }
 
 /**
- * Map stored clientId. Clash Verge and FlClash are selectable today.
+ * Map stored clientId. Clash Verge and FlClash are selectable today (Windows: Verge only).
  * Legacy clashx_meta/mihomo_party/nyanpasu/mihomo/manual/unknown → null, forcing a fresh pick.
  */
-export function normalizeClientId(v: unknown): ClientId | null {
-  if (v === "verge" || v === "flclash") return v;
+export function normalizeClientId(v: unknown, windows: boolean = isWindows()): ClientId | null {
+  if (v === "verge") return v;
+  if (v === "flclash" && !windows) return v;
   return null;
 }
 
 export function clientLabel(id: ClientId | null): string {
   if (!id) return "未选择";
-  return CLIENT_OPTIONS.find((o) => o.id === id)?.label ?? id;
+  return ALL_CLIENT_OPTIONS.find((o) => o.id === id)?.label ?? id;
 }
 
 /** Plain-language unreachable tip naming the selected app. */
@@ -146,9 +155,15 @@ export const VERGE_SOCK = VERGE_SOCK_LEGACY;
 export const VERGE_SERVICE_USERS_DIR = "/var/run/clash-verge-service/users";
 export const MIHOMO_PARTY_SOCK = "/tmp/mihomo-party.sock";
 
-/** Ordered Verge sock candidates (align with Rust `platform::verge_sock_candidates`). */
-export function vergeSockCandidates(uid?: number | null): string[] {
+/** Mihomo Party 的 unix sock；Windows 没有 unix sock 候选（控制管道由 Rust discovery 给出）。 */
+export function mihomoPartySock(windows: boolean = isWindows()): string | null {
+  return windows ? null : MIHOMO_PARTY_SOCK;
+}
+
+/** Ordered Verge sock candidates (align with Rust `platform::verge_sock_candidates`). Windows: none. */
+export function vergeSockCandidates(uid?: number | null, windows: boolean = isWindows()): string[] {
   const out: string[] = [];
+  if (windows) return out;
   const push = (s: string) => {
     if (s && !out.includes(s)) out.push(s);
   };

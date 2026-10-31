@@ -33,6 +33,7 @@ import {
   clientLabel,
   clientPreset,
   clientUnreachableHint,
+  mihomoPartySock,
   vergeLikeDefault,
 } from "./clients";
 
@@ -338,7 +339,7 @@ export async function discoverAndProbe(
     ) {
       config = {
         ...config,
-        sockPath: "/tmp/mihomo-party.sock",
+        sockPath: mihomoPartySock(),
       };
     }
   }
@@ -353,7 +354,7 @@ export async function discoverAndProbe(
     // After merge, still never keep Verge sock for non-Verge unless user set sockPath.
     if (clientId !== "verge" && !manual.sockPath) {
       if (clientId === "mihomo_party") {
-        const party = "/tmp/mihomo-party.sock";
+        const party = mihomoPartySock();
         config = {
           ...config,
           sockPath: config.sockPath?.includes("verge") ? party : (config.sockPath ?? party),
@@ -366,7 +367,8 @@ export async function discoverAndProbe(
 
   // mihomo_party: prefer unix sock first when present
   if (clientId === "mihomo_party") {
-    const partySock = config.sockPath || "/tmp/mihomo-party.sock";
+    // Windows 上没有 unix sock：mihomoPartySock() 为 null，只走 TCP。
+    const partySock = config.sockPath || mihomoPartySock();
     config = { ...config, sockPath: partySock };
     const sockFirst = await probeWithConfig(config, clientId, { preferSock: true });
     if (sockFirst.status === "connected" || sockFirst.status === "unauthorized") {

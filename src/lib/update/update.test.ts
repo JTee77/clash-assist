@@ -15,6 +15,7 @@ import {
   checkUpdateOnce,
   downloadUpdate,
   openReleasePage,
+  openVergeReleasePage,
   relaunchUpdatedApp,
 } from "./index";
 
@@ -81,6 +82,47 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     expect(canOneClick({ ...base, dmg_url: dmg })).toBe(false);
     expect(canOneClick({ ...base, dmg_sha256: "sha256:abcd" })).toBe(false);
     expect(canOneClick(base)).toBe(false);
+  });
+
+  it("canOneClick: Windows 无 one_click 时走发布页；one_click / portable 由 Rust 决定（M5）", () => {
+    const base = {
+      current: "0.2.8",
+      latest: "0.2.9",
+      update_available: true,
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.2.9",
+      dmg_url:
+        "https://github.com/JTee77/clash-assist/releases/download/v0.2.9/Clash.Assist_0.2.9_aarch64.dmg",
+      dmg_sha256: "sha256:abcd",
+    };
+    // Windows：Mac 的 DMG 字段不能触发一键更新
+    expect(canOneClick(base, true)).toBe(false);
+    expect(canOneClick(base, false)).toBe(true);
+    // Rust 显式给出 one_click 时以它为准
+    expect(canOneClick({ ...base, one_click: true, install_kind: "nsis" }, true)).toBe(true);
+    expect(canOneClick({ ...base, one_click: false }, false)).toBe(false);
+    // portable 永远只去发布页
+    expect(canOneClick({ ...base, one_click: true, install_kind: "portable" }, true)).toBe(false);
+  });
+
+  it("openVergeReleasePage 只调用无参数命令，不传任何 URL；失败时 reject 交给调用方提示", async () => {
+    h.invoke.mockResolvedValue(undefined);
+    await openVergeReleasePage();
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    expect(h.invoke.mock.calls[0]).toEqual(["open_verge_release_page"]);
+    h.invoke.mockRejectedValue(new Error("打开浏览器失败"));
+    await expect(openVergeReleasePage()).rejects.toThrow("打开浏览器失败");
+  });
+
+  it("前端源码里不出现 Verge 发布页地址（只能由 Rust 常量决定）", () => {
+    const sources = import.meta.glob(["../../**/*.{ts,tsx}", "!../../**/*.test.ts"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(sources).length).toBeGreaterThan(10);
+    for (const [file, src] of Object.entries(sources)) {
+      expect(src.includes("clash-verge-rev/releases"), file).toBe(false);
+    }
   });
 
   it("openReleasePage swallows errors gracefully", async () => {
