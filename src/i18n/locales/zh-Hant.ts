@@ -35,6 +35,7 @@ export const zhHant: Messages = {
   "diag.serviceMode": "Clash Verge 正以服務模式執行核心，因此無法確認控制連接埠屬於你本人。",
   "diag.ipv6DualStack": "控制連接埠 {port} 只監聽了 IPv6，請在 Clash Verge 中把外部控制位址改為 127.0.0.1:{port} 後重新檢測。",
   "diag.ipv6DualStackGeneric": "控制連接埠只監聽了 IPv6，請在 Clash Verge 中把外部控制位址改為 127.0.0.1 後重新檢測。",
+  "diag.truncated": "…（已截斷）",
 
   "crash.title": "介面出錯了",
   "crash.body": "應用程式沒有完全當掉，但這一頁繪製失敗。請嘗試重新載入，或結束後只開一個終端機執行：",

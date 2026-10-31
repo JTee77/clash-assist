@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useI18n, type MessageKey } from "../i18n";
-import { sourceNoticesOf, type SourceNotice } from "../lib/mihomo";
+import { sourceNoticesOf, TRUNCATED_ITEM, type SourceNotice } from "../lib/mihomo";
 import { openVergeReleasePage } from "../lib/update";
 
 const REJECT_KEYS: Record<string, MessageKey> = {
@@ -55,6 +55,23 @@ const LEVEL_CLASS: Record<NoticeLevel, string> = {
   warn: "gate-banner diag-notice diag-notice-warn",
   info: "gate-banner diag-notice diag-notice-info",
 };
+
+/**
+ * 来源标签里的管道名 / 文件名列表的展示文本（PR #54 Ellie）：后端截断占位项 `(truncated)` 不是名字，
+ * 一律显示为本地化的「…（已截断）」，放在末尾；`truncated` 为真（解析层已剔除占位项）时同样追加。
+ */
+export function sourceItemsText(
+  items: readonly string[],
+  truncated: boolean,
+  translate: (key: MessageKey) => string,
+  sep = ", ",
+): string {
+  const names = items.filter((i) => i !== TRUNCATED_ITEM);
+  const cut = truncated || names.length !== items.length;
+  if (!cut) return names.join(sep);
+  const mark = translate("diag.truncated");
+  return names.length ? `${names.join(sep)}${sep}${mark}` : mark;
+}
 
 /** 打开 Verge 发布页；失败时 setFailed(true)，让按钮旁出一句提示（不吞错误）。 */
 export async function openVergeWithFeedback(

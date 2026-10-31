@@ -16,6 +16,10 @@
  * 后缀顺序（Rust `SuffixKey`）：ipv6-dual-stack、pipe-open-to-all、pipe-insecure-dacl。
  * 值里的 `; = | , ( ) %` 与控制字符由 Rust 按大写十六进制百分号编码，前端逐项 decodeURIComponent；
  * 解码失败视为解析失败：键仍然算出现（提示照常显示），只是不带具体值。
+ *
+ * 截断（PR #54）：标签超过 1024 字节时，Rust 按整项截断 body 的文件列表和各后缀值，截断处是占位项
+ * `%28truncated%29`（解码后 [`TRUNCATED_ITEM`]）。它不是管道名 / 文件名：解析时从管道名列表里剔除，
+ * 只在 `SourceMarkers.truncated` / 提示的 `truncated` 上留痕；需要展示时用本地化的「…（已截断）」。
  */
 
 export const INSECURE_DACL_KEY = "pipe-insecure-dacl";
@@ -23,13 +27,15 @@ export const IPV6_DUAL_STACK_KEY = "ipv6-dual-stack";
 export const PIPE_OPEN_TO_ALL_KEY = "pipe-open-to-all";
 /** `verge-tcp(...)` 括号内的服务模式项（C-4）。 */
 export const SERVICE_MODE_ITEM = "service-mode";
+/** Rust `source_label::TRUNCATED_ITEM`：截断占位项（编码后 `%28truncated%29`），不是名字。 */
+export const TRUNCATED_ITEM = "(truncated)";
 
 export type TcpRejectCode = "listener-conflict" | "token-mismatch" | "image-mismatch";
 
 export type SourceNotice =
-  | { kind: "insecure-dacl"; pipes: string[] }
+  | { kind: "insecure-dacl"; pipes: string[]; truncated?: true }
   | { kind: "untrusted-pipe" }
-  | { kind: "pipe-open-to-all"; pipes: string[] }
+  | { kind: "pipe-open-to-all"; pipes: string[]; truncated?: true }
   | { kind: "tcp-unverified" }
   | { kind: "service-mode" }
   | { kind: "tcp-rejected"; code: string }
@@ -47,6 +53,8 @@ export type SourceMarkers = {
   openToAll: boolean;
   /** `pipe-open-to-all` 的值解码后的管道名；值缺失或解析失败时为空。 */
   openToAllPipes: string[];
+  /** 标签里有截断占位项（文件列表或任一后缀值被后端截断）。 */
+  truncated: boolean;
 };
 
 export type ParsedSource = {
@@ -56,7 +64,7 @@ export type ParsedSource = {
   tcpItems: string[] | null;
   /** 出现了 `pipe-insecure-dacl` 后缀（无论值能否解析）。 */
   insecureDacl: boolean;
-  /** `pipe-insecure-dacl` 的值解码后的管道名；值缺失或解析失败时为空（提示照常显示）。 */
+  /** `pipe-insecure-dacl` 的值解码后的管道名（不含截断占位项）；值缺失或解析失败时为空（提示照常显示）。 */
   insecurePipes: string[];
 };
 
@@ -102,9 +110,16 @@ export function parseSource(source: string | null | undefined): ParsedSource {
     if (eq < 0) continue;
     const pipes = decodeList(seg.slice(eq + 1));
     if (!pipes) continue;
-    for (const p of pipes) if (!insecurePipes.includes(p)) insecurePipes.push(p);
+    for (const p of pipes) if (p !== TRUNCATED_ITEM && !insecurePipes.includes(p)) insecurePipes.push(p);
   }
   return { base, tcpItems, insecureDacl, insecurePipes };
+}
+
+const TRUNCATED_ENC = "%28truncated%29";
+
+/** base 里（按 `:` `,` `|` 切开后）是否有一项恰为编码后的截断占位项。 */
+function hasTruncatedItem(base: string, sep: RegExp): boolean {
+  return base.split(sep).some((part) => part.trim() === TRUNCATED_ENC);
 }
 
 /** 十进制端口 1–65535；其他一律视为解析失败。 */
@@ -124,11 +139,14 @@ export function sourceMarkersOf(source: string | null | undefined): SourceMarker
     ipv6Ports: [],
     openToAll: false,
     openToAllPipes: [],
+    truncated: hasTruncatedItem(segments[0] ?? "", /[:,|]/),
   };
   for (const seg of segments.slice(1)) {
     const eq = seg.indexOf("=");
     const key = (eq < 0 ? seg : seg.slice(0, eq)).trim();
-    const values = eq < 0 ? null : decodeList(seg.slice(eq + 1));
+    const all = eq < 0 ? null : decodeList(seg.slice(eq + 1));
+    if (all?.includes(TRUNCATED_ITEM)) out.truncated = true;
+    const values = all?.filter((v) => v !== TRUNCATED_ITEM) ?? null;
     if (key === IPV6_DUAL_STACK_KEY) {
       out.ipv6DualStack = true;
       const ports = values?.map(parsePort);
@@ -159,6 +177,17 @@ export function insecurePipesOf(source: string | null | undefined): string[] {
   return parseSource(source).insecurePipes;
 }
 
+/** `;key=` 后缀的值里是否有截断占位项。 */
+function suffixTruncated(source: string, key: string): boolean {
+  return source
+    .split(";")
+    .slice(1)
+    .some((seg) => {
+      const eq = seg.indexOf("=");
+      return eq >= 0 && seg.slice(0, eq).trim() === key && seg.slice(eq + 1).split("|").includes(TRUNCATED_ENC);
+    });
+}
+
 /**
  * 汇总一次刷新里所有候选的来源标签，返回去重后的提示。顺序：InsecureDacl、不可信管道、
  * 管道对所有用户开放、TCP 未验证、服务模式、TCP 拒绝原因、IPv6 双栈。
@@ -166,6 +195,8 @@ export function insecurePipesOf(source: string | null | undefined): string[] {
  */
 export function sourceNoticesOf(sources: readonly (string | null | undefined)[]): SourceNotice[] {
   const pipes: string[] = [];
+  let pipesTruncated = false;
+  let openTruncated = false;
   let insecure = false;
   let untrusted = false;
   let unverified = false;
@@ -182,6 +213,7 @@ export function sourceNoticesOf(sources: readonly (string | null | undefined)[])
     if (m.openToAll) {
       openToAll = true;
       for (const name of m.openToAllPipes) if (!openPipes.includes(name)) openPipes.push(name);
+      if (suffixTruncated(raw, PIPE_OPEN_TO_ALL_KEY)) openTruncated = true;
     }
     if (m.serviceMode) serviceMode = true;
     if (m.ipv6DualStack) {
@@ -191,6 +223,7 @@ export function sourceNoticesOf(sources: readonly (string | null | undefined)[])
     if (p.insecureDacl || p.tcpItems?.includes("pipe-insecure")) {
       insecure = true;
       for (const name of p.insecurePipes) if (!pipes.includes(name)) pipes.push(name);
+      if (suffixTruncated(raw, INSECURE_DACL_KEY)) pipesTruncated = true;
     }
     if (p.base.startsWith("verge-pipe-untrusted:")) untrusted = true;
     if (p.tcpItems) {
@@ -203,9 +236,15 @@ export function sourceNoticesOf(sources: readonly (string | null | undefined)[])
     }
   }
   const out: SourceNotice[] = [];
-  if (insecure) out.push({ kind: "insecure-dacl", pipes });
+  if (insecure) out.push(pipesTruncated ? { kind: "insecure-dacl", pipes, truncated: true } : { kind: "insecure-dacl", pipes });
   if (untrusted) out.push({ kind: "untrusted-pipe" });
-  if (openToAll) out.push({ kind: "pipe-open-to-all", pipes: openPipes });
+  if (openToAll) {
+    out.push(
+      openTruncated
+        ? { kind: "pipe-open-to-all", pipes: openPipes, truncated: true }
+        : { kind: "pipe-open-to-all", pipes: openPipes },
+    );
+  }
   if (unverified) out.push({ kind: "tcp-unverified" });
   if (serviceMode) out.push({ kind: "service-mode" });
   for (const code of rejected) out.push({ kind: "tcp-rejected", code });

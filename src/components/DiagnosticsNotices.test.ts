@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { openVergeWithFeedback, noticeView } from "./DiagnosticsNotices";
+import { openVergeWithFeedback, noticeView, sourceItemsText } from "./DiagnosticsNotices";
 import { format } from "../i18n";
 import { zhHans } from "../i18n/locales/zh-Hans";
 import { zhHant } from "../i18n/locales/zh-Hant";
@@ -94,5 +94,30 @@ describe("noticeView：提示级别与文案", () => {
         expect(text.length, `${lang} ${n.kind}`).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe("sourceItemsText：截断占位项显示为本地化的「已截断」（PR #54 Ellie）", () => {
+  const tr = (m: Record<string, string>) => (k: string) => m[k] ?? k;
+  it("占位项不当成名字显示", () => {
+    expect(sourceItemsText(["a", "(truncated)"], false, tr(zhHans))).toBe("a, …（已截断）");
+    expect(sourceItemsText(["(truncated)"], false, tr(zhHant))).toBe("…（已截斷）");
+    expect(sourceItemsText(["a", "b"], true, tr(en))).toBe("a, b, … (list truncated)");
+    expect(sourceItemsText(["a", "b"], false, tr(en))).toBe("a, b");
+    expect(sourceItemsText([], false, tr(en))).toBe("");
+  });
+  it("三种语言都有「已截断」文案，且都以省略号开头、不含原始占位项", () => {
+    for (const m of [zhHans, zhHant, en]) {
+      expect(m["diag.truncated"]).toMatch(/^…/);
+      expect(m["diag.truncated"]).not.toContain("(truncated)");
+    }
+  });
+  it("样本 truncated-huge-file-list 的文件列表：末项显示为「已截断」", () => {
+    const s = backendLabels.labels.find((x) => x.name === "truncated-huge-file-list")!;
+    const files = s.base.slice(s.base.indexOf(":") + 1).split(",").map((f) => decodeURIComponent(f));
+    expect(files[files.length - 1]).toBe("(truncated)");
+    const text = sourceItemsText(files, false, tr(zhHans));
+    expect(text.endsWith(", …（已截断）")).toBe(true);
+    expect(text).not.toContain("(truncated)");
   });
 });

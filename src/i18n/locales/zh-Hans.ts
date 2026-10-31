@@ -33,6 +33,7 @@ export const zhHans = {
   "diag.serviceMode": "Clash Verge 正以服务模式运行内核，因此无法确认控制端口属于你本人。",
   "diag.ipv6DualStack": "控制端口 {port} 只监听了 IPv6，请在 Clash Verge 中把外部控制地址改为 127.0.0.1:{port} 后重新检测。",
   "diag.ipv6DualStackGeneric": "控制端口只监听了 IPv6，请在 Clash Verge 中把外部控制地址改为 127.0.0.1 后重新检测。",
+  "diag.truncated": "…（已截断）",
 
   "crash.title": "界面出错了",
   "crash.body": "应用没有完全崩溃，但这一页渲染失败。请尝试重新加载，或退出后只开一个终端运行：",

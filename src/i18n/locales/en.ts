@@ -35,6 +35,7 @@ export const en: Messages = {
   "diag.serviceMode": "Clash Verge runs the core in service mode, so the control port can't be confirmed as yours.",
   "diag.ipv6DualStack": "Control port {port} only listens on IPv6; set Verge's external controller to 127.0.0.1:{port} and check again.",
   "diag.ipv6DualStackGeneric": "The control port only listens on IPv6; set Verge's external controller to 127.0.0.1 and check again.",
+  "diag.truncated": "… (list truncated)",
 
   "crash.title": "Something went wrong",
   "crash.body": "The app didn't fully crash, but this page failed to render. Try reloading, or quit and run it from a single terminal:",
