@@ -24,7 +24,7 @@ export const en: Messages = {
   "diag.insecureDacl": "Connection refused: this Verge core's control pipe lets other users on this PC impersonate it, so it could be hijacked.",
   "diag.insecureDaclAction": "Update Clash Verge and restart the core",
   "diag.insecureDaclPipes": "Affected control pipes: {pipes}",
-  "diag.insecureDaclStep1": "In Clash Verge, check for updates and install the latest version.",
+  "diag.insecureDaclStep1": "Download and install the latest Clash Verge from the page that just opened (or check for updates inside Clash Verge).",
   "diag.insecureDaclStep2": "After updating, restart the core in Clash Verge (or quit and reopen Clash Verge).",
   "diag.insecureDaclStep3": "Come back here and click “Check again”.",
   "diag.recheck": "Check again",

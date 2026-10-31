@@ -679,6 +679,12 @@ fn open_release_page(url: String) -> Result<(), String> {
     update_check::open_release_page(&url)
 }
 
+/// 用默认浏览器打开 Clash Verge Rev 最新版发布页（无参数：地址是 Rust 常量，前端不能指定 URL）。
+#[tauri::command]
+fn open_verge_release_page() -> Result<(), String> {
+    update_check::open_verge_release_page()
+}
+
 /// 应用内自更新阶段 1：流式下载最新 .dmg 到临时目录（进度经 update-download-progress 事件推送前端）并校验 SHA-256。
 ///
 /// 0.2.9 起不再接受前端传入的下载地址与 SHA-256：Rust 侧自行查询 release 元数据并 fail closed。
@@ -1005,6 +1011,7 @@ pub fn run() {
             cli_serve_stop,
             check_update,
             open_release_page,
+            open_verge_release_page,
             download_update,
             apply_update,
             relaunch_updated_app,

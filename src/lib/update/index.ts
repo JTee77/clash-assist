@@ -60,6 +60,14 @@ export function openReleasePage(url: string): Promise<void> {
 }
 
 /**
+ * 打开 Clash Verge Rev 最新版发布页（InsecureDacl 提示的升级按钮）。
+ * 无参数：地址是 Rust 端的常量 VERGE_LATEST_RELEASE_PAGE，前端不能指定 URL。
+ */
+export function openVergeReleasePage(): Promise<void> {
+  return invoke<void>("open_verge_release_page").catch(() => {});
+}
+
+/**
  * 能否走「一键更新」：
  * - Rust 返回了 `one_click`（M5）→ 以它为准；portable 一律不行（只能去发布页下载）；
  * - Windows 上 Rust 尚未给出 `one_click` → 不走一键更新（Mac 的 DMG 安装链在 Windows 不可用），直接去发布页；

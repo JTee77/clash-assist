@@ -15,6 +15,7 @@ import {
   checkUpdateOnce,
   downloadUpdate,
   openReleasePage,
+  openVergeReleasePage,
   relaunchUpdatedApp,
 } from "./index";
 
@@ -101,6 +102,27 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     expect(canOneClick({ ...base, one_click: false }, false)).toBe(false);
     // portable 永远只去发布页
     expect(canOneClick({ ...base, one_click: true, install_kind: "portable" }, true)).toBe(false);
+  });
+
+  it("openVergeReleasePage 只调用无参数命令，不传任何 URL", async () => {
+    h.invoke.mockResolvedValue(undefined);
+    await openVergeReleasePage();
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    expect(h.invoke.mock.calls[0]).toEqual(["open_verge_release_page"]);
+    h.invoke.mockRejectedValue(new Error("blocked"));
+    await expect(openVergeReleasePage()).resolves.toBeUndefined();
+  });
+
+  it("前端源码里不出现 Verge 发布页地址（只能由 Rust 常量决定）", () => {
+    const sources = import.meta.glob(["../../**/*.{ts,tsx}", "!../../**/*.test.ts"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(sources).length).toBeGreaterThan(10);
+    for (const [file, src] of Object.entries(sources)) {
+      expect(src.includes("clash-verge-rev/releases"), file).toBe(false);
+    }
   });
 
   it("openReleasePage swallows errors gracefully", async () => {

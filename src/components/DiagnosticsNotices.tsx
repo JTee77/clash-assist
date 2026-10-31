@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useI18n, type MessageKey } from "../i18n";
 import { sourceNoticesOf, type SourceNotice } from "../lib/mihomo";
+import { openVergeReleasePage } from "../lib/update";
 
 const REJECT_KEYS: Record<string, MessageKey> = {
   "listener-conflict": "diag.tcpRejected.listenerConflict",
@@ -63,7 +64,11 @@ export function DiagnosticsNotices({
                   type="button"
                   className="btn btn-primary btn-sm"
                   aria-expanded={stepsOpen}
-                  onClick={() => setStepsOpen((v) => !v)}
+                  onClick={() => {
+                    // 打开 Verge 最新版发布页（Rust 固定地址），同时展开升级步骤与「重新检测」
+                    void openVergeReleasePage();
+                    setStepsOpen(true);
+                  }}
                 >
                   {t("diag.insecureDaclAction")}
                 </button>

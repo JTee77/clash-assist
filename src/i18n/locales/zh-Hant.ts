@@ -24,7 +24,7 @@ export const zhHant: Messages = {
   "diag.insecureDacl": "已拒絕連線：該 Verge 核心的控制管道允許本機其他使用者冒充，存在被劫持風險。",
   "diag.insecureDaclAction": "升級 Clash Verge 並重新啟動核心",
   "diag.insecureDaclPipes": "涉及的控制管道：{pipes}",
-  "diag.insecureDaclStep1": "在 Clash Verge 中檢查更新，升級到最新版本。",
+  "diag.insecureDaclStep1": "在開啟的發布頁下載最新版 Clash Verge 並安裝（也可以在 Clash Verge 中檢查更新）。",
   "diag.insecureDaclStep2": "升級後在 Clash Verge 中重新啟動核心（或結束 Clash Verge 再重新開啟）。",
   "diag.insecureDaclStep3": "回到這裡點「重新檢測」。",
   "diag.recheck": "重新檢測",

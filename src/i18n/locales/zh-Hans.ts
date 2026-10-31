@@ -22,7 +22,7 @@ export const zhHans = {
   "diag.insecureDacl": "已拒绝连接：该 Verge 内核的控制管道允许本机其他用户冒充，存在被劫持风险。",
   "diag.insecureDaclAction": "升级 Clash Verge 并重启内核",
   "diag.insecureDaclPipes": "涉及的控制管道：{pipes}",
-  "diag.insecureDaclStep1": "在 Clash Verge 中检查更新，升级到最新版本。",
+  "diag.insecureDaclStep1": "在打开的发布页下载最新版 Clash Verge 并安装（也可以在 Clash Verge 中检查更新）。",
   "diag.insecureDaclStep2": "升级后在 Clash Verge 中重启内核（或退出 Clash Verge 再重新打开）。",
   "diag.insecureDaclStep3": "回到这里点「重新检测」。",
   "diag.recheck": "重新检测",

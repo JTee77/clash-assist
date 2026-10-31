@@ -571,6 +571,16 @@ pub fn open_release_page(url: &str) -> Result<(), String> {
     open::that_detached(url).map_err(|e| format!("打开浏览器失败：{e}"))
 }
 
+/// Clash Verge Rev 最新版发布页（Ellie 复核 §4：InsecureDacl 提示里的「升级 Clash Verge 并重启内核」）。
+/// 只此一个固定地址：不做前缀匹配，也不接受前端传入的 URL；[`open_release_page`] 的白名单不因此放宽。
+pub const VERGE_LATEST_RELEASE_PAGE: &str =
+    "https://github.com/clash-verge-rev/clash-verge-rev/releases/latest";
+
+/// 用系统浏览器打开 [`VERGE_LATEST_RELEASE_PAGE`]（无参数，地址编译期固定）。
+pub fn open_verge_release_page() -> Result<(), String> {
+    open::that_detached(VERGE_LATEST_RELEASE_PAGE).map_err(|e| format!("打开浏览器失败：{e}"))
+}
+
 /// 从当前可执行文件路径推导所在的 `.app` 包根目录（如 `/Applications/Clash Assist.app`）。
 pub fn bundle_path_from_exe(exe_path: &Path) -> Option<PathBuf> {
     let macos_dir = exe_path.parent()?;
@@ -941,6 +951,34 @@ mod tests {
     fn only_project_urls_open() {
         assert!(open_release_page("https://evil.example/").is_err());
         assert!(open_release_page("https://github.com/other/repo/releases").is_err());
+    }
+
+    #[test]
+    fn verge_release_page_is_one_exact_constant() {
+        assert_eq!(
+            VERGE_LATEST_RELEASE_PAGE,
+            "https://github.com/clash-verge-rev/clash-verge-rev/releases/latest"
+        );
+        let u = url::Url::parse(VERGE_LATEST_RELEASE_PAGE).unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("github.com"));
+        assert_eq!(u.path(), "/clash-verge-rev/clash-verge-rev/releases/latest");
+        assert!(u.query().is_none() && u.fragment().is_none());
+    }
+
+    #[test]
+    fn verge_page_does_not_widen_open_release_page_allowlist() {
+        // 通用的 open_release_page 仍只认本项目；Verge 页只能走无参数的 open_verge_release_page
+        for url in [
+            VERGE_LATEST_RELEASE_PAGE,
+            "https://github.com/clash-verge-rev/clash-verge-rev/releases",
+            "https://github.com/clash-verge-rev/clash-verge-rev/releases/latest/",
+            "https://github.com/clash-verge-rev/clash-verge-rev/releases/tag/v2.0.0",
+            "https://github.com/clash-verge-rev/clash-verge-rev/releases/latest?x=1",
+        ] {
+            assert!(validate_release_page_url(url).is_err(), "{url}");
+            assert!(open_release_page(url).is_err(), "{url}");
+        }
     }
 
     #[test]
