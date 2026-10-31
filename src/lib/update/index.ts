@@ -62,9 +62,10 @@ export function openReleasePage(url: string): Promise<void> {
 /**
  * 打开 Clash Verge Rev 最新版发布页（InsecureDacl 提示的升级按钮）。
  * 无参数：地址是 Rust 端的常量 VERGE_LATEST_RELEASE_PAGE，前端不能指定 URL。
+ * 失败时照常 reject，由调用方给用户反馈（PR52 Ellie 建议）。
  */
 export function openVergeReleasePage(): Promise<void> {
-  return invoke<void>("open_verge_release_page").catch(() => {});
+  return invoke<void>("open_verge_release_page");
 }
 
 /**

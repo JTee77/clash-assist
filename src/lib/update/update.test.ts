@@ -104,13 +104,13 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     expect(canOneClick({ ...base, one_click: true, install_kind: "portable" }, true)).toBe(false);
   });
 
-  it("openVergeReleasePage 只调用无参数命令，不传任何 URL", async () => {
+  it("openVergeReleasePage 只调用无参数命令，不传任何 URL；失败时 reject 交给调用方提示", async () => {
     h.invoke.mockResolvedValue(undefined);
     await openVergeReleasePage();
     expect(h.invoke).toHaveBeenCalledTimes(1);
     expect(h.invoke.mock.calls[0]).toEqual(["open_verge_release_page"]);
-    h.invoke.mockRejectedValue(new Error("blocked"));
-    await expect(openVergeReleasePage()).resolves.toBeUndefined();
+    h.invoke.mockRejectedValue(new Error("打开浏览器失败"));
+    await expect(openVergeReleasePage()).rejects.toThrow("打开浏览器失败");
   });
 
   it("前端源码里不出现 Verge 发布页地址（只能由 Rust 常量决定）", () => {

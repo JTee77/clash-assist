@@ -13,10 +13,24 @@ function noticeKey(n: SourceNotice): string {
   return n.kind === "tcp-rejected" ? `${n.kind}:${n.code}` : n.kind;
 }
 
+/** 打开 Verge 发布页；失败时 setFailed(true)，让按钮旁出一句提示（不吞错误）。 */
+export async function openVergeWithFeedback(
+  setFailed: (failed: boolean) => void,
+  open: () => Promise<void> = openVergeReleasePage,
+): Promise<void> {
+  setFailed(false);
+  try {
+    await open();
+  } catch {
+    setFailed(true);
+  }
+}
+
 /**
  * 连接诊断提示（windows-plan §2.7）：根据本次刷新所有候选的发现来源标签展示。
- * InsecureDacl 只要任一来源带 `;pipe-insecure-dacl=` / `pipe-insecure` 就显示，
+ * InsecureDacl 只要任一来源带 `pipe-insecure-dacl` 后缀 / TCP 项 `pipe-insecure` 就显示，
  * 即使最终选中了别的候选（Ellie PR50 Q5）。macOS 来源不会命中任何提示。
+ * 文案每条一句话（PR52）：InsecureDacl 只有固定句 + 升级按钮 + 重新检测。
  */
 export function DiagnosticsNotices({
   sources,
@@ -28,17 +42,12 @@ export function DiagnosticsNotices({
   onRecheck: () => void;
 }) {
   const { t } = useI18n();
-  const [stepsOpen, setStepsOpen] = useState(false);
+  const [openFailed, setOpenFailed] = useState(false);
   const notices = sourceNoticesOf(sources);
   if (notices.length === 0) return null;
 
   const recheck = (
-    <button
-      type="button"
-      className="btn btn-sm"
-      disabled={!!busy}
-      onClick={onRecheck}
-    >
+    <button type="button" className="btn btn-sm" disabled={!!busy} onClick={onRecheck}>
       {t("diag.recheck")}
     </button>
   );
@@ -54,33 +63,21 @@ export function DiagnosticsNotices({
               role="alert"
             >
               <div className="gate-banner-msg">{t("diag.insecureDacl")}</div>
-              {n.pipes.length > 0 && (
-                <div className="diag-notice-detail">
-                  {t("diag.insecureDaclPipes", { pipes: n.pipes.join("、") })}
-                </div>
-              )}
               <div className="diag-notice-actions">
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  aria-expanded={stepsOpen}
-                  onClick={() => {
-                    // 打开 Verge 最新版发布页（Rust 固定地址），同时展开升级步骤与「重新检测」
-                    void openVergeReleasePage();
-                    setStepsOpen(true);
-                  }}
+                  onClick={() => void openVergeWithFeedback(setOpenFailed)}
                 >
                   {t("diag.insecureDaclAction")}
                 </button>
-                {stepsOpen && recheck}
+                {recheck}
+                {openFailed ? (
+                  <span className="ws-error" role="alert">
+                    {t("diag.openVergeFailed")}
+                  </span>
+                ) : null}
               </div>
-              {stepsOpen && (
-                <ol className="diag-notice-steps">
-                  <li>{t("diag.insecureDaclStep1")}</li>
-                  <li>{t("diag.insecureDaclStep2")}</li>
-                  <li>{t("diag.insecureDaclStep3")}</li>
-                </ol>
-              )}
             </div>
           );
         }
@@ -91,8 +88,7 @@ export function DiagnosticsNotices({
               className="gate-banner gate-banner-block diag-notice"
               role="alert"
             >
-              <div className="gate-banner-title">{t("diag.untrustedPipe.title")}</div>
-              <div className="gate-banner-msg">{t("diag.untrustedPipe.body")}</div>
+              <div className="gate-banner-msg">{t("diag.untrustedPipe")}</div>
               <div className="diag-notice-actions">{recheck}</div>
             </div>
           );
@@ -100,8 +96,7 @@ export function DiagnosticsNotices({
         if (n.kind === "tcp-unverified") {
           return (
             <div key={noticeKey(n)} className="gate-banner diag-notice diag-notice-warn" role="status">
-              <div className="gate-banner-title">{t("diag.tcpUnverified.title")}</div>
-              <div className="gate-banner-msg">{t("diag.tcpUnverified.body")}</div>
+              <div className="gate-banner-msg">{t("diag.tcpUnverified")}</div>
               <div className="diag-notice-actions">{recheck}</div>
             </div>
           );
