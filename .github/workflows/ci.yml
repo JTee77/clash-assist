@@ -80,7 +80,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       # V11（windows-plan §2.7）：编出 GUI 可执行文件，用 Windows SDK 的 mt.exe 导出内嵌应用清单，
-      # 断言声明了 Per-Monitor v2 DPI 感知（src-tauri/windows/app.manifest，build.rs 嵌入）。
+      # 断言声明了 Per-Monitor v2 DPI 感知、保留 Common Controls v6、显式 asInvoker（src-tauri/windows/app.manifest，build.rs 嵌入）。
       - name: DPI 清单检查（mt.exe，V11）
         if: runner.os == 'Windows'
         shell: pwsh
@@ -110,7 +110,10 @@ jobs:
           # tauri-build 默认清单只有这一项依赖（对话框需要），自定义清单必须保留
           $cc = @($doc.SelectNodes("//*[local-name()='dependentAssembly']/*[local-name()='assemblyIdentity' and @name='Microsoft.Windows.Common-Controls' and @version='6.0.0.0' and @publicKeyToken='6595b64144ccf1df']"))
           if ($cc.Count -ne 1) { Write-Error "清单缺少 Common Controls v6 依赖（Microsoft.Windows.Common-Controls 6.0.0.0 / 6595b64144ccf1df）"; exit 1 }
-          Write-Host "V11 通过：dpiAwareness = $($aware[0])；dpiAware = $($legacy[0])；Common Controls v6 依赖存在"
+          # 显式 asInvoker（PR52）：恰一个 requestedExecutionLevel，level=asInvoker、uiAccess=false
+          $lvl = @($doc.SelectNodes("//*[local-name()='trustInfo']//*[local-name()='requestedExecutionLevel']"))
+          if ($lvl.Count -ne 1 -or $lvl[0].GetAttribute('level') -ne 'asInvoker' -or $lvl[0].GetAttribute('uiAccess') -ne 'false') { Write-Error "清单应恰有一个 requestedExecutionLevel level=asInvoker uiAccess=false，实际 $($lvl.Count) 个"; exit 1 }
+          Write-Host "V11 通过：dpiAwareness = $($aware[0])；dpiAware = $($legacy[0])；Common Controls v6 依赖存在；asInvoker"
 
       # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警
       - name: clippy（--all-targets -D warnings）
