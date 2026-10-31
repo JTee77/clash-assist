@@ -7,8 +7,12 @@
 //!   **绝不** sudo / 提权。
 //! - 目标已存在且**不是**本工具生成的 shim（无标记行）→ 拒绝覆盖（`shim_exists`）。
 //! - 原子写：先写临时文件再 rename，权限 0755。
-// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
-#![allow(clippy::disallowed_methods)]
+// 整个模块只在非 Windows 编译（lib.rs `#[cfg(not(windows))] mod cli_shim;`，计划 §1 第 5 条：
+// Windows 首版不提供 CLI），不在 S-R1 的 Windows 风险面，因此保留模块级 allow（永久理由）。
+#![allow(
+    clippy::disallowed_methods,
+    reason = "仅非 Windows 编译（lib.rs cfg(not(windows))），不在 S-R1 的 Windows 风险面"
+)]
 
 use std::path::{Path, PathBuf};
 

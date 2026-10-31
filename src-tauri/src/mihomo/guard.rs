@@ -489,14 +489,9 @@ mod tests {
         let mut stack = vec![root];
         let mut seen = 0;
         while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).unwrap() {
+            for entry in crate::safe_fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）"
-                )]
-                let is_dir = path.is_dir();
-                if is_dir {
+                if crate::safe_fs::is_dir(&path) {
                     stack.push(path);
                     continue;
                 }
@@ -504,11 +499,7 @@ mod tests {
                 if !name.ends_with(".ts") || name.contains(".test.") {
                     continue;
                 }
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "TODO(M1): 测试代码存量路径操作，M1 迁移（S-R1）"
-                )]
-                let src = std::fs::read_to_string(&path).unwrap();
+                let src = crate::safe_fs::read_to_string(&path).unwrap();
                 for cap in re.captures_iter(&src) {
                     let host = cap[1].to_ascii_lowercase();
                     seen += 1;

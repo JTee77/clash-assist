@@ -5,13 +5,16 @@
 # 这里是补充手段。
 #
 # allow 规则（PR #46 评审 MF-1 / SR2-1 之后）：
-# - 模块级 `#![allow(clippy::disallowed_methods)]` 只保留在 `update_check.rs`、`cli_shim.rs`
-#   （TODO(M1)，M1/M5 中移除）；其他地方只允许语句级 / 函数级 allow，并写 reason。
+# - 模块级 `#![allow(clippy::disallowed_methods)]` 只保留在 `cli_shim.rs`：整个模块只在非 Windows
+#   编译（lib.rs `#[cfg(not(windows))]`），写永久 reason。`update_check.rs` 已在 M1 迁到 `safe_fs`
+#   （S-R1 DoD），不再有 allow；M5 拆分 `update_check/` 时新增的 Windows 代码同样只走 `safe_fs`。
+#   其他地方只允许语句级 / 函数级 allow，并写 reason。
 # - 语句级 allow 只能加在 `let` 上，只覆盖这一次调用：
 #   `#[allow(..., reason = "...")] let is_dir = path.is_dir(); if is_dir { … }`；
 #   不得加在 if / 块语句上（会覆盖整个 if 体）。
-# - reason 分两类：Windows 上会编译的写 `TODO(M1): …`（M1 DoD：迁移后全部删除）；
-#   只在 Unix / macOS 编译的写永久理由（不在 S-R1 的 Windows 风险面）。
+# - reason：M1 之后 Windows 上会编译的代码不再有「M1 待迁移」的 allow（S-R1 DoD 已完成；唯一的
+#   Windows 例外是 `safe_fs` 内部的安全打开封装）；只在 Unix / macOS 编译的写永久理由
+#  （不在 S-R1 的 Windows 风险面）。
 # - `mihomo/pipe.rs`、`mihomo/discovery.rs`、`mihomo/transport.rs` 的 Windows 分支不得添加 allow。
 # - 第三方 crate 内部的调用 clippy 管不到，由类型约束兜底。
 #
