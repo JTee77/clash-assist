@@ -709,6 +709,35 @@ function Invoke-Stop {
 
 # ---------------------------------------------------------------- Cleanup
 
+# 配置文件删不掉时的诊断（只读）：是否仍加载、谁还以该 SID 运行、哪个配置单元文件被占用
+function Get-ProfileDiagnostics([string]$Sid) {
+  $parts = New-Object System.Collections.Generic.List[string]
+  $path = $null
+  try {
+    $prof = Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$Sid'"
+    if ($prof) {
+      $path = $prof.LocalPath
+      $ref = $prof.PSObject.Properties['RefCount']
+      $parts.Add("Loaded=$($prof.Loaded) RefCount=$(if ($ref) { $ref.Value }) Path=$path")
+    } else { $parts.Add('无 Win32_UserProfile 记录') }
+  } catch { $parts.Add("Win32_UserProfile：$($_.Exception.Message)") }
+  $parts.Add("HKU 已加载=$(Test-Path -LiteralPath "Registry::HKEY_USERS\$Sid")")
+  try {
+    $procs = @(foreach ($p in Get-CimInstance -ClassName Win32_Process) {
+        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+        if ($o -and $o.ReturnValue -eq 0 -and $o.Sid -eq $Sid) { "$($p.Name)#$($p.ProcessId)" }
+      })
+    $parts.Add("该 SID 的进程=$($procs -join ',')")
+  } catch { $parts.Add("枚举进程：$($_.Exception.Message)") }
+  if ($path -and (Test-Path -LiteralPath $path)) {
+    $locked = @(foreach ($f in @(Get-ChildItem -LiteralPath $path -Recurse -Force -File -ErrorAction SilentlyContinue)) {
+        try { $fs = [IO.File]::Open($f.FullName, 'Open', 'Read', 'None'); $fs.Dispose() } catch { $f.FullName.Substring($path.Length) }
+      })
+    $parts.Add("被占用的文件（$($locked.Count)）=$(($locked | Select-Object -First 15) -join ',')")
+  }
+  return ($parts -join '; ')
+}
+
 function Invoke-Cleanup {
   $failures = New-Object System.Collections.Generic.List[string]
 
@@ -756,9 +785,9 @@ function Invoke-Cleanup {
     }
     if ($sid) {
       # 进程刚被结束时，用户配置单元（NTUSER.DAT 等）要等用户配置文件服务在登录会话结束后异步卸载，
-      # 立即删除会报“文件正被另一进程使用”（MUST-4 回放 run 41145959660）；最多重试约 30 秒
+      # 立即删除可能报“文件正被另一进程使用”（MUST-4 回放 run 41145959660）；重试约 10 秒，仍失败则输出诊断
       $profileErr = $null
-      for ($i = 0; $i -lt 15; $i++) {
+      for ($i = 0; $i -lt 5; $i++) {
         try {
           Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Remove-CimInstance -ErrorAction Stop
           $profileErr = $null
@@ -768,7 +797,10 @@ function Invoke-Cleanup {
           Start-Sleep -Seconds 2
         }
       }
-      if ($profileErr) { $failures.Add("删除 $name 的配置文件：$profileErr") }
+      if ($profileErr) {
+        Write-Info "配置文件 $name 诊断：$(Get-ProfileDiagnostics $sid)"
+        $failures.Add("删除 $name 的配置文件：$profileErr")
+      }
     }
   }
 
