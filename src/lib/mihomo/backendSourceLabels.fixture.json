@@ -1,0 +1,120 @@
+{
+  "_comment": "后端（Rust source_label / discovery::windows_source_label）生成的来源标签样本。Rust 测试 backend_labels_match_frontend_fixture 逐字校验 label，前端 sourceDiagnostics.test.ts 用同一份样本校验解析结果。改动任何一侧都要两边一起过。",
+  "labels": [
+    {
+      "name": "service-mode",
+      "label": "verge-tcp(listener-unverified,service-mode):C:\\Users\\a%3Bb\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml",
+      "base": "verge-tcp(listener-unverified,service-mode):C:\\Users\\a%3Bb\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml",
+      "tcpItems": [
+        "listener-unverified",
+        "service-mode"
+      ],
+      "insecureDacl": false,
+      "insecurePipes": [],
+      "notices": [
+        {
+          "kind": "tcp-unverified"
+        }
+      ]
+    },
+    {
+      "name": "service-mode-pipe-insecure",
+      "label": "verge-tcp(listener-unverified,service-mode,pipe-insecure):C:\\v\\config.yaml;pipe-insecure-dacl=\\\\.\\pipe\\verge-mihomo",
+      "base": "verge-tcp(listener-unverified,service-mode,pipe-insecure):C:\\v\\config.yaml",
+      "tcpItems": [
+        "listener-unverified",
+        "service-mode",
+        "pipe-insecure"
+      ],
+      "insecureDacl": true,
+      "insecurePipes": [
+        "\\\\.\\pipe\\verge-mihomo"
+      ],
+      "notices": [
+        {
+          "kind": "insecure-dacl",
+          "pipes": [
+            "\\\\.\\pipe\\verge-mihomo"
+          ]
+        },
+        {
+          "kind": "tcp-unverified"
+        }
+      ]
+    },
+    {
+      "name": "ipv6-dual-stack",
+      "label": "verge-config:C:\\a%3Bb\\clash-verge.yaml,C:\\c%2Cd\\config.yaml;ipv6-dual-stack=9097;pipe-insecure-dacl=\\\\.\\pipe\\a%3Bb",
+      "base": "verge-config:C:\\a%3Bb\\clash-verge.yaml,C:\\c%2Cd\\config.yaml",
+      "tcpItems": null,
+      "insecureDacl": true,
+      "insecurePipes": [
+        "\\\\.\\pipe\\a;b"
+      ],
+      "notices": [
+        {
+          "kind": "insecure-dacl",
+          "pipes": [
+            "\\\\.\\pipe\\a;b"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pipe-open-to-all-with-insecure",
+      "label": "verge-pipe:\\\\.\\pipe\\verge-mihomo-sidecar-release-ab;pipe-open-to-all=\\\\.\\pipe\\verge-mihomo-sidecar-release-ab;pipe-insecure-dacl=\\\\.\\pipe\\verge-mihomo",
+      "base": "verge-pipe:\\\\.\\pipe\\verge-mihomo-sidecar-release-ab",
+      "tcpItems": null,
+      "insecureDacl": true,
+      "insecurePipes": [
+        "\\\\.\\pipe\\verge-mihomo"
+      ],
+      "notices": [
+        {
+          "kind": "insecure-dacl",
+          "pipes": [
+            "\\\\.\\pipe\\verge-mihomo"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pipe-open-to-all",
+      "label": "verge-pipe:\\\\.\\pipe\\verge-mihomo-production-ab;pipe-open-to-all=\\\\.\\pipe\\verge-mihomo-production-ab",
+      "base": "verge-pipe:\\\\.\\pipe\\verge-mihomo-production-ab",
+      "tcpItems": null,
+      "insecureDacl": false,
+      "insecurePipes": [],
+      "notices": []
+    },
+    {
+      "name": "untrusted-encoded-path",
+      "label": "verge-pipe-untrusted:C:\\x%3Dy\\config.yaml",
+      "base": "verge-pipe-untrusted:C:\\x%3Dy\\config.yaml",
+      "tcpItems": null,
+      "insecureDacl": false,
+      "insecurePipes": [],
+      "notices": [
+        {
+          "kind": "untrusted-pipe"
+        }
+      ]
+    },
+    {
+      "name": "tcp-rejected-paren-path",
+      "label": "verge-tcp(rejected:token-mismatch):C:\\Program Files %28x86%29\\v\\config.yaml",
+      "base": "verge-tcp(rejected:token-mismatch):C:\\Program Files %28x86%29\\v\\config.yaml",
+      "tcpItems": [
+        "rejected:token-mismatch"
+      ],
+      "insecureDacl": false,
+      "insecurePipes": [],
+      "notices": [
+        {
+          "kind": "tcp-rejected",
+          "code": "token-mismatch"
+        }
+      ]
+    }
+  ]
+}

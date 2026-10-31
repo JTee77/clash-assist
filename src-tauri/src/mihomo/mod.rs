@@ -15,6 +15,8 @@ mod nodes;
 // Windows 命名管道传输（M1，§2.2）。
 #[cfg(windows)]
 mod pipe;
+// 发现来源标签的结构化构造与百分号编码（前端 sourceDiagnostics.ts 按同一语法解析）。
+mod source_label;
 mod timed;
 mod transport;
 // §2.2 / §2.1 规则 4 的纯判定逻辑：Windows 使用，全平台单测。

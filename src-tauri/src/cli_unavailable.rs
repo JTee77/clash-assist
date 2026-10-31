@@ -5,6 +5,11 @@
 //! 但一律返回 [`CLI_UNAVAILABLE`] 错误。本模块只提供这些签名所需的占位类型。
 //!
 //! 模块在所有平台都编译（非 Windows 上未被使用），以便 macOS / Linux 也能跑它的单测。
+//!
+//! **以后若在 Windows 上开放 CLI**（Ellie PR51 建议）：CLI 的 JSON 输出（`src/lib/cli/dispatch.ts`
+//! 里返回的 `cards` / `envCards`）以及任何导出 / 分享入口，都必须先去掉 DNS 卡的 `adapterHint`
+//! （网卡名、描述、内网 DNS 地址），做法同 `src/lib/runner/resultCache.ts` 写缓存前的处理。
+//! v1 没有 CLI、也没有导出，所以目前没有需要剥离的出口。
 #![cfg_attr(not(windows), allow(dead_code))]
 
 /// 所有 CLI 桥命令在 Windows 上的统一错误文案。
