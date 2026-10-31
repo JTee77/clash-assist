@@ -377,6 +377,52 @@ fn append_app_log(msg: &str) {
     let _ = writeln!(f, "ts_unix={secs} {msg}");
 }
 
+/// panic 消息最多记录的字符数（避免把大段错误内容写进日志）。
+const PANIC_MSG_MAX: usize = 1024;
+
+/// 一行 panic 日志：线程名、位置、消息（截断、换行压成空格）。
+fn format_panic_line(thread: &str, loc: &str, msg: &str) -> String {
+    let mut m: String = msg.chars().take(PANIC_MSG_MAX).collect();
+    if msg.chars().nth(PANIC_MSG_MAX).is_some() {
+        m.push_str("…(truncated)");
+    }
+    format!(
+        "panic thread={thread} at {loc}: {}",
+        m.replace(['\r', '\n'], " ")
+    )
+}
+
+fn panic_log_line(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let payload = info.payload();
+    let msg = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string payload>");
+    let loc = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "<unknown>".into());
+    let thread = std::thread::current();
+    format_panic_line(thread.name().unwrap_or("<unnamed>"), &loc, msg)
+}
+
+/// release 构建是 `panic = "abort"`：panic 后进程立即结束（Windows 上为 __fastfail，退出码
+/// 0xC0000409），GUI 子系统又没有控制台。先把 panic 消息、位置（RUST_BACKTRACE 开启时连同
+/// backtrace）写进 app.log，再交给原来的 hook（打印到 stderr）。
+fn install_panic_log_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut line = panic_log_line(info);
+        let bt = std::backtrace::Backtrace::capture();
+        if bt.status() == std::backtrace::BacktraceStatus::Captured {
+            line.push_str(&format!("\nbacktrace:\n{bt}"));
+        }
+        append_app_log(&line);
+        prev(info);
+    }));
+}
+
 #[cfg(debug_assertions)]
 async fn vite_dev_reachable(url: &str) -> bool {
     let client = match reqwest::Client::builder()
@@ -871,6 +917,7 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
 }
 
 pub fn run() {
+    install_panic_log_hook();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.menu(app_menu::build).on_menu_event(|app, event| {
@@ -1082,5 +1129,28 @@ mod cli_windows_stub_tests {
             CLI_UNAVAILABLE
         );
         assert_eq!(cli_serve_stop().expect_err("serve_stop"), CLI_UNAVAILABLE);
+    }
+}
+
+#[cfg(test)]
+mod panic_log_tests {
+    use super::{format_panic_line, PANIC_MSG_MAX};
+
+    #[test]
+    fn formats_thread_location_and_message_on_one_line() {
+        assert_eq!(
+            format_panic_line("main", "src/lib.rs:1:2", "boom\r\nnext"),
+            "panic thread=main at src/lib.rs:1:2: boom  next"
+        );
+    }
+
+    #[test]
+    fn truncates_long_messages_on_char_boundary() {
+        let msg = "界".repeat(PANIC_MSG_MAX + 5);
+        let line = format_panic_line("t", "l", &msg);
+        assert!(line.ends_with("…(truncated)"));
+        assert_eq!(line.matches('界').count(), PANIC_MSG_MAX);
+        let exact = "a".repeat(PANIC_MSG_MAX);
+        assert!(!format_panic_line("t", "l", &exact).contains("truncated"));
     }
 }

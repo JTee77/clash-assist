@@ -167,6 +167,20 @@ jobs:
           Get-ChildItem -LiteralPath $dist | Format-Table Name, Length -AutoSize | Out-String | Write-Host
           Get-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt')
 
+      # M4c：冒烟启动崩溃时留下证据。只改这台一次性 runner 的注册表：让 WER 为 clash-assist.exe
+      # 写本地 minidump（DumpType 1）到诊断目录。
+      - name: 冒烟诊断准备（WER LocalDumps，仅 runner）
+        run: |
+          $diag = Join-Path $env:RUNNER_TEMP 'smoke-diag'
+          $dumps = Join-Path $diag 'dumps'
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\clash-assist.exe'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dumps -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 4 -Force | Out-Null
+          Get-ItemProperty -Path $key | Format-List DumpFolder, DumpType, DumpCount | Out-String | Write-Host
+
       - name: 冒烟测试（静默安装 / 启动 / /UPDATE / 卸载 / 便携版）
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -175,8 +189,19 @@ jobs:
           ./scripts/smoke-windows.ps1 `
             -Setup (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe") `
             -Portable (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-portable.zip") `
-            -Version $env:VERSION -HooksFile src-tauri/windows/hooks.nsh
+            -Version $env:VERSION -HooksFile src-tauri/windows/hooks.nsh `
+            -DiagDir (Join-Path $env:RUNNER_TEMP 'smoke-diag')
           exit $LASTEXITCODE
+
+      # 冒烟失败时也上传：stdout/stderr、Application 事件、应用日志、minidump。只保留 3 天。
+      - name: 上传冒烟诊断
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-diagnostics
+          path: ${{ runner.temp }}/smoke-diag/
+          if-no-files-found: ignore
+          retention-days: 3
 
       # 静默卸载走不到「删除应用数据」分支，这里用 tauri build 下载的同一个 makensis 实跑卸载 hook 和
       # CA_DELETE_TAURI_APP_DATA（含 junction / 目录 symlink）。冒烟测试的 finally 已清掉 %LOCALAPPDATA%\ClashAssist；

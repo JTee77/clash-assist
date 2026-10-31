@@ -13,6 +13,8 @@
      不得带 if / continue-on-error（Ellie PR55 r2）；
   5. 每个 actions/checkout 都设置 persist-credentials: false（S-R2）；
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
+  4c. 冒烟诊断（M4c）：WER LocalDumps 只能在 build job 里配置；名为 smoke-diagnostics 的 artifact
+     只能由 build job 上传，retention-days ≤ 7；
   7. 文本中不得出现 `--clobber`、`secrets.`（只允许 github.token）。
 
 用法：python3 scripts/check-release-workflow.py [文件]   （默认 .github/workflows/release-windows.yml）
@@ -147,6 +149,23 @@ def check(doc, text):
         if "if" in st or st.get("continue-on-error"):
             errs.append("installer.nsi 扫描步骤不得有 if / continue-on-error")
 
+    # M4c：冒烟诊断只在 build job（contents: read、一次性 runner），诊断 artifact 短期保留。
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        for x in job.get("steps") or []:
+            if not isinstance(x, dict):
+                continue
+            if "LocalDumps" in str(x.get("run", "")) and name != "build":
+                errs.append(f"job {name}：WER LocalDumps 只能在 build job 中配置")
+            w = x.get("with") or {}
+            if str(x.get("uses", "")).startswith("actions/upload-artifact@") and isinstance(w, dict) and w.get("name") == "smoke-diagnostics":
+                if name != "build":
+                    errs.append(f"job {name}：smoke-diagnostics 只能由 build job 上传")
+                rd = w.get("retention-days")
+                if not isinstance(rd, int) or not 1 <= rd <= 7:
+                    errs.append(f"smoke-diagnostics 的 retention-days 必须是 1–7 的整数，实际：{rd!r}")
+
     if "--clobber" in text:
         errs.append("不得使用 --clobber（不得覆盖已有资产）")
     if "secrets." in text:
@@ -193,6 +212,12 @@ def self_test(path):
     def nsi_step(d):
         return next(x for x in d["jobs"]["build"]["steps"] if "scan-nsis-rmdir" in str(x.get("run", "")))
 
+    def diag_upload(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if (x.get("with") or {}).get("name") == "smoke-diagnostics")
+
+    def dumps_step(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if "LocalDumps" in str(x.get("run", "")))
+
     def move_nsi_first(d):
         st = nsi_step(d)
         d["jobs"]["build"]["steps"].remove(st)
@@ -227,6 +252,10 @@ def self_test(path):
         ("installer.nsi 扫描 continue-on-error", lambda d, t: (nsi_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
         ("installer.nsi 扫描加 if", lambda d, t: (nsi_step(d).__setitem__("if", "false"), t), "不得有 if"),
         ("installer.nsi 扫描挪到 tauri build 之前", lambda d, t: (move_nsi_first(d), t), "之后"),
+        ("smoke-diagnostics 保留 30 天", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", 30), t), "retention-days"),
+        ("smoke-diagnostics 保留期是表达式", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", "${{ 3 }}"), t), "retention-days"),
+        ("release job 配 LocalDumps", lambda d, t: (d["jobs"]["release"]["steps"].append(copy.deepcopy(dumps_step(d))), t), "LocalDumps"),
+        ("release job 上传 smoke-diagnostics", lambda d, t: (d["jobs"]["release"]["steps"].append(copy.deepcopy(diag_upload(d))), t), "只能由 build job"),
         ("--clobber", lambda d, t: (None, t + "\n# gh release upload --clobber\n"), "--clobber"),
         ("secrets.", lambda d, t: (None, t + "\n# ${{ secrets.TOKEN }}\n"), "secrets"),
     ]
