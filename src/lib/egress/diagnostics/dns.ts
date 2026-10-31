@@ -80,6 +80,13 @@ export async function checkDnsResolvers(
     }),
   ]);
   const resolvers = dns.resolvers ?? [];
+  // Windows（source 为 win-adapter-*）的 raw_hint 是网卡列表，单独放进 adapterHint，
+  // 不拼进 process：评分会在 process 上做「运营商 / 宽带」等关键词匹配（PR #51 M-4）。
+  // macOS 的 scutil 原文照旧拼进 process。
+  // TODO(后续 PR，与 M3 前端一起)：后端把 TUN 非默认路由等警告做成结构化 warnings 字段，
+  // whoami 判「未泄漏」时据此把卡片降为 warn；目前警告只在网卡摘要里。
+  const isWinAdapterHint = (dns.source ?? "").startsWith("win-adapter");
+  const adapterHint = isWinAdapterHint && dns.rawHint ? dns.rawHint : undefined;
 
   let loc: string | null = null;
   let colo: string | null = null;
@@ -135,7 +142,7 @@ export async function checkDnsResolvers(
     attributionLine,
     `配置解析器：${resolvers.join(", ") || "(无)"}（source ${dns.source}）`,
     dns.error ? `note: ${dns.error}` : "",
-    dns.rawHint ? `raw_hint:\n${dns.rawHint}` : "",
+    dns.rawHint && !isWinAdapterHint ? `raw_hint:\n${dns.rawHint}` : "",
     heuristicLine,
     "边界：whoami 反映「查询实际从哪出去」，比读配置更接近真相；ECS 若暴露你的 /24 仍属信息泄露。不是 BrowserLeaks 级全量证明。",
   ].filter(Boolean);
@@ -147,6 +154,7 @@ export async function checkDnsResolvers(
     conclusion,
     process: proc.join("\n"),
     suggestion,
+    ...(adapterHint ? { adapterHint } : {}),
   };
 }
 

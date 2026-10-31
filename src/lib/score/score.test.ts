@@ -227,6 +227,65 @@ describe("scoreVpn", () => {
     expect(r.tier).toBe("很好");
   });
 
+  // PR #51 M-4：Windows 网卡摘要里的「宽带连接」（PPPoE 默认名）不能触发运营商降分。
+  const winHint = [
+    "选中网卡（win-adapter-tun）：Mihomo (ifIndex 23)",
+    "选择理由：TUN 网卡 Mihomo (ifIndex 23)：命中规则「tun.device 未配置，网卡名等于 Verge 默认名 Mihomo」",
+    "- 宽带连接 #18 [WAN Miniport (PPPOE)] type 23 down metric v4 - / v6 0 dns 无",
+    "- 中国移动 5G #19 [Mobile Broadband] type 243 down metric v4 - / v6 0 dns 无",
+    "- Mihomo #23 [Mihomo Tunnel] type 53 up metric v4 0 / v6 0 dns 198.18.0.2",
+  ].join("\n");
+
+  it("TUN 模式下网卡摘要含「宽带连接」/「移动」→ 不降分，仍可完美", () => {
+    const env = greenEnvCards().map((c) =>
+      c.id === "dns-leak"
+        ? {
+            ...card(
+              "dns-leak",
+              "pass",
+              "DNS 查询与代理流量同出口（1.2.3.4）—— 未泄漏真实地址",
+              "配置解析器：198.18.0.2（source win-adapter-tun）",
+            ),
+            adapterHint: winHint,
+          }
+        : c,
+    );
+    const r = scoreVpn(perfectNode(), env);
+    expect(r.breakdown.find((b) => b.key === "dns")?.score).toBe(100);
+    expect(r.totalScore).toBe(100);
+    expect(r.tier).toBe("完美");
+  });
+
+  it("回归：process 里出现运营商关键词仍降分（含网卡摘要时也一样）", () => {
+    const env = greenEnvCards().map((c) =>
+      c.id === "dns-leak"
+        ? {
+            ...card("dns-leak", "warn", "DNS 出口与代理不同", "递归解析器 ns=电信 DNS"),
+            adapterHint: winHint,
+          }
+        : c,
+    );
+    const r = scoreVpn(perfectNode(), env);
+    expect(r.breakdown.find((b) => b.key === "dns")?.score).toBe(45);
+    expect(r.totalScore).toBe(86);
+  });
+
+  it("macOS：scutil 原文仍在 process 里参与匹配（行为不变）", () => {
+    const env = greenEnvCards().map((c) =>
+      c.id === "dns-leak"
+        ? card(
+            "dns-leak",
+            "pass",
+            "DNS 查询与代理流量同出口（1.2.3.4）—— 未泄漏真实地址",
+            "配置解析器：1.1.1.1（source scutil）\nraw_hint:\nresolver #1\n  nameserver[0] : 1.1.1.1\n  宽带",
+          )
+        : c,
+    );
+    const r = scoreVpn(perfectNode(), env);
+    expect(r.breakdown.find((b) => b.key === "dns")?.score).toBe(45);
+    expect(r.tier).not.toBe("完美");
+  });
+
   it("所选节点不可用 → node 分项 0，总评明显走低", () => {
     const dead = scoreDeadNode("死", "探测失败");
     const r = scoreVpn(dead, greenEnvCards());
