@@ -9,6 +9,8 @@
      github.ref_type == 'tag'（且不含 `||`），并且不得 checkout 仓库代码（M-6）；
      这类 job 只能是 attest / release，权限必须与 WRITE_JOB_PERMISSIONS 完全一致；
      其余 job 的权限只能是 contents: read；
+  4b. build job 在 tauri build 之后用 scan-nsis-rmdir.ps1 扫描生成的 installer.nsi，tag push 时 strict，
+     不得带 if / continue-on-error（Ellie PR55 r2）；
   5. 每个 actions/checkout 都设置 persist-credentials: false（S-R2）；
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
   7. 文本中不得出现 `--clobber`、`secrets.`（只允许 github.token）。
@@ -122,6 +124,27 @@ def check(doc, text):
             if uses.startswith("actions/setup-node@") and not is_false(w.get("package-manager-cache")):
                 errs.append(f"{where}：setup-node 必须 package-manager-cache: false")
 
+    # Ellie PR55 r2：build job 必须在 tauri build 之后扫描生成的 installer.nsi，tag push 时 strict。
+    build_steps = [x for x in ((jobs.get("build") or {}).get("steps") or []) if isinstance(x, dict)]
+    runs = [str(x.get("run", "")) for x in build_steps]
+    tauri_at = next((i for i, r in enumerate(runs) if "tauri build" in r), None)
+    scan_at = next((i for i, r in enumerate(runs) if "scan-nsis-rmdir.ps1" in r), None)
+    if scan_at is None:
+        errs.append("build job 缺少 installer.nsi 的 RmDir /r 扫描步骤（scan-nsis-rmdir.ps1）")
+    else:
+        st = build_steps[scan_at]
+        r = runs[scan_at].replace(" ", "")
+        if tauri_at is None or scan_at < tauri_at:
+            errs.append("installer.nsi 扫描必须在 tauri build 之后")
+        if "release/nsis/x64/installer.nsi" not in r:
+            errs.append("installer.nsi 扫描必须扫 release/nsis/x64/installer.nsi")
+        if "Strict=($env:EVENT_NAME-eq'push')" not in r:
+            errs.append("installer.nsi 扫描必须在 tag push 时 strict（Strict = ($env:EVENT_NAME -eq 'push')）")
+        if "exit$LASTEXITCODE" not in r:
+            errs.append("installer.nsi 扫描必须以 exit $LASTEXITCODE 结束")
+        if "if" in st or st.get("continue-on-error"):
+            errs.append("installer.nsi 扫描步骤不得有 if / continue-on-error")
+
     if "--clobber" in text:
         errs.append("不得使用 --clobber（不得覆盖已有资产）")
     if "secrets." in text:
@@ -165,6 +188,14 @@ def self_test(path):
                     return s
         raise AssertionError("没有 setup-node")
 
+    def nsi_step(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if "scan-nsis-rmdir" in str(x.get("run", "")))
+
+    def move_nsi_first(d):
+        st = nsi_step(d)
+        d["jobs"]["build"]["steps"].remove(st)
+        d["jobs"]["build"]["steps"].insert(0, st)
+
     def set_on(d, k, v):
         triggers(d)[k] = v
 
@@ -188,6 +219,11 @@ def self_test(path):
         ("setup-node cache", lambda d, t: (first_setup_node(d)["with"].__setitem__("cache", "pnpm"), t), "不得设置 cache"),
         ("setup-node 自动缓存", lambda d, t: (first_setup_node(d)["with"].pop("package-manager-cache"), t), "package-manager-cache"),
         ("actions/cache", lambda d, t: (d["jobs"]["build"]["steps"].insert(1, {"uses": "actions/cache@" + "0" * 40, "with": {"path": "x"}}), t), "不得使用缓存"),
+        ("删掉 installer.nsi 扫描", lambda d, t: (d["jobs"]["build"].__setitem__("steps", [x for x in d["jobs"]["build"]["steps"] if "scan-nsis-rmdir" not in str(x.get("run", ""))]), t), "缺少 installer.nsi"),
+        ("installer.nsi 扫描不 strict", lambda d, t: (nsi_step(d).__setitem__("run", nsi_step(d)["run"].replace("Strict = ($env:EVENT_NAME -eq 'push')", "Strict = $false")), t), "strict"),
+        ("installer.nsi 扫描 continue-on-error", lambda d, t: (nsi_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
+        ("installer.nsi 扫描加 if", lambda d, t: (nsi_step(d).__setitem__("if", "false"), t), "不得有 if"),
+        ("installer.nsi 扫描挪到 tauri build 之前", lambda d, t: (move_nsi_first(d), t), "之后"),
         ("--clobber", lambda d, t: (None, t + "\n# gh release upload --clobber\n"), "--clobber"),
         ("secrets.", lambda d, t: (None, t + "\n# ${{ secrets.TOKEN }}\n"), "secrets"),
     ]

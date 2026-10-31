@@ -136,11 +136,14 @@ jobs:
 
       # M-7（Ellie PR55）：测试标记扫描器自测，并在真实的 Windows exe 上确认两种编码的正向对照都能命中
       # （debug 构建，非 strict：FAKE_LATEST 在 M5 之前只记 warning）
-      - name: 测试标记扫描器（自测 + 真实 exe 正向对照）
+      - name: 测试标记 / installer.nsi 扫描器（自测 + 真实 exe 正向对照）
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           ./scripts/scan-exe-markers.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # installer.nsi 的 RmDir /r 扫描器（release-windows.yml 用）：ci 不跑 tauri build，没有生成的 installer.nsi，只跑自测
+          ./scripts/scan-nsis-rmdir.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/scan-exe-markers.ps1 -Exe src-tauri/target/debug/clash-assist.exe
           exit $LASTEXITCODE

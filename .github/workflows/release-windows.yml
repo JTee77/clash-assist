@@ -134,6 +134,14 @@ jobs:
           ./scripts/scan-exe-markers.ps1 @scan
           exit $LASTEXITCODE
 
+      # Ellie PR55 r2：NSIS 的 RmDir /r 会跟随 junction。Tauri 模板自带的「删除应用数据」仍对
+      # $APPDATA / $LOCALAPPDATA 下的目录用 RmDir /r：在 win/m4b-nsis-nofollow 修掉之前，tag 构建在这里失败，演练只记 warning。
+      - name: 扫描生成的 installer.nsi（APPDATA / LOCALAPPDATA 上不得有 RmDir /r）
+        run: |
+          $scan = @{ Nsi = "src-tauri/target/$env:TARGET/release/nsis/x64/installer.nsi"; Strict = ($env:EVENT_NAME -eq 'push') }
+          ./scripts/scan-nsis-rmdir.ps1 @scan
+          exit $LASTEXITCODE
+
       - name: 改名（V8）、打便携 zip、生成 SHA256SUMS.txt
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -173,7 +181,8 @@ jobs:
       # 冒烟测试的 finally 已清掉 %LOCALAPPDATA%\ClashAssist。
       - name: NSIS 卸载 hook 实跑（S-12，含 junction）
         run: |
-          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh
+          # 指定 tauri build 下载的那一份 makensis（找不到就失败），日志里打印其版本
+          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh -MakeNsis (Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe')
           exit $LASTEXITCODE
 
       - name: 生成发布说明（不得含系统安全拦截相关文案）

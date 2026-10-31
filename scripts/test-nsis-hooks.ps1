@@ -11,7 +11,9 @@
     1. 勾选删除、非 /UPDATE：%LOCALAPPDATA%\ClashAssist 被删；目录里指向外部目录的 junction
        只删联接本身，不跟随进去——外部目录里的哨兵文件必须还在；
     2. 勾选删除、/UPDATE：目录保留；
-    3. 未勾选：目录保留。
+    3. 未勾选：目录保留；
+    4. 勾选删除、非 /UPDATE，但 %LOCALAPPDATA%\ClashAssist 本身就是指向外部目录的 junction（Ellie r2）：
+       只删联接本身，外部目录及其中的文件原样保留。
   会读写真实的 %LOCALAPPDATA%\ClashAssist（hooks 里写死的路径），所以该目录已存在时拒绝运行。
 
   用法：pwsh scripts/test-nsis-hooks.ps1 [-HooksFile src-tauri/windows/hooks.nsh] [-MakeNsis <makensis.exe>]
@@ -21,7 +23,9 @@
 #>
 param(
   [string] $HooksFile = (Join-Path $PSScriptRoot '..' 'src-tauri' 'windows' 'hooks.nsh'),
-  [string] $MakeNsis
+  [string] $MakeNsis,
+  # 断言 makensis 版本（如 v3.11）；release 构建用它确认测的就是打包用的那一份 NSIS
+  [string] $ExpectVersion
 )
 $ErrorActionPreference = 'Stop'
 
@@ -37,7 +41,11 @@ if (-not $MakeNsis) {
   $MakeNsis = $cands | Select-Object -First 1
 }
 if (-not $MakeNsis) { Write-Host '::error::找不到 makensis.exe'; exit 2 }
-Write-Host "makensis：$MakeNsis（$(& $MakeNsis /VERSION)）"
+$nsisVersion = (& $MakeNsis /VERSION | Out-String).Trim()
+Write-Host "makensis：$MakeNsis（$nsisVersion）"
+if ($ExpectVersion -and $nsisVersion -ne $ExpectVersion) {
+  Write-Host "::error::makensis 版本应为 $ExpectVersion，实际 $nsisVersion"; exit 2
+}
 
 $data = Join-Path $env:LOCALAPPDATA 'ClashAssist'
 if (Test-Path -LiteralPath $data) { Write-Host "::error::$data 已存在，拒绝运行（不覆盖真实数据）"; exit 2 }
@@ -46,6 +54,10 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("nsis-hooks-" + [guid]::NewGuid().
 $outside = Join-Path $work 'outside'
 New-Item -ItemType Directory -Path $outside | Out-Null
 $sentinel = Join-Path $outside 'sentinel.txt'
+# 用例 4：数据目录本身是 junction 时的目标目录
+$rootTarget = Join-Path $work 'root-target'
+New-Item -ItemType Directory -Path (Join-Path $rootTarget 'sub') | Out-Null
+$rootFiles = @('keep.txt', 'sub\keep2.txt')
 
 $failures = [Collections.Generic.List[string]]::new()
 function Check([bool]$cond, [string]$what) {
@@ -103,7 +115,17 @@ function New-DataDir {
   $j
 }
 
+function New-RootJunction {
+  foreach ($f in $rootFiles) { Set-Content -LiteralPath (Join-Path $rootTarget $f) -Value 'must survive' }
+  Set-Content -LiteralPath $sentinel -Value 'must survive'
+  New-Item -ItemType Junction -Path $data -Target $rootTarget | Out-Null
+  $item = Get-Item -LiteralPath $data -Force
+  if ($item.LinkType -ne 'Junction') { throw "创建 junction 失败：$($item.LinkType)" }
+}
+
 function Clear-DataDir {
+  $item = Get-Item -LiteralPath $data -Force -ErrorAction SilentlyContinue
+  if ($item -and $item.LinkType) { Remove-Junction $data; return }
   if (Test-Path -LiteralPath $data) {
     Remove-Junction (Join-Path $data 'logs\junction-out')
     Get-ChildItem -LiteralPath $data -Recurse -Force -File | ForEach-Object { $_.IsReadOnly = $false }
@@ -116,11 +138,12 @@ try {
     @{ Name = '勾选删除、非 /UPDATE：删除数据目录，不跟随 junction'; Del = 1; Upd = 0; Deleted = $true }
     @{ Name = '勾选删除、/UPDATE：保留数据目录'; Del = 1; Upd = 1; Deleted = $false }
     @{ Name = '未勾选：保留数据目录'; Del = 0; Upd = 0; Deleted = $false }
+    @{ Name = '数据目录本身是 junction：只删联接，不碰目标目录'; Del = 1; Upd = 0; Deleted = $true; RootJunction = $true }
   )
   foreach ($c in $cases) {
     Write-Host "== $($c.Name)"
     $un = Build-Harness $c.Del $c.Upd
-    $null = New-DataDir
+    if ($c.RootJunction) { New-RootJunction } else { $null = New-DataDir }
     # _?= 让卸载器就地同步运行（不复制到临时目录再异步重启）
     $p = Start-Process -FilePath $un -ArgumentList '/S', "_?=$work" -Wait -PassThru
     Check ($p.ExitCode -eq 0) "测试卸载器退出码 0（实际 $($p.ExitCode)）"
@@ -129,8 +152,15 @@ try {
     } else {
       Check (Test-Path -LiteralPath (Join-Path $data 'logs\app.log')) "$data 保留"
     }
-    Check (Test-Path -LiteralPath $sentinel) "junction 目标里的哨兵文件仍在（$sentinel）"
-    Check (Test-Path -LiteralPath $outside) "junction 目标目录仍在"
+    if ($c.RootJunction) {
+      foreach ($f in $rootFiles) {
+        $t = Join-Path $rootTarget $f
+        Check ((Test-Path -LiteralPath $t) -and ((Get-Content -Raw -LiteralPath $t).Trim() -eq 'must survive')) "目标目录里的 $f 原样保留"
+      }
+    } else {
+      Check (Test-Path -LiteralPath $sentinel) "junction 目标里的哨兵文件仍在（$sentinel）"
+      Check (Test-Path -LiteralPath $outside) "junction 目标目录仍在"
+    }
     Clear-DataDir
   }
 } finally {
