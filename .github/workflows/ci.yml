@@ -38,6 +38,11 @@ jobs:
           python3 scripts/check-release-workflow.py
           python3 scripts/check-release-workflow.py --self-test
 
+      - name: 自带的 Tauri NSIS 模板只改了删除应用数据那一段（M4b，含自测）
+        run: |
+          python3 scripts/check-nsis-template.py
+          python3 scripts/check-nsis-template.py --self-test
+
       - name: 发布说明与便携说明文案检查（含自测）
         run: |
           node scripts/check-release-notes.mjs --self-test
