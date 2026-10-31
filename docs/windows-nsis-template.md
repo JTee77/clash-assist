@@ -11,7 +11,7 @@
   **加上唯一一段** `; >>> clash-assist M4b` … `; <<< clash-assist M4b`：把「删除应用数据」分支里的两行
   `RmDir /r "$APPDATA\${BUNDLEID}"` / `RmDir /r "$LOCALAPPDATA\${BUNDLEID}"` 换成
   `!insertmacro CA_DELETE_TAURI_APP_DATA`（`hooks.nsh`，不跟随 junction）。
-- `check-nsis-template.py` 把这一段换回上游两行后，要求与上游逐字一致（固定 SHA-256），并要求
+- `check-nsis-template.py` 把这一段换回上游两行后，要求（换行统一为 LF 后）其 SHA-256 等于脚本里固定的上游值，并要求
   `package.json` 的 `@tauri-apps/cli` 仍是 2.11.4。所以**单独升级 CLI 会让 CI 失败**，这是有意的。
 
 ## 升级步骤
@@ -40,4 +40,4 @@
    python3 scripts/check-nsis-template.py --fetch-upstream   # 联网，按 UPSTREAM_COMMIT 逐字比对
    ```
 6. 在分支上触发 `release-windows.yml` 演练（`workflow_dispatch`，`dry_run=true`）：会重跑上游比对、
-   `scan-nsis-rmdir.ps1`、冒烟测试和卸载 hook 实跑。`src-tauri/windows/` 与该 workflow 受 CODEOWNERS 保护，需所有者评审。
+   `scan-nsis-rmdir.ps1`、冒烟测试和卸载 hook 实跑。`.github/CODEOWNERS` 把 `src-tauri/windows/`、workflow 与检查脚本指给 @JTee77，但 CODEOWNERS 只有在仓库设置里开启 code owner 审查后才起作用；目前 main 未开启，只会自动请求所有者评审，不会阻止合并。

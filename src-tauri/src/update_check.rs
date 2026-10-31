@@ -1381,6 +1381,58 @@ mod tests {
         assert!(bundle_path_from_exe(dev).is_none());
     }
 
+    /// S-4：hdiutil 已知的瞬时错误（按输出文本匹配，不区分大小写）。模式是假设：
+    /// 取自 hdiutil 常见报错（如 `hdiutil: create failed - Resource busy`），未在本仓库 CI 日志中见到实例。
+    const HDIUTIL_TRANSIENT: &[&str] = &["resource busy", "resource temporarily unavailable"];
+    /// 失败后的退避：最多 3 次尝试，间隔 5 s、15 s。
+    #[cfg(target_os = "macos")]
+    const HDIUTIL_BACKOFF: &[Duration] = &[Duration::from_secs(5), Duration::from_secs(15)];
+
+    fn is_transient_hdiutil_error(output: &str) -> bool {
+        let o = output.to_ascii_lowercase();
+        HDIUTIL_TRANSIENT.iter().any(|p| o.contains(p))
+    }
+
+    /// 运行 `run`；失败且输出含已知瞬时错误时按 `HDIUTIL_BACKOFF` 重试，其余失败立即返回。
+    #[cfg(target_os = "macos")]
+    fn hdiutil_with_retry(run: impl Fn() -> std::process::Output) -> std::process::Output {
+        let mut backoff = HDIUTIL_BACKOFF.iter();
+        loop {
+            let out = run();
+            if out.status.success() {
+                return out;
+            }
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            match backoff.next() {
+                Some(wait) if is_transient_hdiutil_error(&text) => {
+                    eprintln!("hdiutil 瞬时错误，{wait:?} 后重试：{}", text.trim());
+                    std::thread::sleep(*wait);
+                }
+                _ => return out,
+            }
+        }
+    }
+
+    #[test]
+    fn hdiutil_transient_error_patterns() {
+        assert!(is_transient_hdiutil_error(
+            "hdiutil: create failed - Resource busy"
+        ));
+        assert!(is_transient_hdiutil_error(
+            "hdiutil: attach failed - Resource temporarily unavailable"
+        ));
+        assert!(!is_transient_hdiutil_error(
+            "hdiutil: create failed - No space left on device"
+        ));
+        assert!(!is_transient_hdiutil_error(
+            "hdiutil: create failed - Permission denied"
+        ));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn end_to_end_apply_dmg_replaces_app_and_strips_quarantine() {
@@ -1442,14 +1494,21 @@ mod tests {
 
         // Create a real DMG containing the signed app
         let dmg_path = base.join("Clash.Assist_0.2.5_aarch64.dmg");
-        let create_dmg = Command::new("/usr/bin/hdiutil")
-            .args(["create", "-volname", "Clash Assist", "-srcfolder"])
-            .arg(&src_dir)
-            .args(["-ov", "-format", "UDZO"])
-            .arg(&dmg_path)
-            .output()
-            .unwrap();
-        assert!(create_dmg.status.success(), "hdiutil create failed");
+        // S-4：CI 上 hdiutil 偶发「Resource busy」，只对已知的瞬时错误有限重试。
+        let create_dmg = hdiutil_with_retry(|| {
+            Command::new("/usr/bin/hdiutil")
+                .args(["create", "-volname", "Clash Assist", "-srcfolder"])
+                .arg(&src_dir)
+                .args(["-ov", "-format", "UDZO"])
+                .arg(&dmg_path)
+                .output()
+                .unwrap()
+        });
+        assert!(
+            create_dmg.status.success(),
+            "hdiutil create failed: {}",
+            String::from_utf8_lossy(&create_dmg.stderr)
+        );
 
         // Compute real SHA-256 and test verify_sha256_file
         let sha_out = Command::new("/usr/bin/shasum")
