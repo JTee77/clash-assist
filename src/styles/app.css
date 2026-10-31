@@ -27,6 +27,12 @@
   font-size: 13px;
 }
 
+/* Windows（windows-plan §2.7）：Segoe UI / 微软雅黑 UI 前置；Mac 字体栈不变。 */
+:root[data-platform="windows"] {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system,
+    BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+}
+
 [data-theme="light"] {
   color-scheme: light;
 }
@@ -2036,12 +2042,15 @@ html.glass .nc-detail {
   height: 28px;
   display: flex;
   align-items: center;
-  /* 左侧让出红绿灯（约 70px） */
-  padding: 0 12px 0 78px;
+  padding: 0 12px;
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
   min-width: 0;
+}
+/* 左侧让出红绿灯（约 70px）：只有 Mac 有 Overlay 红绿灯（Windows 不渲染 .titlebar）。 */
+html[data-platform="macos"] .titlebar {
+  padding-left: 78px;
 }
 .titlebar-title {
   font-size: 13px;
@@ -2104,4 +2113,63 @@ html.glass .nc-detail {
 .update-pill-close:hover {
   background: color-mix(in srgb, var(--update-pill-accent) 16%, transparent);
   color: var(--text);
+}
+
+.update-pill-go--secondary {
+  font-weight: 600 !important;
+  color: var(--text-muted);
+}
+
+/* ── Windows 更新条（原生标题栏下方，windows-plan §2.7）：无拖拽区、无红绿灯留白，字号按 Windows 常规 UI 放大 ── */
+.update-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 6px 12px 0;
+  min-width: 0;
+}
+.update-bar .update-pill {
+  margin-left: 0;
+  height: 26px;
+  border-radius: 13px;
+  gap: 6px;
+  padding: 0 6px 0 10px;
+  font-size: 12px;
+  max-width: 100%;
+}
+.update-bar .update-pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.update-bar .update-pill button {
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.update-bar .update-pill-close {
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  font-size: 14px !important;
+}
+.update-pill button:focus-visible {
+  outline: 2px solid var(--update-pill-accent);
+  outline-offset: 1px;
+}
+
+/* ── 连接诊断提示（InsecureDacl / 不可信管道 / TCP 未验证或拒绝） ── */
+.diag-notices {
+  margin: 0 0 12px;
+}
+.diag-notice-warn {
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  color: var(--warn);
+}
+.diag-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
 }
