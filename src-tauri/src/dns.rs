@@ -596,8 +596,9 @@ fn fmt_adapter_short(a: &AdapterDns) -> String {
 /// 由采集到的事实组装 `list_dns_resolvers_blocking` 的 Windows 结果（纯函数）。
 ///
 /// 隐私（PR #51 S-3）：raw_hint 会列出网卡名、描述和局域网 / 公司内网的 DNS 地址，
-/// 与 macOS 上 scutil 原文同类，不是 secret。目前它只显示在本机诊断卡片里，
-/// 没有导出或分享入口（Windows 首版也没有 CLI），所以不做脱敏；
+/// 与 macOS 上 scutil 原文同类，不是 secret。前端把它放进 DNS 卡的 `adapterHint`，
+/// 只在本机诊断卡片里显示，不进评分文本（r2 M-4），写结果缓存（localStorage，7 天）前
+/// 会去掉（r2 S-3）；没有导出或分享入口（Windows 首版也没有 CLI），所以不做脱敏。
 /// 以后若增加导出 / 分享，需要先对私有地址脱敏。
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn windows_resolvers_result(f: &WinDnsFacts) -> DnsResolversResult {
