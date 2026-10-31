@@ -125,26 +125,14 @@ jobs:
       - name: 构建 NSIS 安装包（tauri build）
         run: pnpm tauri build --ci --target $env:TARGET -- --locked
 
-      # M-7 / S-R4：release 构建中不得含测试标记。用同一扫描器对一个必然存在的字符串做正向对照，防止检查空转。
-      # CLASH_ASSIST_FAKE_LATEST 目前仍无条件编译（cfg 门控在 M5，M-7）：tag 构建发现即失败（M5 合入前不能发布），
-      # 演练只记 warning。
-      - name: 扫描 exe 中的测试标记（M-7，附正向对照）
+      # M-7 / S-R4：release 构建中不得含测试标记（UTF-8 与 UTF-16LE 都扫，附两种编码的正向对照，见脚本说明）。
+      # CLASH_ASSIST_FAKE_LATEST 目前仍无条件编译（cfg 门控在 M5，M-7）：tag 构建（-Strict）发现即失败
+      # （M5 合入前不能发布），演练只记 warning。
+      - name: 扫描 exe 中的测试标记（M-7，UTF-8 / UTF-16LE，附正向对照）
         run: |
-          $exe = "src-tauri/target/$env:TARGET/release/clash-assist.exe"
-          if (-not (Test-Path -LiteralPath $exe)) { Write-Error "找不到 $exe"; exit 1 }
-          $text = [Text.Encoding]::Latin1.GetString([IO.File]::ReadAllBytes((Resolve-Path $exe)))
-          $control = 'https://api.github.com/repos/JTee77/clash-assist/releases/latest'
-          if ($text.IndexOf($control, [StringComparison]::Ordinal) -lt 0) { Write-Error "正向对照失败：exe 中找不到 $control，扫描器无效"; exit 1 }
-          Write-Host "正向对照通过：$control"
-          $bad = 0
-          if ($text.IndexOf('CLASH_ASSIST_UPDATER_E2E_BUILD', [StringComparison]::Ordinal) -ge 0) {
-            Write-Error 'release 构建中含 CLASH_ASSIST_UPDATER_E2E_BUILD（不得启用 updater-e2e feature）'; $bad = 1
-          } else { Write-Host '不含 CLASH_ASSIST_UPDATER_E2E_BUILD' }
-          if ($text.IndexOf('CLASH_ASSIST_FAKE_LATEST', [StringComparison]::Ordinal) -ge 0) {
-            if ($env:EVENT_NAME -eq 'push') { Write-Error 'release 构建中含 CLASH_ASSIST_FAKE_LATEST（M5 的 M-7 cfg 门控合入前不能发布）'; $bad = 1 }
-            else { Write-Host '::warning::exe 中含 CLASH_ASSIST_FAKE_LATEST（M5 的 M-7 cfg 门控合入前，tag 构建会在这里失败）' }
-          } else { Write-Host '不含 CLASH_ASSIST_FAKE_LATEST' }
-          exit $bad
+          $scan = @{ Exe = "src-tauri/target/$env:TARGET/release/clash-assist.exe"; Strict = ($env:EVENT_NAME -eq 'push') }
+          ./scripts/scan-exe-markers.ps1 @scan
+          exit $LASTEXITCODE
 
       - name: 改名（V8）、打便携 zip、生成 SHA256SUMS.txt
         env:
@@ -179,6 +167,13 @@ jobs:
             -Setup (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe") `
             -Portable (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-portable.zip") `
             -Version $env:VERSION -HooksFile src-tauri/windows/hooks.nsh
+          exit $LASTEXITCODE
+
+      # 静默卸载走不到「删除应用数据」分支，这里用 tauri build 下载的同一个 makensis 实跑卸载 hook（含 junction）。
+      # 冒烟测试的 finally 已清掉 %LOCALAPPDATA%\ClashAssist。
+      - name: NSIS 卸载 hook 实跑（S-12，含 junction）
+        run: |
+          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh
           exit $LASTEXITCODE
 
       - name: 生成发布说明（不得含系统安全拦截相关文案）
@@ -227,6 +222,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      # 私有仓库 / 改可见性后 download-artifact 与 attest 需要读仓库（Ellie PR55 must-fix 1）
+      contents: read
       id-token: write
       attestations: write
     steps:
@@ -252,6 +249,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      # 只读：gh attestation verify 查询本仓库的 attestation
+      attestations: read
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
@@ -281,6 +280,27 @@ jobs:
           [ "$actual" = "$expected" ] || { echo "::error::artifact 文件集合不符"; echo "期望："; echo "$expected"; echo "实际："; echo "$actual"; exit 1; }
           (cd dist && sha256sum -c SHA256SUMS.txt)
           [ -s notes/release-notes.md ] || { echo "::error::缺少发布说明"; exit 1; }
+
+      # 证明 dist 里的文件就是本 workflow 在这个 tag / 提交上构建并签名的（provenance），
+      # 而不只是与同一 artifact 里的 SHA256SUMS 自洽（Ellie PR55）。attestation 刚写入时可能有短暂延迟，重试几次。
+      - name: 校验 build provenance（gh attestation verify）
+        run: |
+          set -euo pipefail
+          for f in dist/*; do
+            ok=0
+            for i in 1 2 3 4 5 6; do
+              if gh attestation verify "$f" -R "$REPO" \
+                  --signer-workflow "$REPO/.github/workflows/release-windows.yml" \
+                  --signer-digest "$SHA" \
+                  --source-ref "refs/tags/$TAG" \
+                  --source-digest "$SHA" \
+                  --deny-self-hosted-runners; then
+                ok=1; break
+              fi
+              echo "第 $i 次校验 $(basename "$f") 失败，10 秒后重试"; sleep 10
+            done
+            [ "$ok" = 1 ] || { echo "::error::$(basename "$f") 的 build provenance 校验失败"; exit 1; }
+          done
 
       - name: 复核 tag 指向 main 上的提交（API）
         run: |

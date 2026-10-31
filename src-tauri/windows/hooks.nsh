@@ -11,7 +11,8 @@
 ; Only NSIS_HOOK_POSTUNINSTALL does anything. It removes our own data dir
 ; %LOCALAPPDATA%\ClashAssist\ (logs\, updates\, update-pending.json), and never
 ; during an update. It must not touch Clash Verge's directories and must not
-; stop verge-mihomo.exe.
+; stop verge-mihomo.exe. RmDir /r does not follow junctions / symlinks out of
+; the directory; scripts/test-nsis-hooks.ps1 proves this on the Windows runner.
 
 !macro NSIS_HOOK_PREINSTALL
 !macroend
@@ -26,6 +27,9 @@
   ${If} $DeleteAppDataCheckboxState = 1
   ${AndIf} $UpdateMode <> 1
     SetShellVarContext current
-    RmDir /r "$LOCALAPPDATA\ClashAssist"
+    ; Never let an empty $LOCALAPPDATA turn this into "\ClashAssist" at the drive root.
+    ${If} $LOCALAPPDATA != ""
+      RmDir /r "$LOCALAPPDATA\ClashAssist"
+    ${EndIf}
   ${EndIf}
 !macroend

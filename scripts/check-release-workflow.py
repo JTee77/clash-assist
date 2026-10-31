@@ -7,6 +7,7 @@
   3. 顶层 permissions 为 {}；每个 job 都显式声明 permissions；
   4. 含任何 write 权限的 job：`if` 必须同时要求 github.event_name == 'push' 与
      github.ref_type == 'tag'（且不含 `||`），并且不得 checkout 仓库代码（M-6）；
+     这类 job 只能是 attest / release，权限必须与 WRITE_JOB_PERMISSIONS 完全一致；
      其余 job 的权限只能是 contents: read；
   5. 每个 actions/checkout 都设置 persist-credentials: false（S-R2）；
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
@@ -28,6 +29,14 @@ except ImportError:  # pragma: no cover
     sys.exit(2)
 
 DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github", "workflows", "release-windows.yml")
+
+
+# 有写权限的 job 及其完整权限集合（Ellie PR55：attest 补 contents: read；release 的
+# gh attestation verify 只需 attestations: read）。多一项、少一项都算违规。
+WRITE_JOB_PERMISSIONS = {
+    "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
+    "release": {"contents": "write", "attestations": "read"},
+}
 
 
 def triggers(doc):
@@ -87,6 +96,11 @@ def check(doc, text):
             if ("github.event_name=='push'" not in compact or "github.ref_type=='tag'" not in compact
                     or "||" in cond):
                 errs.append(f"job {name} 有写权限 {writes}，但 if 未限定为 tag push：{cond!r}")
+            want = WRITE_JOB_PERMISSIONS.get(name)
+            if want is None:
+                errs.append(f"job {name} 有写权限 {writes}，但只有 {sorted(WRITE_JOB_PERMISSIONS)} 可以有写权限")
+            elif perms != want:
+                errs.append(f"job {name} 的权限必须恰为 {want!r}，实际：{perms!r}")
             for s in steps:
                 if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/checkout@"):
                     errs.append(f"job {name} 有写权限，不得 checkout 仓库代码（M-6）")
@@ -163,6 +177,10 @@ def self_test(path):
         ("顶层 contents: write", lambda d, t: (d.__setitem__("permissions", {"contents": "write"}), t), "顶层 permissions"),
         ("build 拿到 contents: write", lambda d, t: (d["jobs"]["build"].__setitem__("permissions", {"contents": "write"}), t), "if 未限定"),
         ("build 多了 id-token: read", lambda d, t: (d["jobs"]["build"]["permissions"].__setitem__("id-token", "read"), t), "只能是 contents: read"),
+        ("attest 缺 contents: read", lambda d, t: (d["jobs"]["attest"]["permissions"].pop("contents"), t), "权限必须恰为"),
+        ("release 多了 id-token: write", lambda d, t: (d["jobs"]["release"]["permissions"].__setitem__("id-token", "write"), t), "权限必须恰为"),
+        ("release 的 attestations 升为 write", lambda d, t: (d["jobs"]["release"]["permissions"].__setitem__("attestations", "write"), t), "权限必须恰为"),
+        ("新 job 拿写权限", lambda d, t: (d["jobs"].__setitem__("extra", {"if": "github.event_name == 'push' && github.ref_type == 'tag'", "permissions": {"contents": "write"}, "steps": []}), t), "只有"),
         ("写权限 job 去掉 if", lambda d, t: (d["jobs"][job_with_write(d)].pop("if"), t), "if 未限定"),
         ("写权限 job 的 if 放行 dispatch", lambda d, t: (d["jobs"][job_with_write(d)].__setitem__("if", "github.event_name == 'push' && github.ref_type == 'tag' || inputs.dry_run == false"), t), "if 未限定"),
         ("写权限 job checkout", lambda d, t: (d["jobs"][job_with_write(d)]["steps"].insert(0, {"uses": "actions/checkout@" + "0" * 40, "with": {"persist-credentials": False}}), t), "不得 checkout"),

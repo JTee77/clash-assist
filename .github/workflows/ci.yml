@@ -61,6 +61,15 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # S-12（Ellie PR55）：用 runner 预装的 makensis 实跑 hooks.nsh 的卸载 hook，含 junction 不被跟随的用例。
+      # 放在最前面：此时 %LOCALAPPDATA%\ClashAssist 还不存在。
+      - name: NSIS 卸载 hook 实跑（S-12，含 junction）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh
+          exit $LASTEXITCODE
+
       # 按 rust-toolchain.toml 固定的版本安装（含 clippy），不依赖 runner 预装的 stable
       - name: Rust 工具链（rust-toolchain.toml）
         run: |
@@ -124,6 +133,17 @@ jobs:
           $lvl = @($doc.SelectNodes("//*[local-name()='trustInfo']//*[local-name()='requestedExecutionLevel']"))
           if ($lvl.Count -ne 1 -or $lvl[0].GetAttribute('level') -ne 'asInvoker' -or $lvl[0].GetAttribute('uiAccess') -ne 'false') { Write-Error "清单应恰有一个 requestedExecutionLevel level=asInvoker uiAccess=false，实际 $($lvl.Count) 个"; exit 1 }
           Write-Host "V11 通过：dpiAwareness = $($aware[0])；dpiAware = $($legacy[0])；Common Controls v6 依赖存在；asInvoker"
+
+      # M-7（Ellie PR55）：测试标记扫描器自测，并在真实的 Windows exe 上确认两种编码的正向对照都能命中
+      # （debug 构建，非 strict：FAKE_LATEST 在 M5 之前只记 warning）
+      - name: 测试标记扫描器（自测 + 真实 exe 正向对照）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/scan-exe-markers.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/scan-exe-markers.ps1 -Exe src-tauri/target/debug/clash-assist.exe
+          exit $LASTEXITCODE
 
       # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警
       - name: clippy（--all-targets -D warnings）
