@@ -275,8 +275,10 @@ fn active_local_proxy_port() -> Option<u16> {
 /// Windows 上的管道探测内部用 `block_on`，在 tokio 工作线程上直接调用会 panic
 /// （"Cannot start a runtime from within a runtime"；release 为 `panic = "abort"`，进程以 0xC0000409 退出）。
 async fn active_local_proxy_port_async() -> Option<u16> {
-    // 临时（M4c 证明回归测试能复现）：恢复旧实现，在工作线程上同步探测。下一个提交恢复修复。
-    active_local_proxy_port()
+    tauri::async_runtime::spawn_blocking(active_local_proxy_port)
+        .await
+        .ok()
+        .flatten()
 }
 
 fn build_http_client(
