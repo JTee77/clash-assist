@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # win/**：Windows 移植的里程碑分支在开 PR 之前也跑 CI（windows-plan M3 起）
+    branches: [main, "win/**"]
   pull_request:
 
 # 默认只读（windows-plan r4 §2.8 / §3）；各 job 不再额外授权。
@@ -76,6 +77,36 @@ jobs:
 
       - name: 后端测试（cargo test 全量）
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # V11（windows-plan §2.7）：编出 GUI 可执行文件，用 Windows SDK 的 mt.exe 导出内嵌应用清单，
+      # 断言声明了 Per-Monitor v2 DPI 感知（src-tauri/windows/app.manifest，build.rs 嵌入）。
+      - name: DPI 清单检查（mt.exe，V11）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --locked --bin clash-assist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Join-Path $PWD 'src-tauri/target/debug/clash-assist.exe'
+          if (-not (Test-Path $exe)) { Write-Error "找不到 $exe"; exit 1 }
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $mt = @(Get-ChildItem -Path $kits -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' -and (Test-Path (Join-Path $_.FullName 'x64/mt.exe')) } |
+              Sort-Object { [version]$_.Name } -Descending |
+              ForEach-Object { Join-Path $_.FullName 'x64/mt.exe' })
+          if ($mt.Count -eq 0) { Write-Error "在 $kits 下找不到 x64/mt.exe"; exit 1 }
+          Write-Host "mt.exe: $($mt[0])"
+          $out = Join-Path $env:RUNNER_TEMP 'clash-assist.manifest'
+          & $mt[0] -nologo "-inputresource:$exe;#1" "-out:$out"
+          if ($LASTEXITCODE -ne 0) { Write-Error "mt.exe 导出清单失败（$LASTEXITCODE）"; exit 1 }
+          Get-Content -Raw $out
+          [xml]$doc = Get-Content -Raw $out
+          $aware = @($doc.SelectNodes("//*[local-name()='dpiAwareness']") | ForEach-Object { $_.InnerText })
+          if ($aware.Count -ne 1) { Write-Error "清单里应恰有一个 dpiAwareness，实际 $($aware.Count) 个"; exit 1 }
+          $first = ($aware[0] -split ',')[0].Trim()
+          if ($first -ne 'PerMonitorV2') { Write-Error "dpiAwareness 首选项应为 PerMonitorV2，实际：$($aware[0])"; exit 1 }
+          $cc = @($doc.SelectNodes("//*[local-name()='assemblyIdentity' and @name='Microsoft.Windows.Common-Controls']"))
+          if ($cc.Count -ne 1) { Write-Error "清单缺少 Common Controls v6 依赖"; exit 1 }
+          Write-Host "V11 通过：dpiAwareness = $($aware[0])"
 
       # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警
       - name: clippy（--all-targets -D warnings）
