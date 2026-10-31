@@ -1,0 +1,338 @@
+name: Release (Windows)
+
+# windows-plan r4 §2.8 / §3（M-6、S-5 ③、S-8、S-9、S-R2、S-R3、C-3）。
+# 只有两种触发方式：
+#   - 推送 vX.Y.Z tag：build → attest → release（只写 draft，需 environment `release` 审批）；
+#   - workflow_dispatch：演练（dry_run 默认 true），只构建、冒烟测试并上传 artifact，
+#     不做 attestation、不建 release、不推 tag。dry_run=false 的 dispatch 直接失败——正式发布只能走 tag。
+# tag 过滤按方案收紧为 v[0-9]+.[0-9]+.[0-9]+（是 v* 的子集；-rc 之类的预发布 tag 不触发）。
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 演练（只构建与冒烟测试并上传 artifact；不做 attestation、不建 release）。正式发布请推送 vX.Y.Z tag
+        type: boolean
+        required: true
+        default: true
+
+# 默认无任何权限；每个 job 单独授权。写权限只在 attest / release 两个 job 上，且二者只在 tag push 时运行。
+permissions: {}
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    # 冷编译 + 全量测试 + 打包 + 冒烟测试
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      REF_TYPE: ${{ github.ref_type }}
+      REF_NAME: ${{ github.ref_name }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      REPO: ${{ github.repository }}
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - name: 触发方式检查（tag 格式 / 只允许演练的 dispatch）
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            push)
+              if [ "$REF_TYPE" != tag ] || ! [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::只接受形如 vX.Y.Z 的 tag（实际 $REF_TYPE $REF_NAME）"; exit 1
+              fi ;;
+            workflow_dispatch)
+              if [ "$DRY_RUN" != true ]; then
+                echo "::error::workflow_dispatch 只支持演练（dry_run=true）；正式发布请推送 vX.Y.Z tag"; exit 1
+              fi ;;
+            *) echo "::error::不支持的触发方式：$EVENT_NAME"; exit 1 ;;
+          esac
+          echo "触发方式：$EVENT_NAME（$REF_TYPE $REF_NAME），dry_run=${DRY_RUN:-n/a}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # S-R2：完整历史，祖先校验不受 shallow 边界影响
+          fetch-depth: 0
+
+      - name: tag 必须指向 main 上已合并的提交（仅 tag push）
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "refs/tags/$REF_NAME^{commit}")"
+          [ "$tag_commit" = "$GITHUB_SHA" ] || { echo "::error::tag $REF_NAME 指向 $tag_commit，与 GITHUB_SHA $GITHUB_SHA 不一致"; exit 1; }
+          git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null || { echo "::error::checkout 中没有 origin/main"; exit 1; }
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$REF_NAME（$GITHUB_SHA）不在 main 的历史上，拒绝发布"; exit 1
+          fi
+          echo "$REF_NAME → $GITHUB_SHA，位于 origin/main（$(git rev-parse refs/remotes/origin/main)）的历史上"
+
+      - name: Rust 工具链（rust-toolchain.toml）
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel *= *"(.*)"$').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal --component clippy --target $env:TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+
+      # 发布构建不使用任何缓存（S-8 ⑥；PR #46 评审）：pnpm/action-setup 默认 cache: false，
+      # setup-node 不设 cache，并显式关闭自动缓存
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.16.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: 版本一致性（S-9；tag push 时含 tag）
+        id: version
+        run: |
+          node scripts/check-version-sync.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ver = (Get-Content -Raw src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') { Write-Error "版本号格式不符：$ver"; exit 1 }
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "版本：$ver"
+
+      - name: 安装依赖（--frozen-lockfile，无缓存）
+        run: pnpm install --frozen-lockfile
+
+      - name: 前端测试与类型检查
+        run: |
+          pnpm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm typecheck
+
+      - name: 后端测试与 clippy
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      # 不带任何 --features（M-7：updater-e2e 只在 updater-e2e.yml 中启用）
+      - name: 构建 NSIS 安装包（tauri build）
+        run: pnpm tauri build --ci --target $env:TARGET -- --locked
+
+      # M-7 / S-R4：release 构建中不得含测试标记。用同一扫描器对一个必然存在的字符串做正向对照，防止检查空转。
+      # CLASH_ASSIST_FAKE_LATEST 目前仍无条件编译（cfg 门控在 M5，M-7）：tag 构建发现即失败（M5 合入前不能发布），
+      # 演练只记 warning。
+      - name: 扫描 exe 中的测试标记（M-7，附正向对照）
+        run: |
+          $exe = "src-tauri/target/$env:TARGET/release/clash-assist.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { Write-Error "找不到 $exe"; exit 1 }
+          $text = [Text.Encoding]::Latin1.GetString([IO.File]::ReadAllBytes((Resolve-Path $exe)))
+          $control = 'https://api.github.com/repos/JTee77/clash-assist/releases/latest'
+          if ($text.IndexOf($control, [StringComparison]::Ordinal) -lt 0) { Write-Error "正向对照失败：exe 中找不到 $control，扫描器无效"; exit 1 }
+          Write-Host "正向对照通过：$control"
+          $bad = 0
+          if ($text.IndexOf('CLASH_ASSIST_UPDATER_E2E_BUILD', [StringComparison]::Ordinal) -ge 0) {
+            Write-Error 'release 构建中含 CLASH_ASSIST_UPDATER_E2E_BUILD（不得启用 updater-e2e feature）'; $bad = 1
+          } else { Write-Host '不含 CLASH_ASSIST_UPDATER_E2E_BUILD' }
+          if ($text.IndexOf('CLASH_ASSIST_FAKE_LATEST', [StringComparison]::Ordinal) -ge 0) {
+            if ($env:EVENT_NAME -eq 'push') { Write-Error 'release 构建中含 CLASH_ASSIST_FAKE_LATEST（M5 的 M-7 cfg 门控合入前不能发布）'; $bad = 1 }
+            else { Write-Host '::warning::exe 中含 CLASH_ASSIST_FAKE_LATEST（M5 的 M-7 cfg 门控合入前，tag 构建会在这里失败）' }
+          } else { Write-Host '不含 CLASH_ASSIST_FAKE_LATEST' }
+          exit $bad
+
+      - name: 改名（V8）、打便携 zip、生成 SHA256SUMS.txt
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $bundle = "src-tauri/target/$env:TARGET/release/bundle/nsis"
+          $setups = @(Get-ChildItem -LiteralPath $bundle -Filter '*-setup.exe' -File)
+          if ($setups.Count -ne 1) { Write-Error "$bundle 下应恰有一个 *-setup.exe，实际 $($setups.Count) 个"; exit 1 }
+          $dist = Join-Path $env:RUNNER_TEMP 'win-dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $setupName = "Clash.Assist_$($env:VERSION)_x64-setup.exe"
+          $zipName = "Clash.Assist_$($env:VERSION)_x64-portable.zip"
+          Copy-Item -LiteralPath $setups[0].FullName -Destination (Join-Path $dist $setupName)
+          $stage = Join-Path $env:RUNNER_TEMP 'portable-stage'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath "src-tauri/target/$env:TARGET/release/clash-assist.exe" -Destination $stage
+          Copy-Item -LiteralPath 'src-tauri/windows/portable.txt' -Destination $stage
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $dist $zipName) -CompressionLevel Optimal
+          $lines = foreach ($n in @($setupName, $zipName) | Sort-Object) {
+            '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $dist $n)).Hash.ToLowerInvariant(), $n
+          }
+          [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), (($lines -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+          Get-ChildItem -LiteralPath $dist | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          Get-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt')
+
+      - name: 冒烟测试（静默安装 / 启动 / /UPDATE / 卸载 / 便携版）
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'win-dist'
+          ./scripts/smoke-windows.ps1 `
+            -Setup (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe") `
+            -Portable (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-portable.zip") `
+            -Version $env:VERSION -HooksFile src-tauri/windows/hooks.nsh
+          exit $LASTEXITCODE
+
+      - name: 生成发布说明（不得含系统安全拦截相关文案）
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'release-notes'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $notes = (Get-Content -Raw -LiteralPath scripts/release-notes-windows.md).Replace('{{VERSION}}', $env:VERSION).Replace('{{REPO}}', $env:REPO)
+          if ($notes.Contains('{{')) { Write-Error '发布说明中仍有未替换的占位符'; exit 1 }
+          $path = Join-Path $out 'release-notes.md'
+          [IO.File]::WriteAllText($path, $notes, [Text.UTF8Encoding]::new($false))
+          node scripts/check-release-notes.mjs $path
+          exit $LASTEXITCODE
+
+      - name: 上传 win-dist
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: win-dist
+          path: ${{ runner.temp }}/win-dist/*
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && 30 || 7 }}
+
+      - name: 上传发布说明
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes/release-notes.md
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && 30 || 7 }}
+
+      - name: job summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $sums = Get-Content -Raw -LiteralPath (Join-Path $env:RUNNER_TEMP 'win-dist/SHA256SUMS.txt')
+          $mode = if ($env:EVENT_NAME -eq 'push') { "tag $($env:REF_NAME)：接下来进入 attest 与 release（draft，需审批）" } else { '演练（dry_run）：不做 attestation、不建 release' }
+          @("### Windows 构建 $($env:VERSION)", '', $mode, '', '```', $sums.TrimEnd(), '```') -join "`n" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+  # S-5 ③：attestation 放在独立 job——build job 运行大量第三方构建代码，不应同时持有 OIDC 令牌。
+  # 不 checkout；演练（workflow_dispatch）不运行。
+  attest:
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: win-dist
+          path: dist
+
+      - name: 复核 SHA256SUMS
+        run: cd dist && sha256sum -c SHA256SUMS.txt
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+  # M-6：不 checkout、不执行仓库代码；只下载 artifact、复核哈希、写 draft。environment `release` 需用户审批，
+  # 且应只允许 v* tag 部署（S-R3，见仓库设置清单）。
+  release:
+    needs: [build, attest]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: win-dist
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+
+      - name: 复核 artifact（文件集合与 SHA256SUMS）
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag 格式不符：$TAG"; exit 1; }
+          ver="${TAG#v}"
+          expected="$(printf '%s\n' "Clash.Assist_${ver}_x64-portable.zip" "Clash.Assist_${ver}_x64-setup.exe" SHA256SUMS.txt | sort)"
+          actual="$(cd dist && find . -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
+          [ "$actual" = "$expected" ] || { echo "::error::artifact 文件集合不符"; echo "期望："; echo "$expected"; echo "实际："; echo "$actual"; exit 1; }
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          [ -s notes/release-notes.md ] || { echo "::error::缺少发布说明"; exit 1; }
+
+      - name: 复核 tag 指向 main 上的提交（API）
+        run: |
+          set -euo pipefail
+          ref="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')"
+          type="${ref%% *}"; obj="${ref#* }"
+          if [ "$type" = tag ]; then obj="$(gh api "repos/$REPO/git/tags/$obj" --jq '.object.sha')"; fi
+          [ "$obj" = "$SHA" ] || { echo "::error::tag $TAG 当前指向 $obj，与本次运行的 $SHA 不一致"; exit 1; }
+          status="$(gh api "repos/$REPO/compare/main...$SHA" --jq '.status')"
+          case "$status" in
+            identical|behind) echo "$TAG（$SHA）位于 main 的历史上（compare：$status）" ;;
+            *) echo "::error::$TAG（$SHA）不在 main 的历史上（compare：$status）"; exit 1 ;;
+          esac
+
+      - name: 记录 release 的 immutability 状态（仅记录，C-3）
+        run: gh release view "$TAG" -R "$REPO" --json isDraft,isImmutable || echo "release 尚不存在（或 gh 不支持 isImmutable）"
+
+      - name: 只允许写 draft，禁止覆盖已有资产
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" -R "$REPO" --json isDraft -q .isDraft > state 2>/dev/null; then
+            [ "$(cat state)" = "true" ] || { echo "::error::release $TAG 已发布，拒绝写入"; exit 1; }
+            echo "draft 已存在（例如已上传 Mac DMG），追加 Windows 资产；同名资产已存在时上传会失败"
+            gh release upload "$TAG" dist/* -R "$REPO"
+          else
+            gh release create "$TAG" dist/* -R "$REPO" --draft --verify-tag --title "$TAG" --notes-file notes/release-notes.md
+          fi
+
+      - name: 上传后核对 GitHub digest 与本地哈希一致
+        run: |
+          set -euo pipefail
+          id="$(gh release view "$TAG" -R "$REPO" --json databaseId -q .databaseId)"
+          gh api "repos/$REPO/releases/$id/assets" --paginate --jq '.[] | [.name, .state, (.digest // "")] | @tsv' > remote.tsv
+          cat remote.tsv
+          fail=0
+          for f in dist/*; do
+            name="$(basename "$f")"
+            want="sha256:$(sha256sum "$f" | cut -d' ' -f1)"
+            row="$(awk -F'\t' -v n="$name" '$1 == n' remote.tsv)"
+            state="$(printf '%s' "$row" | cut -f2)"; got="$(printf '%s' "$row" | cut -f3)"
+            if [ "$state" = uploaded ] && [ "$got" = "$want" ]; then
+              echo "ok   $name $got"
+            else
+              echo "::error::$name：state=${state:-缺失} digest=${got:-缺失}，期望 uploaded $want"; fail=1
+            fi
+          done
+          exit "$fail"
+
+      - name: job summary
+        run: |
+          {
+            echo "### draft release $TAG 已写入"
+            echo
+            echo "检查 draft 内容、上传 Mac DMG（如需要）后，由仓库所有者手动发布。发布前确认仓库已开启 immutable releases（C-3）。"
+          } >> "$GITHUB_STEP_SUMMARY"
