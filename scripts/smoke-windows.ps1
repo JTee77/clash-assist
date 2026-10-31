@@ -9,7 +9,7 @@
      断言安装目录为 %LOCALAPPDATA%\Clash Assist、主程序与 uninstall.exe 存在、版本一致；
   ③ 启动主程序，等待 StartupSeconds 秒后进程仍存活，且有 msedgewebview2.exe 子进程；
   ⑩ S-12：在 %LOCALAPPDATA%\ClashAssist 放一个标记文件，以 /S /UPDATE 重装后标记仍在；
-     同时静态检查 hooks.nsh 的删除逻辑带 $UpdateMode 与 $LOCALAPPDATA 非空守卫（-HooksFile）；
+     同时静态检查 hooks.nsh 的删除逻辑带 $UpdateMode 与 $LOCALAPPDATA 非空守卫、且不用 RmDir /r（-HooksFile）；
   ④ uninstall.exe /S 后安装目录与 Uninstall 键都已清理；静默卸载不勾选“删除应用数据”，
      标记文件应保留；
   ⑤ 便携 zip 解压到干净目录后启动，同 ③ 的判据（V14：验证是否需要随包提供 WebView2Loader.dll）。
@@ -143,8 +143,10 @@ try {
   Step '⑩ S-12：/UPDATE 重装不删应用数据'
   if ($HooksFile) {
     $hooks = Get-Content -Raw -LiteralPath $HooksFile
-    $guarded = $hooks -match '(?s)!macro\s+NSIS_HOOK_POSTUNINSTALL.*?\$\{If\}\s+\$DeleteAppDataCheckboxState\s*=\s*1\s*\r?\n\s*\$\{AndIf\}\s+\$UpdateMode\s*<>\s*1.*?\$\{If\}\s+\$LOCALAPPDATA\s*!=\s*""\s*\r?\n\s*RmDir\s+/r\s+"\$LOCALAPPDATA\\ClashAssist".*?!macroend'
-    Assert $guarded 'hooks.nsh：RmDir 只在勾选删除、非 /UPDATE 且 $LOCALAPPDATA 非空时执行'
+    $guarded = $hooks -match '(?s)!macro\s+NSIS_HOOK_POSTUNINSTALL.*?\$\{If\}\s+\$DeleteAppDataCheckboxState\s*=\s*1\s*\r?\n\s*\$\{AndIf\}\s+\$UpdateMode\s*<>\s*1.*?\$\{If\}\s+\$LOCALAPPDATA\s*!=\s*""\s*\r?\n\s*Push\s+"\$LOCALAPPDATA\\ClashAssist"\s*\r?\n\s*Call\s+un\.CA_RmTreeNoFollow.*?!macroend'
+    Assert $guarded 'hooks.nsh：删除只在勾选删除、非 /UPDATE 且 $LOCALAPPDATA 非空时执行'
+    # NSIS 3.10 的 RmDir /r 会跟随 junction（test-nsis-hooks.ps1 实测），hooks 里不得再用
+    Assert (-not ($hooks -match '(?im)^\s*RmDir\s+/r\b')) 'hooks.nsh：不使用会跟随 junction 的 RmDir /r'
   } else {
     Write-Host '  （未提供 -HooksFile，跳过静态检查）'
   }

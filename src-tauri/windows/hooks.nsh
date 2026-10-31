@@ -11,8 +11,53 @@
 ; Only NSIS_HOOK_POSTUNINSTALL does anything. It removes our own data dir
 ; %LOCALAPPDATA%\ClashAssist\ (logs\, updates\, update-pending.json), and never
 ; during an update. It must not touch Clash Verge's directories and must not
-; stop verge-mihomo.exe. RmDir /r does not follow junctions / symlinks out of
-; the directory; scripts/test-nsis-hooks.ps1 proves this on the Windows runner.
+; stop verge-mihomo.exe.
+;
+; Do NOT use "RmDir /r" here: NSIS 3.10 follows directory junctions and deletes
+; the files behind them (caught by scripts/test-nsis-hooks.ps1 on the Windows
+; runner). un.CA_RmTreeNoFollow walks the tree itself and removes any reparse
+; point (junction / symlink) as a link only, never descending into it.
+; scripts/test-nsis-hooks.ps1 runs this hook in a real uninstaller and checks
+; that a file behind a junction survives.
+
+;  Input: directory path on the stack. Deletes its contents and the directory.
+;  Reparse points (or entries whose attributes cannot be read) are removed with
+;  non-recursive RMDir / Delete, which only drop the link itself.
+Function un.CA_RmTreeNoFollow
+  Exch $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  FindFirst $R1 $R2 "$R0\*.*"
+  ${DoWhile} $R2 != ""
+    ${If} $R2 != "."
+    ${AndIf} $R2 != ".."
+      System::Call 'kernel32::GetFileAttributesW(w "$R0\$R2") i .R3'
+      ${If} $R3 = -1
+        ; Unknown: treat as a link, never descend.
+        RMDir "$R0\$R2"
+        Delete "$R0\$R2"
+      ${Else}
+        IntOp $R3 $R3 & 0x410 ; REPARSE_POINT | DIRECTORY
+        ${If} $R3 = 0x10
+          Push "$R0\$R2"
+          Call un.CA_RmTreeNoFollow
+        ${ElseIf} $R3 = 0x410
+          RMDir "$R0\$R2"
+        ${Else}
+          Delete "$R0\$R2"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    FindNext $R1 $R2
+  ${Loop}
+  FindClose $R1
+  RMDir "$R0"
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $R0
+FunctionEnd
 
 !macro NSIS_HOOK_PREINSTALL
 !macroend
@@ -29,7 +74,8 @@
     SetShellVarContext current
     ; Never let an empty $LOCALAPPDATA turn this into "\ClashAssist" at the drive root.
     ${If} $LOCALAPPDATA != ""
-      RmDir /r "$LOCALAPPDATA\ClashAssist"
+      Push "$LOCALAPPDATA\ClashAssist"
+      Call un.CA_RmTreeNoFollow
     ${EndIf}
   ${EndIf}
 !macroend

@@ -4,9 +4,10 @@
   在 Windows 上实际执行 src-tauri/windows/hooks.nsh 的 NSIS_HOOK_POSTUNINSTALL（S-12；Ellie PR55）。
 
 .DESCRIPTION
-  静默卸载时「删除应用数据」复选框恒为 0，冒烟测试走不到 RmDir 分支，所以这里用 makensis
+  静默卸载时「删除应用数据」复选框恒为 0，冒烟测试走不到删除分支，所以这里用 makensis
   编一个最小的测试安装器：声明与 Tauri 模板同名的变量 $UpdateMode / $DeleteAppDataCheckboxState，
-  按用例赋值后 !insertmacro NSIS_HOOK_POSTUNINSTALL，再静默运行。用例：
+  安装段只写出卸载器；卸载段（与 Tauri 一样是 un. 上下文）按用例赋值后
+  !insertmacro NSIS_HOOK_POSTUNINSTALL。先静默运行安装器，再以 `/S _?=<目录>` 同步运行卸载器。用例：
     1. 勾选删除、非 /UPDATE：%LOCALAPPDATA%\ClashAssist 被删；目录里指向外部目录的 junction
        只删联接本身，不跟随进去——外部目录里的哨兵文件必须还在；
     2. 勾选删除、/UPDATE：目录保留；
@@ -54,6 +55,7 @@ function Check([bool]$cond, [string]$what) {
 function Build-Harness([int]$del, [int]$upd) {
   $nsi = Join-Path $work "hooks-$del-$upd.nsi"
   $exe = Join-Path $work "hooks-$del-$upd.exe"
+  $un = Join-Path $work "hooks-$del-$upd-uninstall.exe"
   @"
 Unicode true
 !include LogicLib.nsh
@@ -61,10 +63,14 @@ Name "clash-assist-hooks-test"
 OutFile "$exe"
 RequestExecutionLevel user
 SilentInstall silent
+SilentUnInstall silent
 Var UpdateMode
 Var DeleteAppDataCheckboxState
 !include "$HooksFile"
 Section
+  WriteUninstaller "$un"
+SectionEnd
+Section Uninstall
   StrCpy `$DeleteAppDataCheckboxState $del
   StrCpy `$UpdateMode $upd
   !insertmacro NSIS_HOOK_POSTUNINSTALL
@@ -72,7 +78,9 @@ SectionEnd
 "@ | Set-Content -LiteralPath $nsi -Encoding utf8BOM
   $out = & $MakeNsis /V2 /WX $nsi 2>&1
   if ($LASTEXITCODE -ne 0) { $out | ForEach-Object { Write-Host "    $_" }; throw "makensis 编译 $nsi 失败（$LASTEXITCODE）" }
-  $exe
+  $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
+  if ($p.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $un)) { throw "测试安装器没有写出卸载器（退出码 $($p.ExitCode)）" }
+  $un
 }
 
 function Remove-Junction([string]$path) {
@@ -82,7 +90,11 @@ function Remove-Junction([string]$path) {
 
 function New-DataDir {
   New-Item -ItemType Directory -Force -Path (Join-Path $data 'logs') | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $data 'updates\nested') | Out-Null
   Set-Content -LiteralPath (Join-Path $data 'logs\app.log') -Value 'log'
+  Set-Content -LiteralPath (Join-Path $data 'updates\nested\pkg.bin') -Value 'pkg'
+  Set-Content -LiteralPath (Join-Path $data 'update-pending.json') -Value '{}'
+  Set-ItemProperty -LiteralPath (Join-Path $data 'update-pending.json') -Name IsReadOnly -Value $true
   Set-Content -LiteralPath $sentinel -Value 'must survive'
   $j = Join-Path $data 'logs\junction-out'
   New-Item -ItemType Junction -Path $j -Target $outside | Out-Null
@@ -94,6 +106,7 @@ function New-DataDir {
 function Clear-DataDir {
   if (Test-Path -LiteralPath $data) {
     Remove-Junction (Join-Path $data 'logs\junction-out')
+    Get-ChildItem -LiteralPath $data -Recurse -Force -File | ForEach-Object { $_.IsReadOnly = $false }
     Remove-Item -LiteralPath $data -Recurse -Force
   }
 }
@@ -106,10 +119,11 @@ try {
   )
   foreach ($c in $cases) {
     Write-Host "== $($c.Name)"
-    $exe = Build-Harness $c.Del $c.Upd
+    $un = Build-Harness $c.Del $c.Upd
     $null = New-DataDir
-    $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
-    Check ($p.ExitCode -eq 0) "测试安装器退出码 0（实际 $($p.ExitCode)）"
+    # _?= 让卸载器就地同步运行（不复制到临时目录再异步重启）
+    $p = Start-Process -FilePath $un -ArgumentList '/S', "_?=$work" -Wait -PassThru
+    Check ($p.ExitCode -eq 0) "测试卸载器退出码 0（实际 $($p.ExitCode)）"
     if ($c.Deleted) {
       Check (-not (Test-Path -LiteralPath $data)) "$data 已删除"
     } else {
