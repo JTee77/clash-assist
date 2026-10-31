@@ -17,6 +17,8 @@ import {
   openReleasePage,
   openVergeReleasePage,
   relaunchUpdatedApp,
+  updaterSupported,
+  WINDOWS_UPDATER_ENABLED,
 } from "./index";
 
 describe("in-app staged self-update bridge (0.2.4)", () => {
@@ -26,6 +28,15 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     (globalThis as unknown as { window?: Record<string, unknown> }).window = {
       __TAURI_INTERNALS__: {},
     };
+  });
+
+  it("M5 之前 Windows 不检查更新：不调用 check_update，直接视为无更新", async () => {
+    expect(WINDOWS_UPDATER_ENABLED).toBe(false);
+    expect(updaterSupported(true)).toBe(false);
+    expect(updaterSupported(false)).toBe(true);
+    h.invoke.mockResolvedValue({ current: "0.2.4", latest: "9.9.9", update_available: true, url: "x" });
+    await expect(checkUpdateOnce(true)).resolves.toBeNull();
+    expect(h.invoke).not.toHaveBeenCalled();
   });
 
   it("checkUpdateOnce caches the promise across calls and preserves dmg_url / dmg_sha256", async () => {
