@@ -115,6 +115,31 @@
           "code": "token-mismatch"
         }
       ]
+    },
+    {
+      "name": "truncated-huge-file-list",
+      "label": "verge-tcp(listener-unverified,service-mode,pipe-insecure):C:\\Users\\u0\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u1\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u2\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u3\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u4\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u5\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u6\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u7\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u8\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u9\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u10\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u11\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u12\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,%28truncated%29;pipe-insecure-dacl=\\\\.\\pipe\\verge-mihomo",
+      "base": "verge-tcp(listener-unverified,service-mode,pipe-insecure):C:\\Users\\u0\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u1\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u2\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u3\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u4\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u5\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u6\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u7\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u8\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u9\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u10\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u11\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,C:\\Users\\u12\\AppData\\Roaming\\io.github.clash-verge-rev\\config.yaml,%28truncated%29",
+      "tcpItems": [
+        "listener-unverified",
+        "service-mode",
+        "pipe-insecure"
+      ],
+      "insecureDacl": true,
+      "insecurePipes": [
+        "\\\\.\\pipe\\verge-mihomo"
+      ],
+      "notices": [
+        {
+          "kind": "insecure-dacl",
+          "pipes": [
+            "\\\\.\\pipe\\verge-mihomo"
+          ]
+        },
+        {
+          "kind": "tcp-unverified"
+        }
+      ]
     }
   ]
 }
