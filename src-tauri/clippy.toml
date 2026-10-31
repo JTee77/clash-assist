@@ -9,9 +9,10 @@
 #   编译（lib.rs `#[cfg(not(windows))]`），写永久 reason。`update_check.rs` 已在 M1 迁到 `safe_fs`
 #   （S-R1 DoD），不再有 allow；M5 拆分 `update_check/` 时新增的 Windows 代码同样只走 `safe_fs`。
 #   其他地方只允许语句级 / 函数级 allow，并写 reason。
-# - 语句级 allow 只能加在 `let` 上，只覆盖这一次调用：
+# - 语句级 allow 只能加在 `let` 或不带块的单条表达式语句（如 `std::fs::copy(..)?;`）上，
+#   只覆盖这一次调用：
 #   `#[allow(..., reason = "...")] let is_dir = path.is_dir(); if is_dir { … }`；
-#   不得加在 if / 块语句上（会覆盖整个 if 体）。
+#   不得加在 if / 块语句上（会覆盖整个 if 体）。（PR #46 r3 S-5）
 # - reason：M1 之后 Windows 上会编译的代码不再有「M1 待迁移」的 allow（S-R1 DoD 已完成；唯一的
 #   Windows 例外是 `safe_fs` 内部的安全打开封装）；只在 Unix / macOS 编译的写永久理由
 #  （不在 S-R1 的 Windows 风险面）。
@@ -45,6 +46,12 @@ disallowed-methods = [
   { path = "std::path::Path::canonicalize", reason = "规范化路径会按路径打开目标（含命名管道，默认 QoS，V3）；管道只能经 pipe::open_verified" },
   { path = "std::fs::copy", reason = "复制会按路径打开源和目标（含命名管道，默认 QoS，V3）；管道只能经 pipe::open_verified" },
 
+  # PR #46 r3 S-1 补全：std::fs::{exists, read_link}、Path::{is_symlink, read_link}、tokio::fs::read_link
+  { path = "std::fs::exists", reason = "按路径探测会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::is_symlink", reason = "按路径探测（symlink_metadata）会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::fs::read_link", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+  { path = "std::path::Path::read_link", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
+
   # tokio::fs::{metadata, symlink_metadata, read, read_to_string, try_exists, File::open, OpenOptions::open}
   { path = "tokio::fs::metadata", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
   { path = "tokio::fs::symlink_metadata", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
@@ -60,4 +67,5 @@ disallowed-methods = [
   { path = "tokio::fs::File::create_new", reason = "按路径写入 / 创建会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
   { path = "tokio::fs::canonicalize", reason = "规范化路径会按路径打开目标（含命名管道，默认 QoS，V3）；管道只能经 pipe::open_verified" },
   { path = "tokio::fs::copy", reason = "复制会按路径打开源和目标（含命名管道，默认 QoS，V3）；管道只能经 pipe::open_verified" },
+  { path = "tokio::fs::read_link", reason = "按路径打开会以默认 QoS 打开命名管道（V3）；管道只能经 pipe::open_verified" },
 ]
