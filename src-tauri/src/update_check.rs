@@ -66,8 +66,12 @@ fn updater_gate_for(windows: bool) -> Result<(), String> {
 }
 
 /// 每个更新入口（check / download_to_staging / apply_staged_update / relaunch_updated_app）的第一步。
+///
+/// `black_box`：不让编译器把 Windows 上闸门之后的代码当死代码删掉。否则 `LATEST_RELEASE_API`
+/// 与 `CLASH_ASSIST_FAKE_LATEST` 会从 exe 中消失，`scan-exe-markers.ps1` 的 UTF-8 正向对照失败，
+/// M-7 的 FAKE_LATEST 规则（tag 构建发现即失败，cfg 门控在 M5）也会悄悄失效。运行时行为不变：闸门照样先返回。
 fn updater_gate() -> Result<(), String> {
-    updater_gate_for(cfg!(windows))
+    updater_gate_for(std::hint::black_box(cfg!(windows)))
 }
 
 /// "v1.2.3" / "1.2.3-beta.1" → (1,2,3, 是否预发布)。不合法返回 None。
