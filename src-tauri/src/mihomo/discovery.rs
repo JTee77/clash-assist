@@ -488,6 +488,19 @@ fn windows_probe_pipes(
     }
 }
 
+/// 管道因 InsecureDacl 不可用、TCP 只许 listener-verified（`TcpFallback::VerifiedOnly`）时，
+/// 在 TCP 来源标签里注明 `pipe-insecure`，与普通的 TCP 回落区分开：
+/// `verge-tcp(listener-verified)` → `verge-tcp(listener-verified,pipe-insecure)`。
+#[cfg(any(windows, test))]
+fn tcp_label_for_fallback(label: &str, fallback: &super::trust::TcpFallback) -> String {
+    match (fallback, label.strip_suffix(')')) {
+        (super::trust::TcpFallback::VerifiedOnly(_), Some(head)) => {
+            format!("{head},pipe-insecure)")
+        }
+        _ => label.to_string(),
+    }
+}
+
 /// Q5：把 InsecureDacl 提示附在来源标签后（无论最终选中哪条路径）。
 #[cfg(any(windows, test))]
 fn with_insecure_suffix(source: String, insecure: &[String]) -> String {
@@ -588,7 +601,9 @@ fn discover_controller_inner() -> DiscoverResult {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         let check = super::win_tcp::check_listener(&policy, addr);
         match (&check, check.source_label()) {
-            (_, Some(label)) => format!("{label}:{files}"),
+            (_, Some(label)) => {
+                format!("{}:{files}", tcp_label_for_fallback(label, &probe.fallback))
+            }
             (ListenerCheck::Rejected(r), None) => {
                 format!("verge-tcp(rejected:{}):{files}", r.code())
             }
@@ -1056,6 +1071,38 @@ mixed-port: 7897
         assert_eq!(
             with_insecure_suffix("verge-pipe:b".into(), &["a".into(), "c".into()]),
             "verge-pipe:b;pipe-insecure-dacl=a|c"
+        );
+    }
+
+    #[test]
+    fn tcp_label_marks_insecure_pipe_fallback() {
+        use super::super::trust::TcpFallback;
+        let allowed = TcpFallback::Allowed { denied_seen: false };
+        let vo = TcpFallback::VerifiedOnly("dacl".into());
+        assert_eq!(
+            tcp_label_for_fallback("verge-tcp(listener-verified)", &allowed),
+            "verge-tcp(listener-verified)"
+        );
+        assert_eq!(
+            tcp_label_for_fallback("verge-tcp(listener-verified)", &vo),
+            "verge-tcp(listener-verified,pipe-insecure)"
+        );
+        assert_eq!(
+            tcp_label_for_fallback("verge-tcp(listener-unverified)", &vo),
+            "verge-tcp(listener-unverified,pipe-insecure)"
+        );
+        // 完整来源：标签 + 文件 + Q5 后缀
+        let src = with_insecure_suffix(
+            format!(
+                "{}:{}",
+                tcp_label_for_fallback("verge-tcp(listener-verified)", &vo),
+                "C:/v/config.yaml"
+            ),
+            &["a".into()],
+        );
+        assert_eq!(
+            src,
+            "verge-tcp(listener-verified,pipe-insecure):C:/v/config.yaml;pipe-insecure-dacl=a"
         );
     }
 

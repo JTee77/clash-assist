@@ -382,6 +382,9 @@ async fn parse_nodes_with_providers(
     Ok(result)
 }
 
+/// 本机 IPC 结果的 `transport` 标签：Windows 上走的是命名管道（M1），其他平台是 Unix 套接字。
+pub const LOCAL_IPC_TRANSPORT: &str = if cfg!(windows) { "pipe" } else { "unix" };
+
 async fn try_list_nodes_unix(
     secret: &str,
     sock_path: Option<&str>,
@@ -411,7 +414,7 @@ async fn try_list_nodes_unix(
             status: res.status,
             error: Some("API 返回未授权（401/403），请到设置检查 Secret".into()),
             unauthorized: true,
-            transport: Some("unix".into()),
+            transport: Some(LOCAL_IPC_TRANSPORT.into()),
         })),
         Ok(res) if (200..300).contains(&res.status) => {
             match parse_nodes_with_providers(
@@ -424,7 +427,7 @@ async fn try_list_nodes_unix(
             {
                 Ok(mut slim) => {
                     slim.status = res.status;
-                    slim.transport = Some("unix".into());
+                    slim.transport = Some(LOCAL_IPC_TRANSPORT.into());
                     Ok(Some(slim))
                 }
                 Err(e) => Ok(Some(ListNodesResult {
@@ -432,11 +435,11 @@ async fn try_list_nodes_unix(
                     groups: vec![],
                     status: res.status,
                     error: Some(format!(
-                        "解析 /proxies JSON 失败（Unix）: {e}；body {} 字节",
+                        "解析 /proxies JSON 失败（{LOCAL_IPC_TRANSPORT}）: {e}；body {} 字节",
                         res.body.len()
                     )),
                     unauthorized: false,
-                    transport: Some("unix".into()),
+                    transport: Some(LOCAL_IPC_TRANSPORT.into()),
                 })),
             }
         }
