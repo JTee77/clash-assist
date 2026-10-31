@@ -582,3 +582,133 @@ fn generated_plain_labels_follow_grammar() {
         }
     }
 }
+
+// ---- 与前端共用的样本（src/lib/mihomo/backendSourceLabels.fixture.json） --------------------
+
+/// 样本里的每条 label 必须逐字等于后端对同一场景的输出；前端测试用同一份样本跑 parseSource /
+/// sourceNoticesOf，证明两侧对语法的理解一致。
+#[test]
+fn backend_labels_match_frontend_fixture() {
+    use super::super::discovery::windows_source_label as wsl;
+    const FIXTURE: &str =
+        include_str!("../../../../src/lib/mihomo/backendSourceLabels.fixture.json");
+
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let ok = TcpFallback::Allowed { denied_seen: false };
+    let vo = TcpFallback::VerifiedOnly("dacl".into());
+    let blocked = TcpFallback::Blocked("x".into());
+    let svc = ListenerCheck::Unverified {
+        pid: Some(4),
+        reasons: vec![],
+        service_mode: true,
+    };
+    let v6 = ListenerCheck::NotListening {
+        ipv6_dual_stack_hint: true,
+    };
+    let tok = ListenerCheck::Rejected(TcpReject::TokenMismatch {
+        pid: 9,
+        sid: "S-1-5-21-9".into(),
+    });
+    let sidecar = r"\\.\pipe\verge-mihomo-sidecar-release-ab";
+    let production = r"\\.\pipe\verge-mihomo-production-ab";
+    let legacy = r"\\.\pipe\verge-mihomo";
+
+    let expected: Vec<(&str, String)> = vec![
+        (
+            "service-mode",
+            wsl(
+                None,
+                &[],
+                &[],
+                &ok,
+                &s(&[r"C:\Users\a;b\AppData\Roaming\io.github.clash-verge-rev\config.yaml"]),
+                Some((&svc, 9097)),
+                false,
+            ),
+        ),
+        (
+            "service-mode-pipe-insecure",
+            wsl(
+                None,
+                &[],
+                &s(&[legacy]),
+                &vo,
+                &s(&[r"C:\v\config.yaml"]),
+                Some((&svc, 9097)),
+                false,
+            ),
+        ),
+        (
+            "ipv6-dual-stack",
+            wsl(
+                None,
+                &[],
+                &s(&[r"\\.\pipe\a;b"]),
+                &vo,
+                &s(&[r"C:\a;b\clash-verge.yaml", r"C:\c,d\config.yaml"]),
+                Some((&v6, 9097)),
+                false,
+            ),
+        ),
+        (
+            "pipe-open-to-all-with-insecure",
+            wsl(
+                Some(sidecar),
+                &s(&[sidecar]),
+                &s(&[legacy]),
+                &vo,
+                &s(&[r"C:\v\config.yaml"]),
+                None,
+                false,
+            ),
+        ),
+        (
+            "pipe-open-to-all",
+            wsl(
+                Some(production),
+                &s(&[production]),
+                &[],
+                &ok,
+                &s(&[r"C:\v\config.yaml"]),
+                None,
+                false,
+            ),
+        ),
+        (
+            "untrusted-encoded-path",
+            wsl(
+                None,
+                &[],
+                &[],
+                &blocked,
+                &s(&[r"C:\x=y\config.yaml"]),
+                None,
+                false,
+            ),
+        ),
+        (
+            "tcp-rejected-paren-path",
+            wsl(
+                None,
+                &[],
+                &[],
+                &ok,
+                &s(&[r"C:\Program Files (x86)\v\config.yaml"]),
+                Some((&tok, 9097)),
+                false,
+            ),
+        ),
+    ];
+
+    let v: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+    let items = v["labels"].as_array().unwrap();
+    assert_eq!(items.len(), expected.len());
+    for (name, label) in &expected {
+        let item = items
+            .iter()
+            .find(|i| i["name"] == *name)
+            .unwrap_or_else(|| panic!("样本缺少 {name}"));
+        assert_eq!(item["label"].as_str().unwrap(), label, "{name}");
+        check_grammar(label).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}

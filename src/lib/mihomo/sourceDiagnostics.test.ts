@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import trustRs from "../../../src-tauri/src/mihomo/trust.rs?raw";
 import { zhHans } from "../../i18n/locales/zh-Hans";
+import backendLabels from "./backendSourceLabels.fixture.json";
 import {
   baseSource,
   hasInsecureDacl,
@@ -150,5 +151,34 @@ describe("InsecureDacl 文案与 Rust 常量逐字一致（Ellie 复核 §4）",
     expect(rustConst("PIPE_INSECURE_DACL_ACTION")).toBe("升级 Clash Verge 并重启内核");
     expect(zhHans["diag.insecureDacl"]).toBe(rustConst("PIPE_INSECURE_DACL_UI"));
     expect(zhHans["diag.insecureDaclAction"]).toBe(rustConst("PIPE_INSECURE_DACL_ACTION"));
+  });
+});
+
+
+describe("后端生成的来源标签样本（Rust backend_labels_match_frontend_fixture 逐字校验同一份样本）", () => {
+  for (const s of backendLabels.labels) {
+    it(s.name, () => {
+      const p = parseSource(s.label);
+      expect(p.base).toBe(s.base);
+      expect(p.tcpItems).toEqual(s.tcpItems);
+      expect(p.insecureDacl).toBe(s.insecureDacl);
+      expect(p.insecurePipes).toEqual(s.insecurePipes);
+      expect(hasInsecureDacl(s.label)).toBe(
+        s.insecureDacl || (s.tcpItems?.includes("pipe-insecure") ?? false),
+      );
+      expect(sourceNoticesOf([s.label])).toEqual(s.notices);
+      // 路径里编码过的 `;` 不会截断 base，也不会被当成后缀
+      expect(baseSource(s.label)).toBe(s.base);
+    });
+  }
+
+  it("新标记的值不会被当成管道名，service-mode 不影响 listener-unverified 识别", () => {
+    const all = sourceNoticesOf(backendLabels.labels.map((s) => s.label));
+    const insecure = all.find((n) => n.kind === "insecure-dacl");
+    expect(insecure && "pipes" in insecure ? insecure.pipes : []).toEqual([
+      "\\\\.\\pipe\\verge-mihomo",
+      "\\\\.\\pipe\\a;b",
+    ]);
+    expect(all.some((n) => n.kind === "tcp-unverified")).toBe(true);
   });
 });
