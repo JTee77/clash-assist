@@ -31,6 +31,10 @@ export const en: Messages = {
   "diag.tcpRejected.tokenMismatch": "The program on the control port wasn't started by you, so the connection was refused; restart the core in Clash Verge and check again.",
   "diag.tcpRejected.imageMismatch": "The program on the control port isn't a Verge core, so the connection was refused; restart the core in Clash Verge and check again.",
   "diag.tcpRejected.other": "The control port failed verification ({code}), so the connection was refused; restart the core in Clash Verge and check again.",
+  "diag.pipeOpenToAll": "Verge's control pipe is open to every user on this PC, so anyone here can control the mihomo core through it.",
+  "diag.serviceMode": "Clash Verge runs the core in service mode, so the control port can't be confirmed as yours.",
+  "diag.ipv6DualStack": "Control port {port} only listens on IPv6; set Verge's external controller to 127.0.0.1:{port} and check again.",
+  "diag.ipv6DualStackGeneric": "The control port only listens on IPv6; set Verge's external controller to 127.0.0.1 and check again.",
 
   "crash.title": "Something went wrong",
   "crash.body": "The app didn't fully crash, but this page failed to render. Try reloading, or quit and run it from a single terminal:",

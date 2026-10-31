@@ -1,5 +1,5 @@
 {
-  "_comment": "后端（Rust source_label / discovery::windows_source_label）生成的来源标签样本。Rust 测试 backend_labels_match_frontend_fixture 逐字校验 label，前端 sourceDiagnostics.test.ts 用同一份样本校验解析结果。改动任何一侧都要两边一起过。",
+  "_comment": "后端（Rust source_label / discovery::windows_source_label）生成的来源标签样本。Rust 测试 backend_labels_match_frontend_fixture 逐字校验 label，前端 sourceDiagnostics.test.ts 用同一份样本校验解析结果。改动任何一侧都要两边一起过。 markers / notices 为前端期望（Rust 测试只校验 label 与条数）。",
   "labels": [
     {
       "name": "service-mode",
@@ -14,8 +14,18 @@
       "notices": [
         {
           "kind": "tcp-unverified"
+        },
+        {
+          "kind": "service-mode"
         }
-      ]
+      ],
+      "markers": {
+        "serviceMode": true,
+        "ipv6DualStack": false,
+        "ipv6Ports": [],
+        "openToAll": false,
+        "openToAllPipes": []
+      }
     },
     {
       "name": "service-mode-pipe-insecure",
@@ -39,8 +49,18 @@
         },
         {
           "kind": "tcp-unverified"
+        },
+        {
+          "kind": "service-mode"
         }
-      ]
+      ],
+      "markers": {
+        "serviceMode": true,
+        "ipv6DualStack": false,
+        "ipv6Ports": [],
+        "openToAll": false,
+        "openToAllPipes": []
+      }
     },
     {
       "name": "ipv6-dual-stack",
@@ -57,8 +77,23 @@
           "pipes": [
             "\\\\.\\pipe\\a;b"
           ]
+        },
+        {
+          "kind": "ipv6-dual-stack",
+          "ports": [
+            9097
+          ]
         }
-      ]
+      ],
+      "markers": {
+        "serviceMode": false,
+        "ipv6DualStack": true,
+        "ipv6Ports": [
+          9097
+        ],
+        "openToAll": false,
+        "openToAllPipes": []
+      }
     },
     {
       "name": "pipe-open-to-all-with-insecure",
@@ -75,8 +110,23 @@
           "pipes": [
             "\\\\.\\pipe\\verge-mihomo"
           ]
+        },
+        {
+          "kind": "pipe-open-to-all",
+          "pipes": [
+            "\\\\.\\pipe\\verge-mihomo-sidecar-release-ab"
+          ]
         }
-      ]
+      ],
+      "markers": {
+        "serviceMode": false,
+        "ipv6DualStack": false,
+        "ipv6Ports": [],
+        "openToAll": true,
+        "openToAllPipes": [
+          "\\\\.\\pipe\\verge-mihomo-sidecar-release-ab"
+        ]
+      }
     },
     {
       "name": "pipe-open-to-all",
@@ -85,7 +135,23 @@
       "tcpItems": null,
       "insecureDacl": false,
       "insecurePipes": [],
-      "notices": []
+      "notices": [
+        {
+          "kind": "pipe-open-to-all",
+          "pipes": [
+            "\\\\.\\pipe\\verge-mihomo-production-ab"
+          ]
+        }
+      ],
+      "markers": {
+        "serviceMode": false,
+        "ipv6DualStack": false,
+        "ipv6Ports": [],
+        "openToAll": true,
+        "openToAllPipes": [
+          "\\\\.\\pipe\\verge-mihomo-production-ab"
+        ]
+      }
     },
     {
       "name": "untrusted-encoded-path",
@@ -98,7 +164,14 @@
         {
           "kind": "untrusted-pipe"
         }
-      ]
+      ],
+      "markers": {
+        "serviceMode": false,
+        "ipv6DualStack": false,
+        "ipv6Ports": [],
+        "openToAll": false,
+        "openToAllPipes": []
+      }
     },
     {
       "name": "tcp-rejected-paren-path",
@@ -114,7 +187,14 @@
           "kind": "tcp-rejected",
           "code": "token-mismatch"
         }
-      ]
+      ],
+      "markers": {
+        "serviceMode": false,
+        "ipv6DualStack": false,
+        "ipv6Ports": [],
+        "openToAll": false,
+        "openToAllPipes": []
+      }
     }
   ]
 }

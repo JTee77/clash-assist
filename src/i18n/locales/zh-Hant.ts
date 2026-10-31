@@ -31,6 +31,10 @@ export const zhHant: Messages = {
   "diag.tcpRejected.tokenMismatch": "監聽控制連接埠的程式不是你本人執行的，已拒絕連線，請在 Clash Verge 中重新啟動核心後重新檢測。",
   "diag.tcpRejected.imageMismatch": "監聽控制連接埠的程式不是 Verge 核心，已拒絕連線，請在 Clash Verge 中重新啟動核心後重新檢測。",
   "diag.tcpRejected.other": "控制連接埠未通過校驗（{code}），已拒絕連線，請在 Clash Verge 中重新啟動核心後重新檢測。",
+  "diag.pipeOpenToAll": "目前的 Verge 控制管道對本機所有使用者開放，任何本機使用者都能透過它操控 mihomo 核心。",
+  "diag.serviceMode": "Clash Verge 正以服務模式執行核心，因此無法確認控制連接埠屬於你本人。",
+  "diag.ipv6DualStack": "控制連接埠 {port} 只監聽了 IPv6，請在 Clash Verge 中把外部控制位址改為 127.0.0.1:{port} 後重新檢測。",
+  "diag.ipv6DualStackGeneric": "控制連接埠只監聽了 IPv6，請在 Clash Verge 中把外部控制位址改為 127.0.0.1 後重新檢測。",
 
   "crash.title": "介面出錯了",
   "crash.body": "應用程式沒有完全當掉，但這一頁繪製失敗。請嘗試重新載入，或結束後只開一個終端機執行：",
