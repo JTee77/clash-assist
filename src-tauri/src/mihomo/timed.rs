@@ -17,7 +17,9 @@ pub async fn proxy_timed_transfer_async(
 ) -> Result<TimedTransferResult, String> {
     let work = proxy_timed_transfer_inner(url, mixed_port, method, upload_bytes, timeout_ms);
     if let Some(cancel) = cancel {
-        return match futures_util::future::select(std::pin::pin!(work), std::pin::pin!(cancel)).await {
+        return match futures_util::future::select(std::pin::pin!(work), std::pin::pin!(cancel))
+            .await
+        {
             futures_util::future::Either::Left((result, _)) => result,
             futures_util::future::Either::Right((_, _)) => Ok(TimedTransferResult {
                 ok: false,

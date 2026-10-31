@@ -193,11 +193,12 @@ fn send_udp_query(
     }
     // Strip brackets if caller passes "[::1]" form
     let bare = server_ip.trim_start_matches('[').trim_end_matches(']');
-    let addr: SocketAddr = format!("{bare}:{DNS_PORT}")
-        .parse()
-        .map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidInput, format!("bad resolver addr: {e}"))
-        })?;
+    let addr: SocketAddr = format!("{bare}:{DNS_PORT}").parse().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("bad resolver addr: {e}"),
+        )
+    })?;
 
     let bind_addr: SocketAddr = if addr.is_ipv4() {
         "0.0.0.0:0".parse().unwrap()
@@ -319,12 +320,7 @@ mod tests {
 
     #[test]
     fn lookup_stops_when_already_cancelled() {
-        let err = dns_txt_lookup(
-            "example.com",
-            "127.0.0.1",
-            Duration::from_secs(5),
-            &|| true,
-        );
+        let err = dns_txt_lookup("example.com", "127.0.0.1", Duration::from_secs(5), &|| true);
         assert!(matches!(err, Err(DnsError::Cancelled)));
     }
 
@@ -335,16 +331,20 @@ mod tests {
         assert_eq!(&packet[0..2], &id.to_be_bytes());
         assert_eq!(&packet[2..4], &[0x01, 0x00]); // RD=1
         assert_eq!(&packet[4..6], &[0x00, 0x01]); // QDCOUNT=1
-        // Question section starts at 12
+                                                  // Question section starts at 12
         let expected_qname: &[u8] = &[
-            7, b'e', b'x', b'a', b'm', b'p', b'l', b'e',
-            3, b'c', b'o', b'm',
-            0,
+            7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
         ];
         assert_eq!(&packet[12..12 + expected_qname.len()], expected_qname);
         let qtype_class_offset = 12 + expected_qname.len();
-        assert_eq!(&packet[qtype_class_offset..qtype_class_offset + 2], &[0x00, 0x10]); // TXT=16
-        assert_eq!(&packet[qtype_class_offset + 2..qtype_class_offset + 4], &[0x00, 0x01]); // IN=1
+        assert_eq!(
+            &packet[qtype_class_offset..qtype_class_offset + 2],
+            &[0x00, 0x10]
+        ); // TXT=16
+        assert_eq!(
+            &packet[qtype_class_offset + 2..qtype_class_offset + 4],
+            &[0x00, 0x01]
+        ); // IN=1
     }
 
     #[test]
@@ -359,7 +359,9 @@ mod tests {
 
     #[test]
     fn skip_name_plain() {
-        let pkt: Vec<u8> = vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0xFF];
+        let pkt: Vec<u8> = vec![
+            7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0xFF,
+        ];
         let next = skip_name(&pkt, 0).unwrap();
         assert_eq!(next, 13);
     }
@@ -377,7 +379,10 @@ mod tests {
     #[test]
     fn expand_name_simple() {
         // "www.example.com" encoded: 3 www 7 example 3 com 0
-        let pkt: Vec<u8> = vec![3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0xFF];
+        let pkt: Vec<u8> = vec![
+            3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm',
+            0, 0xFF,
+        ];
         let (name, next) = expand_name(&pkt, 0).unwrap();
         assert_eq!(name, "www.example.com");
         assert_eq!(next, 17);
@@ -386,7 +391,9 @@ mod tests {
     #[test]
     fn expand_name_with_pointer() {
         // "example\0" at offsets 0..8; pointer 0xC000 at offset 9-10 pointing back to 0
-        let pkt: Vec<u8> = vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0, 0xC0, 0x00, 0xAA];
+        let pkt: Vec<u8> = vec![
+            7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0, 0xC0, 0x00, 0xAA,
+        ];
         let (name, next) = expand_name(&pkt, 9).unwrap();
         assert_eq!(name, "example");
         assert_eq!(next, 11); // past the 2-byte pointer
@@ -423,11 +430,13 @@ mod tests {
         pkt.extend_from_slice(&1u16.to_be_bytes()); // ANCOUNT
         pkt.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT
         pkt.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT
-        // Question: "test.example" (compressed not needed here)
-        pkt.extend_from_slice(&[4, b't', b'e', b's', b't', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0]);
+                                                    // Question: "test.example" (compressed not needed here)
+        pkt.extend_from_slice(&[
+            4, b't', b'e', b's', b't', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0,
+        ]);
         pkt.extend_from_slice(&[0x00, 0x10]); // TXT
         pkt.extend_from_slice(&[0x00, 0x01]); // IN
-        // Answer: NAME pointer to offset 12 (start of question)
+                                              // Answer: NAME pointer to offset 12 (start of question)
         pkt.extend_from_slice(&[0xC0, 0x0C]);
         pkt.extend_from_slice(&[0x00, 0x10]); // TYPE=TXT
         pkt.extend_from_slice(&[0x00, 0x01]); // CLASS=IN
@@ -469,7 +478,10 @@ mod tests {
         // Set RCODE=3 (NXDOMAIN) in flags: 0x8183
         pkt[3] = 0x83;
         let res = decode_txt_response(&pkt, 0x1234);
-        assert!(matches!(res, Err(DnsError::MalformedPacket("non-zero RCODE"))));
+        assert!(matches!(
+            res,
+            Err(DnsError::MalformedPacket("non-zero RCODE"))
+        ));
     }
 
     #[test]

@@ -3,22 +3,33 @@ mod app_menu;
 // Windows 首版不提供 CLI（windows-plan §2.5）：shim / serve 整体不编译，
 // 桥命令改为返回 `cli_unavailable::CLI_UNAVAILABLE` 的桩。
 #[cfg(not(windows))]
-mod cli_shim;
-#[cfg(not(windows))]
 mod cli_serve;
+#[cfg(not(windows))]
+mod cli_shim;
 mod cli_unavailable;
 mod dns;
-mod http_body;
 mod dns_query;
+mod http_body;
 mod mihomo;
 mod platform;
+mod safe_fs;
 mod update_check;
+#[cfg(windows)]
+mod win;
+
+/// S-R1 的 compile_fail 文档测试入口（见 `mihomo::guard::PipeName`）；不是公开 API。
+#[cfg(windows)]
+#[doc(hidden)]
+pub mod s_r1 {
+    pub use crate::mihomo::guard::PipeName;
+}
 
 use dns::DnsResolversResult;
 use mihomo::{
-    discover_controller, discover_for_client, http_via_tcp_async, http_via_unix, list_nodes_async,
-    arm_cancel, disarm_cancel, fire_cancel, proxy_fetch_async, proxy_timed_transfer_async,
-    DiscoverResult, ListNodesResult, TimedTransferResult, UnixHttpResult,
+    arm_cancel, disarm_cancel, discover_controller, discover_for_client, fire_cancel,
+    http_via_tcp_async, http_via_unix, list_nodes_async, proxy_fetch_async,
+    proxy_timed_transfer_async, DiscoverResult, ListNodesResult, TimedTransferResult,
+    UnixHttpResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +77,6 @@ async fn discover_mihomo() -> Result<ControllerConfig, String> {
     .map_err(join_err)?
 }
 
-
 #[tauri::command]
 async fn discover_mihomo_for_client(client_id: String) -> Result<ControllerConfig, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -88,11 +98,13 @@ async fn discover_mihomo_for_client(client_id: String) -> Result<ControllerConfi
 
 #[tauri::command]
 async fn read_verge_config_raw() -> Result<String, String> {
-    // Windows：原始 config.yaml 含 Verge 的 secret，不交给前端（§2.1 规则 4 / C-1 / C-4，
-    // 与 discovery 里的 withhold_secret_on_windows 同理）。TODO(M1) verify_tcp_listener。
+    // Windows（M1）：经 safe_fs 的受信路径读取，`secret:` 行打码后再交给前端——secret 只在
+    // Rust 侧使用（§2.1 规则 4 / C-1 / C-4；与 discovery 的 withhold_secret_on_windows 同理）。
     #[cfg(windows)]
     {
-        Err("Windows 版暂不读取 Verge 原始配置（含 secret，缺少监听者校验，M1）".to_string())
+        tauri::async_runtime::spawn_blocking(|| catch_disk(mihomo::read_verge_config_redacted))
+            .await
+            .map_err(join_err)?
     }
     #[cfg(not(windows))]
     {
@@ -289,11 +301,9 @@ async fn egress_proxy_timed_transfer(
 
 #[tauri::command]
 async fn egress_list_dns_resolvers() -> Result<DnsResolversResult, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        catch_disk(|| Ok(dns::list_dns_resolvers_blocking()))
-    })
-    .await
-    .map_err(join_err)?
+    tauri::async_runtime::spawn_blocking(|| catch_disk(|| Ok(dns::list_dns_resolvers_blocking())))
+        .await
+        .map_err(join_err)?
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,7 +354,6 @@ async fn egress_dns_whoami(req: DnsWhoamiRequest) -> Result<dns::DnsWhoamiResult
     result
 }
 
-
 /// Append a line to the platform log dir (macOS: ~/Library/Logs/ClashAssist). Best-effort.
 fn append_app_log(msg: &str) {
     use std::io::Write;
@@ -356,12 +365,7 @@ fn append_app_log(msg: &str) {
         return;
     }
     let path = dir.join("app.log");
-    #[allow(clippy::disallowed_methods, reason = "TODO(M1): 存量日志追加打开，M1 改用安全打开封装（S-R1）")]
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    else {
+    let Ok(mut f) = safe_fs::open_append(&path) else {
         return;
     };
     let secs = std::time::SystemTime::now()
@@ -415,11 +419,11 @@ fn show_vite_dead_page(win: &tauri::WebviewWindow, reason: &str) {
     if (pre) pre.textContent = {reason_json};
   }} catch (e) {{}}
 }})();"#,
-        reason_json = serde_json::to_string(reason).unwrap_or_else(|_| "\"vite unreachable\"".into())
+        reason_json =
+            serde_json::to_string(reason).unwrap_or_else(|_| "\"vite unreachable\"".into())
     );
     let _ = win.eval(&js);
 }
-
 
 /// CLI mode: argv as seen by the process (includes binary path).
 #[cfg(not(windows))]
@@ -586,7 +590,6 @@ fn cli_stdout(line: String) -> Result<(), String> {
     out.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
-
 
 /// Print one line (or multi-line) to process stderr (serve 就绪提示等).
 #[tauri::command]
@@ -810,7 +813,10 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
         if ty.is_dir() {
             copy_dir_all(&entry.path(), &to)?;
         } else if ty.is_file() {
-            #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面")]
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面"
+            )]
             std::fs::copy(entry.path(), &to)?;
         }
     }
@@ -840,11 +846,16 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
     for root in roots {
         let old = root.join(LEGACY_IDENTIFIER);
         let new = root.join(new_id);
-        #[allow(clippy::disallowed_methods, reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "仅 macOS（Unix），不在 S-R1 的 Windows 风险面"
+        )]
         let old_is_dir = old.is_dir();
         if old_is_dir && dir_is_empty_or_missing(&new) {
             match copy_dir_all(&old, &new) {
-                Ok(()) => append_app_log(&format!("migrated {} -> {}", old.display(), new.display())),
+                Ok(()) => {
+                    append_app_log(&format!("migrated {} -> {}", old.display(), new.display()))
+                }
                 Err(e) => append_app_log(&format!("migrate {} failed: {e}", old.display())),
             }
         }
@@ -1047,10 +1058,20 @@ mod cli_windows_stub_tests {
         let shim = cli_install_shim(None).expect_err("install-shim must fail on Windows");
         assert_eq!(shim.code, "unsupported_platform");
         assert_eq!(shim.message, CLI_UNAVAILABLE);
-        assert_eq!(cli_serve_start(0).expect_err("serve_start"), CLI_UNAVAILABLE);
+        assert_eq!(
+            cli_serve_start(0).expect_err("serve_start"),
+            CLI_UNAVAILABLE
+        );
         assert_eq!(cli_serve_poll(0).expect_err("serve_poll"), CLI_UNAVAILABLE);
-        let req = ServeRespondRequest { id: 1, status: 200, body: String::new() };
-        assert_eq!(cli_serve_respond(req).expect_err("serve_respond"), CLI_UNAVAILABLE);
+        let req = ServeRespondRequest {
+            id: 1,
+            status: 200,
+            body: String::new(),
+        };
+        assert_eq!(
+            cli_serve_respond(req).expect_err("serve_respond"),
+            CLI_UNAVAILABLE
+        );
         assert_eq!(cli_serve_stop().expect_err("serve_stop"), CLI_UNAVAILABLE);
     }
 }

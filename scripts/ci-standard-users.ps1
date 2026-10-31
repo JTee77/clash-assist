@@ -155,6 +155,10 @@ $SidUsers = 'S-1-5-32-545'
 $TaskPrefix = 'ca-spike-'
 $BatchRight = 'SeBatchLogonRight'
 $StartWaitSec = 30
+# 新用户首次经计划任务登录要先建配置文件，windows-2022 上实测超过 30 秒（MUST-4 回放首跑）；
+# 等到 pid.txt 出现即返回，所以放宽上限不拖慢正常启动
+$TaskStartWaitSec = 120
+$TaskTimeLimitMin = 30
 
 if (-not $StateDir) {
   $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
@@ -449,6 +453,9 @@ function Invoke-Create {
     New-LocalUser -Name $name -Password $password -AccountNeverExpires -PasswordNeverExpires `
       -UserMayNotChangePassword -Description 'clash-assist CI spike temporary user' | Out-Null
     $sid = Get-LocalSid $name
+    # New-LocalUser 在 Windows Server（runner）上不会像 `net user /add` 那样自动加入 Users 组，
+    # 这里按 SID 显式加入（避免本地化组名），随后照常断言组成员关系。
+    Add-LocalGroupMember -SID $SidUsers -Member $sid
     # 先记录用户（Cleanup 依据 users.json 删除），再写凭据
     $records.Add([pscustomobject]@{
         Name     = $name
@@ -555,8 +562,9 @@ function Start-ViaScheduledTask([string]$Identity, $Rec, [string]$JobDir, [strin
   $cmd = Get-WrapperCommandLine $JobDir
   $taskName = "$TaskPrefix$JobLabel"
   $taskAction = New-ScheduledTaskAction -Execute $cmd.Exe -Argument $cmd.Args -WorkingDirectory $JobDir
+  # 30 分钟，与 spike job 的 timeout-minutes 对齐（PR #46 评审 SR-11 / SR2-4）
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
+    -ExecutionTimeLimit (New-TimeSpan -Minutes $TaskTimeLimitMin) -MultipleInstances IgnoreNew
   if ($Identity -eq 'SYSTEM') {
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $principal -Settings $settings -Force | Out-Null
@@ -626,8 +634,8 @@ function Invoke-Start {
 
   if (-not $used) {
     $taskName = Start-ViaScheduledTask $As $rec $jobDir $Label
-    if (-not (Wait-ForFile $pidFile $StartWaitSec)) {
-      throw "以 $As 身份启动失败（ScheduledTask，$StartWaitSec 秒内无 pid.txt）；任务状态：$((Get-ScheduledTask -TaskName $taskName).State)"
+    if (-not (Wait-ForFile $pidFile $TaskStartWaitSec)) {
+      throw "以 $As 身份启动失败（ScheduledTask，$TaskStartWaitSec 秒内无 pid.txt）；任务状态：$((Get-ScheduledTask -TaskName $taskName).State)"
     }
     $used = 'ScheduledTask'
   }
@@ -701,6 +709,43 @@ function Invoke-Stop {
 
 # ---------------------------------------------------------------- Cleanup
 
+function Get-SidProcesses([string]$Sid) {
+  foreach ($p in Get-CimInstance -ClassName Win32_Process) {
+    $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+    if ($o -and $o.ReturnValue -eq 0 -and $o.Sid -eq $Sid) { "$($p.Name)#$($p.ProcessId)" }
+  }
+}
+
+# 配置文件删不掉时的诊断（只读）：是否仍加载、谁还以该 SID 运行、哪个配置单元文件被占用
+function Get-ProfileDiagnostics([string]$Sid) {
+  $parts = New-Object System.Collections.Generic.List[string]
+  $path = $null
+  try {
+    $prof = Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$Sid'"
+    if ($prof) {
+      $path = $prof.LocalPath
+      $ref = $prof.PSObject.Properties['RefCount']
+      $parts.Add("Loaded=$($prof.Loaded) RefCount=$(if ($ref) { $ref.Value }) Path=$path")
+    } else { $parts.Add('无 Win32_UserProfile 记录') }
+  } catch { $parts.Add("Win32_UserProfile：$($_.Exception.Message)") }
+  $parts.Add("HKU 已加载=$(Test-Path -LiteralPath "Registry::HKEY_USERS\$Sid")")
+  try { $parts.Add("该 SID 的进程=$((@(Get-SidProcesses $Sid)) -join ',')") } catch { $parts.Add("枚举进程：$($_.Exception.Message)") }
+  if ($path -and (Test-Path -LiteralPath $path)) {
+    $locked = @(foreach ($f in @(Get-ChildItem -LiteralPath $path -Recurse -Force -File -ErrorAction SilentlyContinue)) {
+        try { $fs = [IO.File]::Open($f.FullName, 'Open', 'Read', 'None'); $fs.Dispose() } catch { $f.FullName.Substring($path.Length) }
+      })
+    $parts.Add("被占用的文件（$($locked.Count)）=$(($locked | Select-Object -First 15) -join ',')")
+  }
+  # 用户配置文件服务的 1530：“注册表文件仍被其他应用程序或服务使用”，消息里列出持有句柄的进程
+  try {
+    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Microsoft-Windows-User Profiles Service'; Id = 1530 } -MaxEvents 5 -ErrorAction Stop |
+        Where-Object { $_.Message -match [regex]::Escape($Sid) })
+    foreach ($e in $ev) { $parts.Add("事件 1530 @$($e.TimeCreated.ToString('o'))：$((($e.Message -replace '\s+', ' ')).Trim())") }
+    if ($ev.Count -eq 0) { $parts.Add('无相关 1530 事件') }
+  } catch { $parts.Add("1530 事件：$($_.Exception.Message)") }
+  return ($parts -join '; ')
+}
+
 function Invoke-Cleanup {
   $failures = New-Object System.Collections.Generic.List[string]
 
@@ -747,9 +792,31 @@ function Invoke-Cleanup {
       if ($known) { $sid = $known.Sid }
     }
     if ($sid) {
-      try {
-        Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Remove-CimInstance
-      } catch { $failures.Add("删除 $name 的配置文件：$($_.Exception.Message)") }
+      # 进程结束后用户配置单元（NTUSER.DAT / UsrClass.dat）可能仍被系统加载，删除报“文件正被另一进程使用”。
+      # MUST-4 回放（run 41145959660、41148005305、41148617738）实测：该 SID 已无任何进程、HKU\<SID> 仍加载、
+      # 无 1530 事件，换新进程重试同样失败——持有者是系统服务而非本脚本。先重试约 10 秒
+      $profileErr = $null
+      for ($i = 0; $i -lt 5; $i++) {
+        try {
+          Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Remove-CimInstance -ErrorAction Stop
+          $profileErr = $null
+          break
+        } catch {
+          $profileErr = $_.Exception.Message
+          Start-Sleep -Seconds 2
+        }
+      }
+      if ($profileErr) {
+        Write-Info "配置文件 $name 诊断：$(Get-ProfileDiagnostics $sid)"
+        $stillLoaded = [bool](@(Get-CimInstance -ClassName Win32_UserProfile -Filter "SID='$sid'" | Where-Object { $_.Loaded }).Count)
+        $live = @(Get-SidProcesses $sid)
+        if ($stillLoaded -and $live.Count -eq 0) {
+          # 上述已知情形：不算清理失败（用户已删除、无残留进程；配置文件目录随一次性 runner 销毁）
+          Write-Warning "未删除 $name 的配置文件：配置单元仍由系统加载、该 SID 已无进程（$profileErr）"
+        } else {
+          $failures.Add("删除 $name 的配置文件：$profileErr")
+        }
+      }
     }
   }
 
@@ -762,6 +829,8 @@ function Invoke-Cleanup {
     exit 1
   }
   Write-Info '清理完成'
+  # 显式退出码：否则 $LASTEXITCODE 可能残留上面 taskkill 的非零值，调用方（spike workflow）会误判
+  exit 0
 }
 
 # ---------------------------------------------------------------- main

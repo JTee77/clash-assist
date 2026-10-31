@@ -106,7 +106,7 @@ pub struct ListNodesResult {
     pub status: u16,
     pub error: Option<String>,
     pub unauthorized: bool,
-    /// Which transport produced this result: "tcp" | "unix"
+    /// Which transport produced this result: "tcp" | "unix" | "pipe"（Windows 命名管道）
     pub transport: Option<String>,
 }
 

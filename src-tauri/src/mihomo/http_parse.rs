@@ -10,9 +10,8 @@ use super::types::{UnixHttpResult, MAX_BODY_BYTES};
 
 /// Split HTTP response on bytes (headers/body), decode chunked by byte length, UTF-8 body.
 pub(crate) fn parse_http_response_bytes(raw: &[u8]) -> Result<UnixHttpResult, String> {
-    let (header_bytes, body_bytes) = split_headers_body(raw).ok_or_else(|| {
-        "unix response missing header/body separator".to_string()
-    })?;
+    let (header_bytes, body_bytes) = split_headers_body(raw)
+        .ok_or_else(|| "unix response missing header/body separator".to_string())?;
 
     let header = String::from_utf8_lossy(header_bytes);
     let status = header
@@ -75,9 +74,7 @@ fn split_headers_body(raw: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Decode HTTP/1.1 chunked transfer encoding using **byte** lengths (not chars).
@@ -93,16 +90,11 @@ pub(crate) fn decode_chunked_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
         let size_line = &rest[..nl];
         let size_hex = trim_ascii_ws_and_cr(size_line);
         // Ignore chunk extensions after `;`
-        let size_hex = size_hex
-            .split(|&b| b == b';')
-            .next()
-            .unwrap_or(size_hex);
-        let size_str = std::str::from_utf8(size_hex).map_err(|_| {
-            format!("chunk size line is not ASCII hex: {size_hex:?}")
-        })?;
-        let size = usize::from_str_radix(size_str.trim(), 16).map_err(|e| {
-            format!("invalid chunk size '{size_str}': {e}")
-        })?;
+        let size_hex = size_hex.split(|&b| b == b';').next().unwrap_or(size_hex);
+        let size_str = std::str::from_utf8(size_hex)
+            .map_err(|_| format!("chunk size line is not ASCII hex: {size_hex:?}"))?;
+        let size = usize::from_str_radix(size_str.trim(), 16)
+            .map_err(|e| format!("invalid chunk size '{size_str}': {e}"))?;
         rest = &rest[nl + 1..];
         if size == 0 {
             break;
@@ -150,7 +142,8 @@ mod tests {
     fn decode_chunked_bytes_roundtrips_multibyte_utf8_chinese_names() {
         // Chunk sizes are in bytes. Chinese chars are 3 bytes each in UTF-8.
         // Old char-based decoder would slice mid-codepoint / corrupt JSON.
-        let json = r#"{"proxies":{"香港 HK-2-AT":{"type":"Hysteria2"},"日本 TY-4-HY2":{"type":"Vmess"}}}"#;
+        let json =
+            r#"{"proxies":{"香港 HK-2-AT":{"type":"Hysteria2"},"日本 TY-4-HY2":{"type":"Vmess"}}}"#;
         let json_bytes = json.as_bytes();
         assert!(json_bytes.len() > 40, "fixture should be multi-chunk sized");
 

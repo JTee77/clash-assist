@@ -7,8 +7,12 @@
 //!   **绝不** sudo / 提权。
 //! - 目标已存在且**不是**本工具生成的 shim（无标记行）→ 拒绝覆盖（`shim_exists`）。
 //! - 原子写：先写临时文件再 rename，权限 0755。
-// TODO(M1): 存量路径操作待迁移；禁用列表见计划 S-R1，在 M1/M5 中移除本 allow。
-#![allow(clippy::disallowed_methods)]
+// 整个模块只在非 Windows 编译（lib.rs `#[cfg(not(windows))] mod cli_shim;`，计划 §1 第 5 条：
+// Windows 首版不提供 CLI），不在 S-R1 的 Windows 风险面，因此保留模块级 allow（永久理由）。
+#![allow(
+    clippy::disallowed_methods,
+    reason = "仅非 Windows 编译（lib.rs cfg(not(windows))），不在 S-R1 的 Windows 风险面"
+)]
 
 use std::path::{Path, PathBuf};
 
@@ -41,7 +45,10 @@ pub struct ShimError {
 }
 
 fn e(code: &str, message: String) -> ShimError {
-    ShimError { code: code.into(), message }
+    ShimError {
+        code: code.into(),
+        message,
+    }
 }
 
 /// 单引号 sh 字面量（' → '\''）。
@@ -91,7 +98,10 @@ pub fn choose_dir(explicit: Option<&str>, home: Option<&Path>) -> Result<PathBuf
             PathBuf::from(d)
         };
         if !d.is_absolute() {
-            return Err(e("shim_failed", format!("--dir 需要绝对路径，收到：{}", d.display())));
+            return Err(e(
+                "shim_failed",
+                format!("--dir 需要绝对路径，收到：{}", d.display()),
+            ));
         }
         return Ok(d);
     }
@@ -99,8 +109,12 @@ pub fn choose_dir(explicit: Option<&str>, home: Option<&Path>) -> Result<PathBuf
     if dir_writable(usr) {
         return Ok(usr.to_path_buf());
     }
-    home.map(|h| h.join(".local/bin"))
-        .ok_or_else(|| e("shim_failed", "找不到家目录，请用 --dir 指定安装目录".into()))
+    home.map(|h| h.join(".local/bin")).ok_or_else(|| {
+        e(
+            "shim_failed",
+            "找不到家目录，请用 --dir 指定安装目录".into(),
+        )
+    })
 }
 
 pub fn is_dev_build(target: &str) -> bool {
@@ -108,8 +122,12 @@ pub fn is_dev_build(target: &str) -> bool {
 }
 
 pub fn install_at(dir: &Path, target: &str, path_env: &str) -> Result<ShimResult, ShimError> {
-    std::fs::create_dir_all(dir)
-        .map_err(|err| e("shim_failed", format!("无法创建目录 {}：{err}", dir.display())))?;
+    std::fs::create_dir_all(dir).map_err(|err| {
+        e(
+            "shim_failed",
+            format!("无法创建目录 {}：{err}", dir.display()),
+        )
+    })?;
     let dest = dir.join(SHIM_NAME);
     let mut created = true;
     if let Ok(meta) = std::fs::symlink_metadata(&dest) {
@@ -120,7 +138,10 @@ pub fn install_at(dir: &Path, target: &str, path_env: &str) -> Result<ShimResult
         if !ours {
             return Err(e(
                 "shim_exists",
-                format!("{} 已存在且不是本工具生成的 shim，拒绝覆盖。", dest.display()),
+                format!(
+                    "{} 已存在且不是本工具生成的 shim，拒绝覆盖。",
+                    dest.display()
+                ),
             ));
         }
         created = false;
@@ -135,7 +156,10 @@ pub fn install_at(dir: &Path, target: &str, path_env: &str) -> Result<ShimResult
     }
     std::fs::rename(&tmp, &dest).map_err(|err| {
         let _ = std::fs::remove_file(&tmp);
-        e("shim_failed", format!("写入 {} 失败：{err}", dest.display()))
+        e(
+            "shim_failed",
+            format!("写入 {} 失败：{err}", dest.display()),
+        )
     })?;
     Ok(ShimResult {
         path: dest.display().to_string(),
@@ -218,7 +242,9 @@ mod tests {
         let s = shim_script("/Applications/Clash Assist.app/Contents/MacOS/clash-assist");
         assert!(s.starts_with("#!/bin/sh\n"));
         assert!(s.contains(SHIM_MARKER));
-        assert!(s.contains("exec '/Applications/Clash Assist.app/Contents/MacOS/clash-assist' --cli \"$@\""));
+        assert!(s.contains(
+            "exec '/Applications/Clash Assist.app/Contents/MacOS/clash-assist' --cli \"$@\""
+        ));
     }
 
     #[test]
@@ -244,15 +270,23 @@ mod tests {
         std::fs::write(d.join(SHIM_NAME), "#!/bin/sh\necho other\n").unwrap();
         let err = install_at(&d, "/x", "").unwrap_err();
         assert_eq!(err.code, "shim_exists");
-        assert!(std::fs::read_to_string(d.join(SHIM_NAME)).unwrap().contains("other"));
+        assert!(std::fs::read_to_string(d.join(SHIM_NAME))
+            .unwrap()
+            .contains("other"));
         let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
     fn choose_dir_rules() {
         let home = Path::new("/Users/u");
-        assert_eq!(choose_dir(Some("~/bin"), Some(home)).unwrap(), PathBuf::from("/Users/u/bin"));
-        assert_eq!(choose_dir(Some("relative"), Some(home)).unwrap_err().code, "shim_failed");
+        assert_eq!(
+            choose_dir(Some("~/bin"), Some(home)).unwrap(),
+            PathBuf::from("/Users/u/bin")
+        );
+        assert_eq!(
+            choose_dir(Some("relative"), Some(home)).unwrap_err().code,
+            "shim_failed"
+        );
         let auto = choose_dir(None, Some(home)).unwrap();
         assert!(auto == Path::new("/usr/local/bin") || auto == Path::new("/Users/u/.local/bin"));
     }

@@ -19,9 +19,11 @@ pub const VERGE_REL_CLASH_VERGE_YAML: &str =
     "io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml";
 
 /// Legacy Verge mihomo controller Unix socket (pre-2.5.6; unix targets only).
+#[cfg(not(windows))]
 pub const VERGE_SOCK_PATH: &str = "/tmp/verge/verge-mihomo.sock";
 
 /// Clash Verge service base dir for per-uid controller socks (2.5.6+).
+#[cfg(not(windows))]
 pub const VERGE_SERVICE_USERS_DIR: &str = "/var/run/clash-verge-service/users";
 
 /// Mihomo Party controller sock (unix only) — consumed via the client table.
@@ -50,7 +52,7 @@ pub fn current_uid() -> u32 {
     unsafe { geteuid() }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 pub fn current_uid() -> u32 {
     0
 }
@@ -70,7 +72,10 @@ pub fn sock_owner_trusted(owner_uid: u32, current: u32) -> bool {
 #[cfg(unix)]
 pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    #[allow(clippy::disallowed_methods, reason = "仅 Unix，不在 S-R1 的 Windows 风险面")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "仅 Unix，不在 S-R1 的 Windows 风险面"
+    )]
     let meta = std::fs::symlink_metadata(sock).map_err(|e| format!("lstat {sock}: {e}"))?;
     if meta.file_type().is_symlink() {
         return Err(format!("拒绝符号链接套接字路径 {sock}"));
@@ -91,8 +96,8 @@ pub fn ensure_sock_path_trusted(sock: &str) -> Result<(), String> {
 
 // 非 Unix 平台（Windows）不编译 `ensure_sock_path_trusted`：那里没有 Unix 套接字，
 // 旧版的 `Ok(())` 桩等于静默放行。删除后任何调用点在 Windows 上都会编译失败，
-// 必须显式处理成「不可用」（见 `mihomo::discovery::select_working_sock`）。
-// Windows 的本机 IPC 信任校验走命名管道（M1：`ensure_pipe_server_trusted`）。
+// 必须显式处理成「不可用」。
+// Windows 的本机 IPC 信任校验走命名管道（M1：`mihomo::pipe::open_verified`）。
 
 /// 连接后检查对端进程凭证：peer uid 必须是本人或 root。
 /// Verge service 模式下 sock 文件属主可能是当前用户，但 mihomo 以 root 运行——peer uid=0 应被接受。
@@ -115,7 +120,14 @@ pub fn ensure_connected_peer_trusted(
 
 #[cfg(unix)]
 fn peer_uid(fd: std::os::fd::RawFd) -> Result<u32, String> {
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
     {
         let mut euid: libc::uid_t = 0;
         let mut egid: libc::gid_t = 0;
@@ -161,6 +173,7 @@ fn peer_uid(fd: std::os::fd::RawFd) -> Result<u32, String> {
 }
 
 /// `$TMPDIR/verge-mihomo.sock` (or `/tmp/...` when TMPDIR unset).
+#[cfg(not(windows))]
 pub fn verge_tmpdir_sock() -> String {
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
     let tmp = tmp.trim_end_matches('/');
@@ -168,6 +181,7 @@ pub fn verge_tmpdir_sock() -> String {
 }
 
 /// Service sock for the current user: `/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`.
+#[cfg(not(windows))]
 pub fn verge_service_sock_for_uid(uid: u32) -> String {
     format!("{VERGE_SERVICE_USERS_DIR}/{uid}/verge-mihomo.sock")
 }
@@ -176,6 +190,9 @@ pub fn verge_service_sock_for_uid(uid: u32) -> String {
 ///
 /// Order: service (current uid only) → legacy
 /// `/tmp/verge/...` → `$TMPDIR/...` → yaml unix paths → optional extras.
+///
+/// Windows 不编译：那里没有 Unix 套接字候选，管道候选见 `discovery::windows_pipe_candidates`。
+#[cfg(not(windows))]
 pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |s: String| {
@@ -235,7 +252,8 @@ pub struct ClientDiscovery {
 pub fn flclash_preference_paths() -> Vec<String> {
     vec![
         "~/Library/Preferences/com.follow.clash.plist".into(),
-        "~/Library/Containers/com.follow.clash/Data/Library/Preferences/com.follow.clash.plist".into(),
+        "~/Library/Containers/com.follow.clash/Data/Library/Preferences/com.follow.clash.plist"
+            .into(),
         "~/Library/Application Support/com.follow.clash/shared_preferences.json".into(),
         "~/Library/Application Support/FlClash/shared_preferences.json".into(),
     ]
@@ -342,7 +360,8 @@ mod tests {
             let home = dirs::home_dir().expect("home dir");
             assert_eq!(
                 p,
-                home.join("Library/Application Support").join(VERGE_REL_CONFIG),
+                home.join("Library/Application Support")
+                    .join(VERGE_REL_CONFIG),
                 "macOS Verge config path must be byte-identical to pre-seam code"
             );
         }
@@ -372,7 +391,10 @@ mod tests {
         let me = current_uid();
         for c in verge_sock_candidates(&[], &[]) {
             if let Some(rest) = c.strip_prefix(&format!("{VERGE_SERVICE_USERS_DIR}/")) {
-                assert!(rest.starts_with(&format!("{me}/")), "unexpected other-uid candidate {c}");
+                assert!(
+                    rest.starts_with(&format!("{me}/")),
+                    "unexpected other-uid candidate {c}"
+                );
             }
         }
     }
@@ -409,11 +431,15 @@ mod tests {
         let _l = UnixListener::bind(&real).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let err = ensure_sock_path_trusted(link.to_str().unwrap()).expect_err("symlink must fail");
-        assert!(err.contains("符号链接") || err.to_lowercase().contains("symlink"), "{err}");
+        assert!(
+            err.contains("符号链接") || err.to_lowercase().contains("symlink"),
+            "{err}"
+        );
         assert!(ensure_sock_path_trusted(real.to_str().unwrap()).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn verge_sock_candidates_order_and_dedupe() {
         let yaml = vec![
@@ -427,10 +453,12 @@ mod tests {
             assert!(c.iter().any(|p| p == &verge_tmpdir_sock()));
             assert!(c.iter().any(|p| p == "/custom/from-yaml.sock"));
             // legacy path appears only once even though also in yaml
-            assert_eq!(c.iter().filter(|p| p.as_str() == VERGE_SOCK_PATH).count(), 1);
+            assert_eq!(
+                c.iter().filter(|p| p.as_str() == VERGE_SOCK_PATH).count(),
+                1
+            );
         } else {
-            // 非 Unix：没有内置的 service / legacy / TMPDIR 候选，只原样透传 yaml 路径。
-            // （Windows 上这些候选随后在 select_working_sock 中一律判为不可用。）
+            // 其他非 Unix、非 Windows 平台：只原样透传 yaml 路径。
             assert_eq!(c, yaml);
         }
     }
@@ -439,7 +467,10 @@ mod tests {
     #[test]
     fn macos_client_table_preserves_historical_values() {
         let cx = client_discovery("clashx_meta").expect("clashx_meta");
-        assert_eq!(cx.yaml_paths, vec!["~/.config/clash/config.yaml".to_string()]);
+        assert_eq!(
+            cx.yaml_paths,
+            vec!["~/.config/clash/config.yaml".to_string()]
+        );
         assert_eq!(cx.default_port, 9090);
         assert_eq!(cx.default_mixed, 7890);
         assert!(cx.sock_candidates.is_empty());
