@@ -329,7 +329,9 @@ pub struct PipeTrust {
     /// S-2：DACL 给 BU / AU / WD 授予了写位（[`dacl_broad_write_hint`] 命中）。走到这里说明 F3′
     /// 已通过，所以这些宽泛主体**不能**创建实例或改写安全描述符（不能冒充），但能以读写方式
     /// 连上管道、向控制器发请求（如 cvsi 风格 `AU=0x0012019B`）。来源标签里记为
-    /// `;pipe-open-to-all=<name>`：只提示，不拒绝。
+    /// `;pipe-open-to-all=<name>`。定级为**告警**（不拒绝连接）：持有 0x2 写数据权限的任何本机
+    /// 用户都能驱动 mihomo 控制器 API（切节点、改配置、读状态），而管道路径不校验 secret，这是
+    /// 真实的本机越权暴露；但问题在 Verge 的 DACL，拒绝连接也消除不了，所以不阻断（Ellie PR53）。
     pub open_to_all: bool,
 }
 

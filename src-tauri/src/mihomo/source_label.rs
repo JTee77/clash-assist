@@ -25,6 +25,10 @@
 //! - 后缀顺序固定：[`SuffixKey`] 的声明顺序，`pipe-insecure-dacl` 永远在最后；新键不含
 //!   `pipe-insecure` 字样（前端只认 `pipe-insecure-dacl` 键和括号内整项 `pipe-insecure`）。
 //! - 括号只出现在 `verge-tcp(...)`，不会嵌套、不会缺右括号：路径里的 `(` `)` 也被编码。
+//! - 路径来自 `Path::display()`：非法 UTF-16（Windows）/ UTF-8（Unix）会被替换成 U+FFFD，
+//!   所以标签里的路径只是**展示值**，不能还原成可用的路径。
+//! - 总长度上限 [`MAX_LABEL_BYTES`]，超出时按项截断（见 [`SourceLabel::finish`]），
+//!   截断处用占位项 [`TRUNCATED_ITEM`]，base 的 kind / flag 与 `;pipe-insecure-dacl=` 键始终保留。
 
 /// 需要编码的 ASCII 字符（另加所有控制字符）。
 const RESERVED: &[u8] = b";=|,()%";
@@ -64,6 +68,41 @@ pub fn encode_list<S: AsRef<str>>(items: &[S], sep: char) -> String {
     out
 }
 
+/// 来源标签总长度上限（字节）。
+///
+/// 取 1024：正常标签不到 300 字节（两三个配置路径 + 一两个管道名；Windows `MAX_PATH` 260），
+/// 1024 能放下 3–4 个完整长路径而不截断；同时标签会进日志、诊断导出与 UI tooltip，没有理由让
+/// 异常多的文件 / 管道把它撑到几十 KB。固定部分（kind + flag + 三个 `;key=` 前缀）最多约 120
+/// 字节，余下空间足够给每段至少留一个 [`TRUNCATED_ITEM`]。
+pub const MAX_LABEL_BYTES: usize = 1024;
+
+/// 截断占位项（编码后 `%28truncated%29`，是合法的 part / item，前端可解码）。
+pub const TRUNCATED_ITEM: &str = "(truncated)";
+
+/// 把已编码的 `a,b|c` 列表按整项截到不超过 `budget` 字节，末尾追加编码后的 [`TRUNCATED_ITEM`]。
+/// 只在 `,` / `|` 处切（编码后它们只作分隔符），所以不会切断 `%XX` 或 UTF-8 字符。
+fn truncate_list(enc: &str, budget: usize) -> String {
+    let marker = encode(TRUNCATED_ITEM);
+    if enc.len() <= budget {
+        return enc.to_string();
+    }
+    let mut keep = 0; // 保留前缀的结束位置（不含分隔符）
+    let mut sep = ',';
+    for (i, c) in enc.char_indices() {
+        if c == ',' || c == '|' {
+            if i + 1 + marker.len() > budget {
+                break;
+            }
+            keep = i;
+            sep = c;
+        }
+    }
+    if keep == 0 {
+        return marker;
+    }
+    format!("{}{sep}{marker}", &enc[..keep])
+}
+
 /// 后缀值里空白项的占位符（见 [`SourceLabel::suffix`]）。
 pub const BLANK_ITEM: &str = "(blank)";
 
@@ -74,7 +113,7 @@ pub const BLANK_ITEM: &str = "(blank)";
 pub enum SuffixKey {
     /// S-R12：IPv4 回环上没有监听者，但 IPv6 表里同端口有 `[::]` 监听。值为十进制端口。
     Ipv6DualStack,
-    /// S-2：选中的管道通过了 F3′，但 DACL 给 BU / AU / WD 授予了写数据权限（只提示，不拒绝）。
+    /// S-2：选中的管道通过了 F3′，但 DACL 给 BU / AU / WD 授予了写数据权限（告警，不拒绝）。
     PipeOpenToAll,
     /// F3′：有候选管道因 DACL / 标签允许外人插入实例被拒（InsecureDacl，Ellie PR50 Q5）。
     PipeInsecureDacl,
@@ -142,6 +181,8 @@ pub fn is_name(s: &str) -> bool {
 #[must_use]
 pub struct SourceLabel {
     base: String,
+    /// base 里 body 的起始字节位置（`kind[(flags)]:` 之后）；截断只动 body。
+    body_at: usize,
     suffixes: Vec<(SuffixKey, String)>,
 }
 
@@ -151,6 +192,7 @@ impl SourceLabel {
         debug_assert!(is_kind(kind), "kind {kind:?}");
         SourceLabel {
             base: kind.to_string(),
+            body_at: kind.len(),
             suffixes: Vec::new(),
         }
     }
@@ -159,6 +201,7 @@ impl SourceLabel {
     pub fn new(kind: &'static str, body: String) -> Self {
         debug_assert!(is_kind(kind), "kind {kind:?}");
         SourceLabel {
+            body_at: kind.len() + 1,
             base: format!("{kind}:{body}"),
             suffixes: Vec::new(),
         }
@@ -181,9 +224,11 @@ impl SourceLabel {
             f.write_to(&mut base);
         }
         base.push_str("):");
+        let body_at = base.len();
         base.push_str(&encode_list(files, ','));
         SourceLabel {
             base,
+            body_at,
             suffixes: Vec::new(),
         }
     }
@@ -221,8 +266,44 @@ impl SourceLabel {
     }
 
     /// 输出：后缀按 [`SuffixKey`] 声明顺序排列（`pipe-insecure-dacl` 最后）。
+    ///
+    /// 超过 [`MAX_LABEL_BYTES`] 时截断：base 的 `kind[(flags)]:` 前缀与所有 `;key=` 原样保留，
+    /// 只截 body（文件列表）和各后缀值；按 max-min 公平分配剩余空间（短的段先拿满，长的段平分
+    /// 余量），各段按整项截断并以 [`TRUNCATED_ITEM`] 结尾。`pipe-insecure-dacl` 因此永远在且在最后。
     pub fn finish(mut self) -> String {
         self.suffixes.sort_by_key(|(k, _)| *k);
+        let fixed = self.body_at
+            + self
+                .suffixes
+                .iter()
+                .map(|(k, _)| k.as_str().len() + 2)
+                .sum::<usize>();
+        let total =
+            self.base.len() + self.suffixes.iter().map(|(_, v)| v.len()).sum::<usize>() + fixed
+                - self.body_at;
+        if total > MAX_LABEL_BYTES {
+            // 段 0 = body，其余 = 后缀值。
+            let body = self.base.split_off(self.body_at);
+            let mut segs: Vec<String> = std::iter::once(body)
+                .chain(self.suffixes.iter_mut().map(|(_, v)| std::mem::take(v)))
+                .collect();
+            let mut order: Vec<usize> = (0..segs.len()).collect();
+            order.sort_by_key(|&i| segs[i].len());
+            let mut left = MAX_LABEL_BYTES.saturating_sub(fixed);
+            for (n, &i) in order.iter().enumerate() {
+                let share = left / (order.len() - n);
+                // 空 body（如 `defaults`）保持为空。
+                if !segs[i].is_empty() {
+                    segs[i] = truncate_list(&segs[i], share);
+                }
+                left = left.saturating_sub(segs[i].len());
+            }
+            let mut it = segs.into_iter();
+            self.base.push_str(&it.next().unwrap_or_default());
+            for ((_, v), s) in self.suffixes.iter_mut().zip(it) {
+                *v = s;
+            }
+        }
         let mut out = self.base;
         for (k, v) in self.suffixes {
             out.push(';');

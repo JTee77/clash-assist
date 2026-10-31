@@ -19,7 +19,11 @@ fn pct_decode(raw: &str) -> Option<String> {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
+            // 与 decodeURIComponent 一致：必须恰好两位 ASCII 十六进制（`from_str_radix` 会接受 `+1`）。
             let h = raw.get(i + 1..i + 3)?;
+            if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
             out.push(u8::from_str_radix(h, 16).ok()?);
             i += 3;
         } else {
@@ -583,6 +587,123 @@ fn generated_plain_labels_follow_grammar() {
     }
 }
 
+// ---- 解码器与前端一致 / 长度上限 -----------------------------------------------------------
+
+#[test]
+fn pct_decode_rejects_malformed_escapes_like_decode_uri_component() {
+    for bad in [
+        "%+1", "%-1", "% 1", "%1", "%", "a%g0", "%0x", "%1+", "%E4%B8",
+    ] {
+        assert_eq!(pct_decode(bad), None, "{bad:?}");
+    }
+    assert_eq!(pct_decode("%2c%2C").as_deref(), Some(",,")); // 小写也接受（与前端一致）
+    assert_eq!(pct_decode("%E4%B8%AD").as_deref(), Some("中"));
+}
+
+#[test]
+fn encoder_emits_only_uppercase_hex() {
+    let all: String = (0u8..0x80).map(char::from).collect();
+    let enc = encode(&all);
+    let b = enc.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        if c == b'%' {
+            assert!(b[i + 1..i + 3]
+                .iter()
+                .all(|x| x.is_ascii_digit() || (b'A'..=b'F').contains(x)));
+        }
+    }
+    assert_eq!(pct_decode(&enc).as_deref(), Some(all.as_str()));
+}
+
+fn huge_files(n: usize) -> Vec<String> {
+    (0..n)
+        .map(|i| {
+            format!(r"C:\Users\用户{i}\AppData\Roaming\io.github.clash-verge-rev\a;b,c\config.yaml")
+        })
+        .collect()
+}
+
+#[test]
+fn short_labels_are_not_truncated() {
+    let l = SourceLabel::files("verge-config", &huge_files(3)).finish();
+    assert!(l.len() < MAX_LABEL_BYTES);
+    assert!(!l.contains("truncated"));
+}
+
+#[test]
+fn huge_windows_label_is_capped_and_keeps_insecure_dacl() {
+    use super::super::discovery::windows_source_label as wsl;
+    let files = huge_files(200);
+    let pipes: Vec<String> = (0..100)
+        .map(|i| format!(r"\\.\pipe\verge-mihomo-{i}|x"))
+        .collect();
+    let svc = ListenerCheck::Unverified {
+        pid: Some(4),
+        reasons: vec![],
+        service_mode: true,
+    };
+    let vo = TcpFallback::VerifiedOnly("dacl".into());
+    for (sel, open) in [(None, vec![]), (Some(r"\.\pipe\sel"), pipes.clone())] {
+        let l = wsl(sel, &open, &pipes, &vo, &files, Some((&svc, 9097)), false);
+        assert!(l.len() <= MAX_LABEL_BYTES, "{}", l.len());
+        check_grammar(&l).unwrap_or_else(|e| panic!("{e}: {l:?}"));
+        let p = parse_like_frontend(&l);
+        let (k, v) = p.suffixes.last().unwrap();
+        assert_eq!(k, "pipe-insecure-dacl");
+        let v = v.as_ref().expect("dacl 值可解码");
+        assert_eq!(v.last().unwrap(), TRUNCATED_ITEM);
+        assert_eq!(&v[0], &pipes[0]);
+        if sel.is_none() {
+            assert!(l.starts_with("verge-tcp(listener-unverified,service-mode,pipe-insecure):C:"));
+            assert_eq!(p.tcp_items.as_ref().unwrap().len(), 3);
+            let body = p.base.split_once("):").unwrap().1;
+            assert!(body.ends_with(",%28truncated%29"), "{body}");
+        } else {
+            assert_eq!(p.suffixes[0].0, "pipe-open-to-all");
+            assert!(l.starts_with("verge-pipe:%5C%5C") || l.starts_with(r"verge-pipe:\.\pipe\sel"));
+        }
+    }
+}
+
+#[test]
+fn truncation_property() {
+    let mut rng = XorShift(0x5eed_1234);
+    for _ in 0..500 {
+        let nf = (rng.next() % 80) as usize;
+        let files: Vec<String> = huge_files(nf)
+            .into_iter()
+            .map(|f| f.repeat(1 + (rng.next() % 4) as usize))
+            .collect();
+        let np = (rng.next() % 60) as usize;
+        let pipes: Vec<String> = (0..np)
+            .map(|i| format!("p{i};{}", "z".repeat((rng.next() % 90) as usize)))
+            .collect();
+        let mut sl = SourceLabel::tcp(&[TcpFlag::Rejected("token-mismatch")], &files);
+        if rng.next().is_multiple_of(2) {
+            sl = sl.suffix(SuffixKey::Ipv6DualStack, &["9097"]);
+        }
+        sl = sl.suffix(SuffixKey::PipeOpenToAll, &pipes);
+        let with_dacl = rng.next().is_multiple_of(2);
+        if with_dacl {
+            sl = sl.suffix(SuffixKey::PipeInsecureDacl, &pipes[..np.min(5)]);
+        }
+        let l = sl.finish();
+        assert!(l.len() <= MAX_LABEL_BYTES, "{}", l.len());
+        check_grammar(&l).unwrap_or_else(|e| panic!("{e}: {l:?}"));
+        assert!(l.starts_with("verge-tcp(rejected:token-mismatch):"));
+        let p = parse_like_frontend(&l);
+        assert_eq!(
+            with_dacl && np > 0,
+            p.suffixes
+                .last()
+                .is_some_and(|(k, _)| k == "pipe-insecure-dacl")
+        );
+        for (_, v) in &p.suffixes {
+            assert!(v.is_some(), "{l:?}");
+        }
+    }
+}
+
 // ---- 与前端共用的样本（src/lib/mihomo/backendSourceLabels.fixture.json） --------------------
 
 /// 样本里的每条 label 必须逐字等于后端对同一场景的输出；前端测试用同一份样本跑 parseSource /
@@ -698,7 +819,31 @@ fn backend_labels_match_frontend_fixture() {
                 false,
             ),
         ),
+        (
+            // 超过 MAX_LABEL_BYTES：文件列表被截断，pipe-insecure-dacl 仍在最后。
+            "truncated-huge-file-list",
+            wsl(
+                None,
+                &[],
+                &s(&[legacy]),
+                &vo,
+                &(0..40)
+                    .map(|i| {
+                        format!(
+                            r"C:\Users\u{i}\AppData\Roaming\io.github.clash-verge-rev\config.yaml"
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                Some((&svc, 9097)),
+                false,
+            ),
+        ),
     ];
+    if std::env::var_os("PRINT_FIXTURE").is_some() {
+        for (n, l) in &expected {
+            println!("FIXTURE {n} {l}");
+        }
+    }
 
     let v: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
     let items = v["labels"].as_array().unwrap();
