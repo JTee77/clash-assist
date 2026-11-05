@@ -433,11 +433,14 @@ try {
       $staged = @($runs | Where-Object { $_.Image -match $StagedInstallerRe })
       if ($staged.Count -ne 1) { $e += "应恰有 1 次从 updates\<32hex>\setup-<16hex>.exe 启动的安装程序，实际 $($staged.Count) 次" }
       elseif ($staged[0].ParentPid -ne $oldPid) { $e += "安装程序的父进程是 $($staged[0].ParentPid)，不是旧应用进程 $oldPid" }
-      elseif ($staged[0].CommandLine -notmatch '\s/S\s+/UPDATE\s+/R\s*$') { $e += "安装程序命令行不符：$($staged[0].CommandLine)" }
-      elseif ($app.HasExited -and $app.ExitTime -lt $staged[0].Time.AddSeconds(-1)) { $e += "旧进程在安装程序启动之前就退出了（$($app.ExitTime.ToString('o')) < $($staged[0].Time.ToString('o'))）" }
-      # 「[update] installer launched … 本进程退出」行（接口约定第 4 点）只有旧进程在 2 s 观察期内没被安装程序结束时才写得出来。
-      # 模板 Section Install 的 CheckIfAppIsRunning 会先结束正在运行的旧进程，所以这一行可能缺失；这里只记录，
-      # 成功与否以 4688（父进程 = 旧进程、参数 /S /UPDATE /R）、版本、新进程与 pending 对账为准。
+      elseif ($staged[0].Image -cnotmatch ('^' + [regex]::Escape((Join-Path $env:LOCALAPPDATA 'ClashAssist\updates')) + '\\[0-9a-f]{32}\\setup-[0-9a-f]{16}\.exe$')) { $e += "安装程序映像不在 %LOCALAPPDATA%\ClashAssist\updates\<32hex>\ 下：$($staged[0].Image)" }
+      # Rust std 的 CreateProcess 命令行：程序路径加引号，三个参数原样，不多不少
+      elseif ($staged[0].CommandLine -cne ('"' + $staged[0].Image + '" /S /UPDATE /R')) { $e += "安装程序命令行不是 `"<暂存路径>`" /S /UPDATE /R：$($staged[0].CommandLine)" }
+      elseif (-not $app.HasExited -or $app.ExitTime -le $staged[0].Time) { $e += "旧进程没有在安装程序启动之后退出（安装程序 $($staged[0].Time.ToString('o'))，旧进程退出 $(if ($app.HasExited) { $app.ExitTime.ToString('o') } else { '未退出' })）" }
+      # 证据约定见 docs/windows-updater.md「成功路径的证据」：`installer launched` 行在观察期结束后才写，
+      # 而安装程序（Section Install 的 CheckIfAppIsRunning）可能在观察期内结束旧进程，所以这一行不保证出现，只记录。
+      # 成功以 4688（父进程 = 旧进程、暂存路径、完整 /S /UPDATE /R、启动早于旧进程退出）、精确 0.3.1、新进程、
+      # pending 对账恰好一次与清理为准。
       $launchedLine = @($lines | Where-Object { $_ -match '\[update\] installer launched to=' }) | Select-Object -First 1
       Write-Host "  installer launched 行：$(if ($launchedLine) { $launchedLine } else { '缺失（旧进程在观察期内被安装程序结束）' })"
 
