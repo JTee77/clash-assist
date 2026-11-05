@@ -24,6 +24,24 @@ pub fn normalize_win_path(p: &str) -> String {
     p.replace('/', "\\").to_lowercase()
 }
 
+/// 去掉 Win32 扩展路径的 `\\?\` 前缀（仅盘符形式）。
+///
+/// `GetFinalPathNameByHandleW` 常返回 `\\?\C:\…`；生产侧 `is_file` 走 `safe_fs`，
+/// 只接受 `X:\…`。若不剥前缀，NSIS 安装会被误判为 portable（#61 e2e）。
+/// `\\?\UNC\…` 等非盘符形式原样返回。
+pub fn strip_win32_verbatim_prefix(p: &str) -> &str {
+    match p.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.len() >= 2
+                && rest.as_bytes()[0].is_ascii_alphabetic()
+                && rest.as_bytes()[1] == b':' =>
+        {
+            rest
+        }
+        _ => p,
+    }
+}
+
 fn parent_dir(p: &str) -> Option<&str> {
     let i = p.rfind(['\\', '/'])?;
     (i > 0).then(|| &p[..i])
@@ -70,6 +88,9 @@ pub fn classify_install(
     let Some(final_dir) = parent_dir(&expected_final) else {
         return InstallKind::Portable;
     };
+    // GetFinalPathNameByHandleW 常返回 `\\?\C:\…`；生产 `is_file` 是 safe_fs，
+    // 只接受 `X:\…`；不剥前缀则 NSIS 会被误判为 portable（#61 e2e）。
+    let final_dir = strip_win32_verbatim_prefix(final_dir);
     if !is_file(&format!("{final_dir}\\uninstall.exe")) {
         return InstallKind::Portable;
     }
@@ -236,6 +257,59 @@ mod tests {
                 Some(r"C:\Link\Clash Assist"),
                 Some("clash-assist.exe"),
                 Some(real),
+                fp,
+                un
+            ),
+            InstallKind::Nsis
+        );
+    }
+
+    #[test]
+    fn strip_win32_verbatim_prefix_drive_only() {
+        assert_eq!(
+            strip_win32_verbatim_prefix(r"\\?\C:\Users\me\clash-assist.exe"),
+            r"C:\Users\me\clash-assist.exe"
+        );
+        assert_eq!(
+            strip_win32_verbatim_prefix(r"\\?\d:\App\uninstall.exe"),
+            r"d:\App\uninstall.exe"
+        );
+        // 无前缀 / UNC / 设备路径：原样返回
+        assert_eq!(
+            strip_win32_verbatim_prefix(r"C:\Users\me\clash-assist.exe"),
+            r"C:\Users\me\clash-assist.exe"
+        );
+        assert_eq!(
+            strip_win32_verbatim_prefix(r"\\?\UNC\server\share\file.exe"),
+            r"\\?\UNC\server\share\file.exe"
+        );
+        assert_eq!(
+            strip_win32_verbatim_prefix(r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x"),
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x"
+        );
+    }
+
+    /// 回归：final_path（生产 = GetFinalPathNameByHandleW）返回 `\\?\C:\…`，
+    /// 而生产 is_file（safe_fs）只接受非 verbatim 的 `X:\…`。旧代码会把
+    /// uninstall.exe 检查喂成 `\\?\…\uninstall.exe` → 恒 false → Portable。
+    #[test]
+    fn verbatim_final_path_still_finds_uninstaller() {
+        let loc = r"C:\Users\me\AppData\Local\Clash Assist";
+        let verbatim_exe = format!(r"\\?\{EXE}");
+        let fp = |p: &str| {
+            Some(if p.starts_with(r"\\?\") {
+                p.to_string()
+            } else {
+                format!(r"\\?\{p}")
+            })
+        };
+        // 只对「已剥前缀」的 uninstall 路径返回 true（模拟 safe_fs 拒绝 `\\?\`）
+        let un = |p: &str| p == r"C:\Users\me\AppData\Local\Clash Assist\uninstall.exe";
+        assert_eq!(
+            classify_install(
+                Some(loc),
+                Some("clash-assist.exe"),
+                Some(&verbatim_exe),
                 fp,
                 un
             ),
