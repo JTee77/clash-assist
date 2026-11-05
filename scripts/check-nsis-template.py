@@ -5,16 +5,24 @@ NSIS 3.10 的 `RmDir /r` 会跟随目录 junction，Tauri 模板「删除应用�
 `RmDir /r "$APPDATA\\${BUNDLEID}"` / `RmDir /r "$LOCALAPPDATA\\${BUNDLEID}"` 因此换成了
 hooks.nsh 的 `!insertmacro CA_DELETE_TAURI_APP_DATA`（不跟随链接）。本检查保证：
 
-1. 把 `; >>> clash-assist M4b` … `; <<< clash-assist M4b` 这一段还原成上游原文后，
+M5：上游 `Section EarlyChecks` 的静默降级检查读的是 `$R0`，而 `$R0` 只在静默模式跳过的
+PageReinstall 里赋值，`/S`、`/S /UPDATE` 因此能静默降级且退出码为 0。`; >>> clash-assist M5` …
+`; <<< clash-assist M5` 段在检查之前插入 `!insertmacro CA_SILENT_COMPARE_INSTALLED_VERSION`（hooks.nsh）。
+
+本检查保证：
+
+1. 把 M4b 段还原成上游原文、删掉 M5 段（上游此处没有内容）后，
    与 tauri-cli v2.11.4 的 installer.nsi 逐字节一致（SHA-256，换行统一为 LF）：
-   除了这一处，模板没有别的改动；
-2. 这一段恰好出现一次，里面就是那条 !insertmacro，且仍在「勾选删除、非 /UPDATE」分支、
+   除了这两处，模板没有别的改动；
+2. M4b 段恰好出现一次，里面就是那条 !insertmacro，且仍在「勾选删除、非 /UPDATE」分支、
    `SetShellVarContext current` 之后；
+2b. M5 段恰好出现一次，里面只有 `!insertmacro CA_SILENT_COMPARE_INSTALLED_VERSION`，
+   位于 `Section EarlyChecks` 的 `${If} ${Silent}` 之后、上游 `${If} $R0 = -1` 之前；
 3. package.json 锁定的 @tauri-apps/cli 仍是 v2.11.4（升级 CLI 时必须同步重做模板）；
 4. tauri.windows.conf.json 用的就是这份模板和 hooks.nsh。
 
 `--fetch-upstream`（M4d，release-windows.yml 演练时运行）：另外从固定的上游提交
-UPSTREAM_COMMIT 下载上游模板，与「去掉 M4b 段、换回上游两行」后的 installer.nsi 逐字比对，
+UPSTREAM_COMMIT 下载上游模板，与「M4b 段换回上游两行、删掉 M5 段」后的 installer.nsi 逐字比对，
 不一致时打印 unified diff 并失败；同时确认下载内容的 SHA-256 就是 UPSTREAM_SHA256。
 重新同步模板的步骤见 docs/windows-nsis-template.md。
 
@@ -49,6 +57,16 @@ CONTEXT = (
     "  ${If} $DeleteAppDataCheckboxState = 1\n"
     "  ${AndIf} $UpdateMode <> 1\n"
 )
+BLOCK_M5 = re.compile(r"^    ; >>> clash-assist M5\b.*?^    ; <<< clash-assist M5\n", re.S | re.M)
+M5_BODY = ["!insertmacro CA_SILENT_COMPARE_INSTALLED_VERSION"]
+# M5 段必须紧挨着出现在这两段上游原文之间（Section EarlyChecks 的静默降级检查）
+M5_BEFORE = (
+    "Section EarlyChecks\n"
+    "  ; Abort silent installer if downgrades is disabled\n"
+    '  !if "${ALLOWDOWNGRADES}" == "false"\n'
+    "  ${If} ${Silent}\n"
+)
+M5_AFTER = "    ; If downgrading\n    ${If} $R0 = -1\n"
 
 
 def check(template: str, conf: dict, package: dict) -> list:
@@ -66,11 +84,20 @@ def check(template: str, conf: dict, package: dict) -> list:
         branch = before.rfind(CONTEXT)
         if branch < 0 or "${EndIf}" in before[branch:] or "SetShellVarContext current\n" not in before[branch:]:
             errs.append("installer.nsi：M4b 段必须在「勾选删除、非 /UPDATE」分支内、SetShellVarContext current 之后")
-        restored = BLOCK.sub(lambda _m: UPSTREAM_LINES, t, count=1)
-        got = hashlib.sha256(restored.encode("utf-8")).hexdigest()
+    m5 = BLOCK_M5.findall(t)
+    if len(m5) != 1:
+        errs.append(f"installer.nsi：clash-assist M5 段应恰好 1 处，实际 {len(m5)} 处")
+    else:
+        body = [l.strip() for l in m5[0].splitlines() if l.strip() and not l.strip().startswith(";")]
+        if body != M5_BODY:
+            errs.append(f"installer.nsi：M5 段里只能有 {M5_BODY[0]}，实际 {body}")
+        if (M5_BEFORE + m5[0] + M5_AFTER) not in t:
+            errs.append("installer.nsi：M5 段必须在 Section EarlyChecks 的 ${If} ${Silent} 之后、${If} $R0 = -1 之前")
+    if len(blocks) == 1 and len(m5) == 1:
+        got = hashlib.sha256(restore_upstream(t).encode("utf-8")).hexdigest()
         if got != UPSTREAM_SHA256:
             errs.append(
-                f"installer.nsi：除 M4b 段外与 tauri-cli v{UPSTREAM_VERSION} 的模板不一致（还原后 SHA-256 {got}）"
+                f"installer.nsi：除 M4b / M5 段外与 tauri-cli v{UPSTREAM_VERSION} 的模板不一致（还原后 SHA-256 {got}）"
             )
     cli = (package.get("devDependencies") or {}).get("@tauri-apps/cli") or (package.get("dependencies") or {}).get(
         "@tauri-apps/cli"
@@ -88,8 +115,9 @@ def check(template: str, conf: dict, package: dict) -> list:
 
 
 def restore_upstream(template: str) -> str:
-    """去掉 M4b 段、换回上游原文（换行统一为 LF）。"""
-    return BLOCK.sub(lambda _m: UPSTREAM_LINES, template.replace("\r\n", "\n"), count=1)
+    """M4b 段换回上游原文、删掉 M5 段（换行统一为 LF）。"""
+    t = BLOCK.sub(lambda _m: UPSTREAM_LINES, template.replace("\r\n", "\n"), count=1)
+    return BLOCK_M5.sub("", t, count=1)
 
 
 def compare_upstream(template: str, upstream: str) -> list:
@@ -104,10 +132,10 @@ def compare_upstream(template: str, upstream: str) -> list:
             up.splitlines(keepends=True),
             ours.splitlines(keepends=True),
             f"upstream@{UPSTREAM_COMMIT[:7]}/installer.nsi",
-            "src-tauri/windows/installer.nsi（去掉 M4b 段）",
+            "src-tauri/windows/installer.nsi（还原 M4b / M5 段）",
         )
         print("".join(diff))
-        errs.append(f"installer.nsi 去掉 M4b 段后与上游 {UPSTREAM_COMMIT} 的模板不一致（diff 见上）")
+        errs.append(f"installer.nsi 还原 M4b / M5 段后与上游 {UPSTREAM_COMMIT} 的模板不一致（diff 见上）")
     return errs
 
 
@@ -124,6 +152,10 @@ def self_test(template: str, conf: dict, package: dict) -> int:
         ("M4b 段删掉", BLOCK.sub("", template), conf, package, "恰好 1 处"),
         ("M4b 段挪出删除分支", BLOCK.sub("", template).replace("SectionEnd\n\nFunction RestorePreviousInstallLocation", "SectionEnd\n" + BLOCK.search(template).group(0) + "\nFunction RestorePreviousInstallLocation", 1), conf, package, "分支内"),
         ("CRLF 换行照样通过", template.replace("\n", "\r\n"), conf, package, None),
+        ("M5 段删掉（静默降级检查又失效）", BLOCK_M5.sub("", template), conf, package, "M5 段应恰好 1 处"),
+        ("M5 段里多一行", BLOCK_M5.sub(lambda m: m.group(0).replace("    ; <<< clash-assist M5", "    StrCpy $R0 1\n    ; <<< clash-assist M5"), template), conf, package, "M5 段里只能有"),
+        ("M5 段挪到降级检查之后", BLOCK_M5.sub("", template).replace("      Abort\n    ${EndIf}\n  ${EndIf}\n  !endif\n", "      Abort\n    ${EndIf}\n" + BLOCK_M5.search(template).group(0) + "  ${EndIf}\n  !endif\n", 1), conf, package, "EarlyChecks"),
+        ("M5 段外改了降级检查", template.replace("    ${If} $R0 = -1\n      System::Call", "    ${If} $R0 = 1\n      System::Call", 1), conf, package, "${If} $R0 = -1 之前"),
     ]
     p2 = copy.deepcopy(package)
     p2.setdefault("devDependencies", {})["@tauri-apps/cli"] = "2.12.0"
@@ -173,9 +205,9 @@ def main() -> int:
         for e in errs:
             print(f"::error::{e}")
         return 1
-    print(f"check-nsis-template: 通过（installer.nsi 仅 M4b 段与 tauri-cli v{UPSTREAM_VERSION} 不同）")
+    print(f"check-nsis-template: 通过（installer.nsi 仅 M4b / M5 段与 tauri-cli v{UPSTREAM_VERSION} 不同）")
     if args == ["--fetch-upstream"]:
-        print(f"check-nsis-template: 与上游 {UPSTREAM_COMMIT} 逐字一致（M4b 段除外）")
+        print(f"check-nsis-template: 与上游 {UPSTREAM_COMMIT} 逐字一致（M4b / M5 段除外）")
     return 0
 
 
