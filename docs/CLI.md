@@ -62,7 +62,7 @@ pnpm tauri dev -- --cli serve --mock --port 17890
 | `env` | 环境泄漏检查 |
 | `serve` | 本机 **127.0.0.1** HTTP 服务（常驻到 Ctrl+C）。见下方「serve」 |
 | `install-shim` | 安装短命令 `clash-assist`（见上方「找到二进制 / 短命令」） |
-| `update-check` | 查询 GitHub 最新 release（`releases/latest`，超时约 5 s）。`data = { current, latest, update_available, url }`；网络/解析失败 → `update_check_failed`。测试可设 `CLASH_ASSIST_FAKE_LATEST=0.2.1` 跳过网络（此时 `data.fake = true`） |
+| `update-check` | 查询 GitHub 最新 release（`releases/latest`，超时约 5 s）。`data = { current, latest, update_available, url }`；网络/解析失败 → `update_check_failed`。测试可设 `CLASH_ASSIST_FAKE_LATEST=0.2.1` 跳过网络（此时 `data.fake = true`；**仅 debug 构建与 `updater-e2e` 构建有效**，release 构建不含这个开关，M-7）。M5 起 `data` 另含 `install_kind`（`dmg` / `nsis` / `portable`）与 `one_click` |
 
 节点名匹配：先全名精确匹配，再唯一的「包含」匹配；匹配到多个报 `node_ambiguous`，找不到报 `node_not_found`。不会拿不存在的名字去切换。
 
