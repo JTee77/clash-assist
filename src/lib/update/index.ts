@@ -1,8 +1,9 @@
 /**
  * 启动时更新检查与应用内分阶段自更新（GUI）。
- * 1) `downloadUpdate`：用户点击「一键更新」后，下载最新 DMG 并校验 SHA-256。
- * 2) `applyUpdate`：下载完成后在后台静默挂载 DMG、清除 com.apple.quarantine 隔离标签、替换当前 .app（不强行退出）。
- * 3) `relaunchUpdatedApp`：由用户主动点击「立即重启」时拉起新版并退出（若不点，下次重开自动生效）。
+ * 1) `downloadUpdate`：用户点击「一键更新」后，下载最新安装包并校验 SHA-256（Mac：DMG；Windows：NSIS 安装程序）。
+ * 2) `applyUpdate`（仅 Mac）：下载完成后在后台静默挂载 DMG、清除 com.apple.quarantine 隔离标签、替换当前 .app（不强行退出）。
+ * 3) `relaunchUpdatedApp`：由用户主动点击「立即重启」时触发。Mac：拉起新版并退出（若不点，下次重开自动生效）；
+ *    Windows（M5）：启动已校验的安装程序（`/S /UPDATE /R`）后退出，安装完成由安装程序重新打开软件。
  */
 import { invoke } from "@tauri-apps/api/core";
 import { isWindows } from "../platform";
@@ -22,6 +23,9 @@ export type UpdatePending = {
   to: string;
 };
 
+/** 上次更新已完成（M5，Rust 启动对账：当前版本即 `to`）；只出现一次，前端提示「已更新到 {v}」。 */
+export type UpdateDone = UpdatePending;
+
 export type UpdateInfo = {
   current: string;
   latest: string;
@@ -34,13 +38,14 @@ export type UpdateInfo = {
   one_click?: boolean;
   install_kind?: InstallKind;
   pending?: UpdatePending | null;
+  updated?: UpdateDone | null;
 };
 
 /**
- * Windows 的应用内更新在 M5 之前关闭（与 Rust `update_check::WINDOWS_UPDATER_ENABLED` 一致）：
- * 不自动检查、不显示更新条；Rust 侧四个更新命令也会直接返回 updater_unsupported。
+ * Windows 应用内更新开关：M5 起开启（Rust 侧的同名开关与 updater_unsupported 已移除）。
+ * 保留这个常量只为一处开关：若需紧急关闭，改回 false 即可让 Windows 不检查、不显示更新条。
  */
-export const WINDOWS_UPDATER_ENABLED = false;
+export const WINDOWS_UPDATER_ENABLED = true;
 
 export function updaterSupported(windows: boolean = isWindows()): boolean {
   return !windows || WINDOWS_UPDATER_ENABLED;
@@ -54,7 +59,7 @@ function isTauri(): boolean {
 
 /**
  * 每次启动只发一次请求（React StrictMode 双调用 / 重挂载都复用同一个 Promise）。
- * 更新器关闭的平台（M5 之前的 Windows）不调用 check_update，直接视为「无更新」。
+ * 更新器关闭时（`WINDOWS_UPDATER_ENABLED = false` 的 Windows）不调用 check_update，直接视为「无更新」。
  */
 export function checkUpdateOnce(windows: boolean = isWindows()): Promise<UpdateInfo | null> {
   if (!once) {
@@ -96,7 +101,8 @@ export function canOneClick(info: UpdateInfo, windows: boolean = isWindows()): b
 }
 
 /**
- * 阶段 1：下载最新 DMG 到临时目录并完成 SHA-256 校验，返回临时工作目录路径。
+ * 阶段 1：下载最新安装包并完成 SHA-256 校验（Mac 返回临时工作目录路径；Windows 返回私有更新目录路径，仅供日志 / 显示，
+ * 后续步骤不使用它——Rust 持有已校验文件的读句柄直到安装程序启动）。
  * 不传任何参数：下载地址与期望摘要由 Rust 侧自行从 GitHub release 元数据解析，前端无法指定。
  */
 export function downloadUpdate(): Promise<string> {
@@ -108,7 +114,7 @@ export function applyUpdate(workDir: string): Promise<string> {
   return invoke<string>("apply_update", { workDir });
 }
 
-/** 阶段 3：用户主动点击「立即重启」时拉起已替换的新版 .app 并退出当前进程。 */
+/** 阶段 3：用户主动点击「立即重启」。Mac：拉起已替换的新版 .app 并退出；Windows：启动安装程序并退出。 */
 export function relaunchUpdatedApp(): Promise<void> {
   return invoke<void>("relaunch_updated_app");
 }

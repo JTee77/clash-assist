@@ -15,6 +15,7 @@ export const zhHant: Messages = {
   "update.fallbackOpened": "已為你開啟下載頁",
   "update.goPortable": "前往發布頁下載",
   "update.pending": "上次更新未完成",
+  "update.succeeded": "已更新至 {v}",
   "update.retry": "重試",
   "update.openRelease": "前往發布頁",
   "update.readyWin": "新版本 {v} 已下載好",
