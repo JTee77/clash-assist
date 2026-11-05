@@ -101,26 +101,24 @@ mod imp {
         )
     }
 
-    /// 同一磁盘对象（卷序列号 + 文件索引）；两者都经安全打开，不会打开管道。
-    pub fn same_dir(a: &Path, b: &Path) -> bool {
-        use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        };
-        fn id(p: &Path) -> Option<(u32, u32, u32)> {
-            let f = open_attrs(p).ok()?;
-            if !f.metadata().ok()?.is_dir() {
-                return None;
-            }
-            // SAFETY: 全零是 BY_HANDLE_FILE_INFORMATION 的合法初值；`f` 持有有效句柄。
-            let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-            let ok = unsafe { GetFileInformationByHandle(f.as_raw_handle(), &mut info) };
-            (ok != 0).then_some((
-                info.dwVolumeSerialNumber,
-                info.nFileIndexHigh,
-                info.nFileIndexLow,
-            ))
-        }
-        matches!((id(a), id(b)), (Some(x), Some(y)) if x == y)
+    /// M5 句柄纪律 ①：新建（已存在即失败）+ 共享模式 0（写入期间他人不能打开）。
+    pub fn create_new_exclusive(path: &Path) -> io::Result<File> {
+        open_with(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .share_mode(0),
+            path,
+        )
+    }
+
+    /// M5 句柄纪律 ②：只读 + 仅允许他人读（持有期间他人不能写、删、改名）。
+    pub fn open_read_share_read(path: &Path) -> io::Result<File> {
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        open_with(
+            OpenOptions::new().read(true).share_mode(FILE_SHARE_READ),
+            path,
+        )
     }
 
     pub fn exists(path: &Path) -> bool {
@@ -258,7 +256,8 @@ pub fn create_truncate(path: &Path) -> io::Result<std::fs::File> {
     imp::create_truncate(path)
 }
 
-/// `a`、`b` 是同一个已存在的目录（Windows 按卷序列号 + 文件索引比较，不调用 canonicalize）。
+/// `a`、`b` 是同一个已存在的目录（仅 Mac DMG 更新链使用；M5 起 Windows 不再需要）。
+#[cfg(not(windows))]
 pub fn same_dir(a: &Path, b: &Path) -> bool {
     imp::same_dir(a, b)
 }
@@ -266,6 +265,30 @@ pub fn same_dir(a: &Path, b: &Path) -> bool {
 /// 以追加方式打开（不存在则创建），用于应用日志。
 pub fn open_append(path: &Path) -> io::Result<std::fs::File> {
     imp::open_append(path)
+}
+
+/// Windows：只接受盘符绝对路径（拒绝 `\\.\`、`\\?\`、UNC 等设备 / 网络前缀）。
+#[cfg(windows)]
+pub fn check_path_shape(path: &Path) -> io::Result<()> {
+    imp::check_path_shape(path)
+}
+
+/// Windows：只取属性的安全打开（不跟随最后一级重解析点，拒绝管道 / 设备）。
+#[cfg(windows)]
+pub fn open_attrs(path: &Path) -> io::Result<std::fs::File> {
+    imp::open_attrs(path)
+}
+
+/// Windows：新建并独占写（共享模式 0），已存在即失败（M5 更新包下载）。
+#[cfg(windows)]
+pub fn create_new_exclusive(path: &Path) -> io::Result<std::fs::File> {
+    imp::create_new_exclusive(path)
+}
+
+/// Windows：只读打开，只允许他人读（M5 更新包校验到启动安装程序之间持有）。
+#[cfg(windows)]
+pub fn open_read_share_read(path: &Path) -> io::Result<std::fs::File> {
+    imp::open_read_share_read(path)
 }
 
 /// 测试辅助：创建 / 截断并写入（同样走安全打开封装）。

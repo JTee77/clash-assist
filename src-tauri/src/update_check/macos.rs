@@ -1,4 +1,7 @@
-//! macOS DMG 安装链（由 update_check.rs 原样迁移，windows-plan r4 §2.4）。
+//! macOS DMG 安装链（由 update_check.rs 迁移，windows-plan r4 §2.4；非 Windows 编译）。
+//!
+//! M5 起与 Windows 共用 `parse_release_asset`：资产名按 V8 精确匹配，要求 `immutable == true`（C-3），
+//! 并核对下载字节数 == API 的 `size`。
 
 use super::*;
 use std::path::{Path, PathBuf};
@@ -45,31 +48,13 @@ pub fn resolve_target_app_bundle(exe_path: &Path) -> Result<PathBuf, String> {
 
 /// 进程内计算并校验下载的 DMG 文件 SHA-256。fail closed：未提供摘要或摘要格式不合法时一律报错。
 pub fn verify_sha256_file(path: &Path, expected_digest: Option<&str>) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-
     let Some(raw) = expected_digest.map(str::trim).filter(|s| !s.is_empty()) else {
         return Err("缺少安装包 SHA-256 摘要，拒绝安装未校验的更新包".into());
     };
     let expected =
         normalize_sha256_digest(raw).ok_or_else(|| format!("无效的 SHA-256 摘要格式：{raw}"))?;
     let mut file = crate::safe_fs::open_read(path).map_err(|e| format!("打开安装包失败：{e}"))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    loop {
-        let n = file
-            .read(&mut buf)
-            .map_err(|e| format!("读取安装包失败：{e}"))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    let actual: String = hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let actual = sha256_of_reader(&mut file).map_err(|e| format!("读取安装包失败：{e}"))?;
     if actual != expected {
         return Err(format!(
             "安装包 SHA-256 校验不匹配（期望 {expected}，实际 {actual}）"
@@ -248,15 +233,14 @@ fn staging_base_dir() -> PathBuf {
 /// 下载地址与期望摘要只由 Rust 侧重新查询 GitHub release 元数据得到（[`resolve_download_target`]），
 /// 不接受前端传入；release 未提供摘要时 fail closed，引导用户去下载页手动更新。
 pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<String, String> {
-    updater_gate()?;
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let _target_app = resolve_target_app_bundle(&exe)?;
 
     let info = check(env!("CARGO_PKG_VERSION")).await?;
-    let DownloadTarget {
-        url: resolved_url,
-        sha256: resolved_sha,
-    } = resolve_download_target(&info)?;
+    let asset = resolve_download_target(&info)?;
+    if asset.kind != AssetKind::MacDmgAarch64 {
+        return Err("最新 Release 中没有 macOS 安装包".into());
+    }
 
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -270,12 +254,16 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
 
     let dmg_path = work_dir.join("update.dmg");
     let proxy_port = active_local_proxy_port_async().await;
-    if let Err(e) = stream_dmg_to_file(
-        &resolved_url,
+    if let Err(e) = stream_asset_to_file(
+        &asset.url,
         env!("CARGO_PKG_VERSION"),
         &dmg_path,
         proxy_port,
         on_progress,
+        DownloadLimits {
+            max_bytes: asset.kind.max_bytes(),
+            expected_size: Some(asset.size),
+        },
     )
     .await
     {
@@ -284,8 +272,9 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
     }
 
     let dmg_for_verify = dmg_path.clone();
+    let expected_sha = asset.sha256.clone();
     let verify_res = tauri::async_runtime::spawn_blocking(move || {
-        verify_sha256_file(&dmg_for_verify, Some(&resolved_sha))
+        verify_sha256_file(&dmg_for_verify, Some(&expected_sha))
     })
     .await
     .map_err(|e| format!("校验任务异常终止：{e}"))?;
@@ -300,7 +289,6 @@ pub async fn download_to_staging(on_progress: ProgressCallback<'_>) -> Result<St
 
 /// 阶段 2（后台静默安装）：从临时工作目录挂载 `update.dmg`，清除隔离属性并替换当前 `.app`（不自动退出重启）。
 pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String> {
-    updater_gate()?;
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let target_app = resolve_target_app_bundle(&exe)?;
 
@@ -338,7 +326,6 @@ pub async fn apply_staged_update(work_dir_str: String) -> Result<String, String>
 
 /// 阶段 3（用户主动点击「立即重启」）：拉起已替换的新版 `.app` 并退出当前进程。
 pub fn relaunch_updated_app() -> Result<(), String> {
-    updater_gate()?;
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
     let target_app = resolve_target_app_bundle(&exe)?;
     if std::env::var("CLASH_ASSIST_NO_RELAUNCH").ok().as_deref() != Some("1") {
