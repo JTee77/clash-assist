@@ -152,6 +152,9 @@ Section EarlyChecks
   WriteUninstaller "$un"
 SectionEnd
 Section Uninstall
+  ; 只为让卸载段与两个变量都被引用（/WX 下未用变量是错误）；本用例不运行卸载器
+  StrCpy `$DeleteAppDataCheckboxState 0
+  StrCpy `$UpdateMode 0
   !insertmacro NSIS_HOOK_POSTUNINSTALL
 SectionEnd
 "@ | Set-Content -LiteralPath $nsi -Encoding utf8BOM
