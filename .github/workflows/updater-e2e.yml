@@ -1,0 +1,186 @@
+name: Updater e2e (Windows)
+
+# windows-plan r4 §2.4 / §3 / §6 M5（M-7、S-R4、S-R6、C-3）：Windows 更新器端到端测试。
+# 带 updater-e2e feature 分别构建 0.3.0 与 0.3.1（版本号只在 build job 的一次性 checkout 中临时改写），
+# 由真实 release API 响应回放出本地 release.json（scripts/updater-e2e-server.ps1），再跑 scripts/updater-e2e-cases.ps1。
+# 依赖 M5 更新器核心的用例目前记为 pending（不是通过），见 cases 脚本与 job summary。
+# 产物只用于测试：不 attest、不建 release、不使用任何 secret；release-windows.yml 绝不启用 updater-e2e。
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .github/workflows/updater-e2e.yml
+      - scripts/updater-e2e-*
+      - scripts/scan-exe-markers.ps1
+      - scripts/check-version-sync.mjs
+      - src-tauri/src/update_check.rs
+      - src-tauri/src/update_check/**
+      - src-tauri/src/e2e_marker.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/tests/fixtures/release-*.json
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/tauri.conf.json
+      - src-tauri/tauri.windows.conf.json
+      - src-tauri/windows/**
+      - src/lib/update/**
+
+# 默认无任何权限；每个 job 只授予 contents: read。
+permissions: {}
+
+concurrency:
+  group: updater-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 不依赖 Windows 与构建产物的自测：回放改写规则（逐字段比对真实夹具）、本地服务器请求处理、版本改写、标记扫描器。
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: updater-e2e-server 自测（真实 release JSON 回放 + HttpListener，S-R6）
+        shell: pwsh
+        run: |
+          ./scripts/updater-e2e-server.ps1 -SelfTest
+          exit $LASTEXITCODE
+
+      - name: 标记扫描器自测（含 -RequireE2EMarker 正向断言，S-R4）
+        shell: pwsh
+        run: |
+          ./scripts/scan-exe-markers.ps1 -SelfTest
+          exit $LASTEXITCODE
+
+      - name: 版本改写脚本自测
+        run: node scripts/updater-e2e-set-version.mjs --self-test
+
+  build:
+    needs: selftest
+    runs-on: windows-2022
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['0.3.0', '0.3.1']
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TARGET: x86_64-pc-windows-msvc
+      VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust 工具链（rust-toolchain.toml）
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel *= *"(.*)"$').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal --target $env:TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.16.1
+
+      # 测试构建也不用缓存，与 release 构建保持同样的依赖获取方式
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: 临时改写版本号（只在本 job 的 checkout 中，§6 M5）
+        run: |
+          node scripts/updater-e2e-set-version.mjs $env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-version-sync.mjs --tag "v$($env:VERSION)"
+          exit $LASTEXITCODE
+
+      - name: 安装依赖（--frozen-lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 NSIS 安装包（--features updater-e2e，M-7）
+        run: pnpm tauri build --ci --target $env:TARGET --features updater-e2e -- --locked
+
+      # S-R4：与 release-windows.yml 的反向断言配对。e2e 构建的 exe 必须含 CLASH_ASSIST_UPDATER_E2E_BUILD。
+      - name: S-R4 正向断言（exe 必须含 CLASH_ASSIST_UPDATER_E2E_BUILD）
+        run: |
+          ./scripts/scan-exe-markers.ps1 -Exe "src-tauri/target/$env:TARGET/release/clash-assist.exe" -RequireE2EMarker
+          exit $LASTEXITCODE
+
+      - name: 改名（V8）并打便携 zip
+        run: |
+          $bundle = "src-tauri/target/$env:TARGET/release/bundle/nsis"
+          $setups = @(Get-ChildItem -LiteralPath $bundle -Filter '*-setup.exe' -File)
+          if ($setups.Count -ne 1) { Write-Error "$bundle 下应恰有一个 *-setup.exe，实际 $($setups.Count) 个"; exit 1 }
+          $dist = Join-Path $env:RUNNER_TEMP 'e2e-dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item -LiteralPath $setups[0].FullName -Destination (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe")
+          $stage = Join-Path $env:RUNNER_TEMP 'portable-stage'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath "src-tauri/target/$env:TARGET/release/clash-assist.exe" -Destination $stage
+          Copy-Item -LiteralPath 'src-tauri/windows/portable.txt' -Destination $stage
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-portable.zip") -CompressionLevel Optimal
+          Get-ChildItem -LiteralPath $dist | ForEach-Object { '{0}  {1}  {2}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Length, $_.Name }
+
+      - name: 上传 e2e 安装包（仅测试用）
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-dist-${{ matrix.version }}
+          path: ${{ runner.temp }}/e2e-dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  e2e:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-dist-0.3.0
+          path: e2e/0.3.0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-dist-0.3.1
+          path: e2e/0.3.1
+
+      # 已实现：build-versions、sr4-marker、server-windows、installer-upgrade、allow-downgrades。
+      # pending（TODO，依赖 M5 更新器核心 win/m5-updater）：happy、wrong-digest、wrong-size、immutable-false、
+      # pe-mismatch、downgrade、portable-one-click。pending 不计为通过。
+      - name: 端到端用例
+        run: |
+          ./scripts/updater-e2e-cases.ps1 -Dist030 e2e/0.3.0 -Dist031 e2e/0.3.1 `
+            -Fixture src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json `
+            -ResultsDir (Join-Path $env:RUNNER_TEMP 'e2e-results')
+          exit $LASTEXITCODE
+
+      - name: 上传用例结果
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: updater-e2e-results
+          path: |
+            ${{ runner.temp }}/e2e-results/results.json
+            ${{ runner.temp }}/e2e-results/requests-*.jsonl
+            ${{ runner.temp }}/e2e-results/root-*/release.json
+          if-no-files-found: warn
+          retention-days: 7
