@@ -11,6 +11,9 @@
      其余 job 的权限只能是 contents: read；
   4b. build job 在 tauri build 之后用 scan-nsis-rmdir.ps1 扫描生成的 installer.nsi，tag push 时 strict，
      不得带 if / continue-on-error（Ellie PR55 r2）；
+  4d. build job 在 tauri build 之后用 scan-exe-markers.ps1 扫描 release exe，构建类型必须是 -Build Release
+     （M5：FAKE_LATEST 与 updater-e2e 标记出现即失败），不得带 if / continue-on-error；
+     任何 run 都不得带 `--features updater-e2e`（M-7）；
   5. 每个 actions/checkout 都设置 persist-credentials: false（S-R2）；
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
   4c. 冒烟诊断（M4c）：WER LocalDumps 只能在 build job 里配置；名为 smoke-diagnostics 的 artifact
@@ -152,6 +155,26 @@ def check(doc, text):
         if "if" in st or st.get("continue-on-error"):
             errs.append("installer.nsi 扫描步骤不得有 if / continue-on-error")
 
+    # M5（M-7 / S-R4）：release exe 的测试标记扫描必须是 -Build Release，且在 tauri build 之后。
+    exe_at = next((i for i, r in enumerate(runs) if "scan-exe-markers.ps1" in r), None)
+    if exe_at is None:
+        errs.append("build job 缺少 exe 测试标记扫描步骤（scan-exe-markers.ps1）")
+    else:
+        st = build_steps[exe_at]
+        r = " ".join(runs[exe_at].split())
+        if tauri_at is None or exe_at < tauri_at:
+            errs.append("exe 测试标记扫描必须在 tauri build 之后")
+        if "/release/clash-assist.exe" not in r:
+            errs.append("exe 测试标记扫描必须扫 release/clash-assist.exe")
+        if "-Build Release" not in r or "-Build Debug" in r or "-Build E2E" in r:
+            errs.append("exe 测试标记扫描必须是 -Build Release")
+        if "exit $LASTEXITCODE" not in r:
+            errs.append("exe 测试标记扫描必须以 exit $LASTEXITCODE 结束")
+        if "if" in st or st.get("continue-on-error"):
+            errs.append("exe 测试标记扫描步骤不得有 if / continue-on-error")
+    if "updater-e2e" in "\n".join(str(x.get("run", "")) for j in jobs.values() if isinstance(j, dict) for x in (j.get("steps") or []) if isinstance(x, dict)):
+        errs.append("发布 workflow 不得启用 updater-e2e feature（M-7）")
+
     # M4c：冒烟诊断只在 build job（contents: read、一次性 runner），诊断 artifact 短期保留。
     for name, job in jobs.items():
         if not isinstance(job, dict):
@@ -258,6 +281,12 @@ def self_test(path):
     def dumps_step(d):
         return next(x for x in d["jobs"]["build"]["steps"] if "LocalDumps" in str(x.get("run", "")))
 
+    def exe_step(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if "scan-exe-markers.ps1" in str(x.get("run", "")))
+
+    def tauri_step(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if "tauri build" in str(x.get("run", "")))
+
     def move_nsi_first(d):
         st = nsi_step(d)
         d["jobs"]["build"]["steps"].remove(st)
@@ -292,6 +321,11 @@ def self_test(path):
         ("installer.nsi 扫描 continue-on-error", lambda d, t: (nsi_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
         ("installer.nsi 扫描加 if", lambda d, t: (nsi_step(d).__setitem__("if", "false"), t), "不得有 if"),
         ("installer.nsi 扫描挪到 tauri build 之前", lambda d, t: (move_nsi_first(d), t), "之后"),
+        ("删掉 exe 标记扫描", lambda d, t: (d["jobs"]["build"].__setitem__("steps", [x for x in d["jobs"]["build"]["steps"] if "scan-exe-markers" not in str(x.get("run", ""))]), t), "缺少 exe 测试标记扫描"),
+        ("exe 标记扫描改成 -Build Debug", lambda d, t: (exe_step(d).__setitem__("run", exe_step(d)["run"].replace("-Build Release", "-Build Debug")), t), "-Build Release"),
+        ("exe 标记扫描 continue-on-error", lambda d, t: (exe_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
+        ("exe 标记扫描加 if", lambda d, t: (exe_step(d).__setitem__("if", "false"), t), "exe 测试标记扫描步骤不得有 if"),
+        ("tauri build 启用 updater-e2e", lambda d, t: (tauri_step(d).__setitem__("run", tauri_step(d)["run"].replace("tauri build", "tauri build --features updater-e2e")), t), "updater-e2e"),
         ("smoke-diagnostics 保留 30 天", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", 30), t), "retention-days"),
         ("smoke-diagnostics 保留期是表达式", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", "${{ 3 }}"), t), "retention-days"),
         ("smoke-diagnostics 不排除 .dmp", lambda d, t: (drop_dmp_exclusion(d), t), "不得含内存转储"),

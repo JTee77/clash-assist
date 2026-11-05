@@ -148,6 +148,45 @@ describe("pending（上次更新未完成）", () => {
   });
 });
 
+describe("updated（上次更新已完成）", () => {
+  const DONE: UpdateInfo = {
+    ...INFO,
+    current: "0.3.0",
+    latest: "0.3.0",
+    update_available: false,
+    updated: { from: "0.2.9", to: "0.3.0" },
+  };
+
+  it("checked 带 updated 且无更新 → 提示「已更新到 {v}」，无主按钮，可关闭", () => {
+    const s = run([{ type: "checked", info: DONE }]);
+    expect(s.stage).toBe("updated");
+    expect(primaryActionOf(s, true)).toBe("none");
+    const view = updateViewOf(s, { oneClick: true, windows: true });
+    expect(view.visible).toBe(true);
+    expect(view.status).toEqual({ key: "update.succeeded", vars: { v: "0.3.0" } });
+    expect(view.primary).toBeNull();
+    expect(view.showReleaseLink).toBe(false);
+    expect(view.showClose).toBe(true);
+    expect(updateViewOf(run([{ type: "dismiss" }], s), { oneClick: true, windows: true }).visible).toBe(
+      false,
+    );
+  });
+
+  it("updated 阶段不能开始下载", () => {
+    const s = run([{ type: "checked", info: DONE }, { type: "download-start" }]);
+    expect(s.stage).toBe("updated");
+  });
+
+  it("同时已有更新的新版本 → 优先提示新版本；pending 优先于 updated", () => {
+    const newer = run([{ type: "checked", info: { ...DONE, latest: "0.3.1", update_available: true } }]);
+    expect(newer.stage).toBe("idle");
+    const both = run([
+      { type: "checked", info: { ...DONE, pending: { from: "0.3.0", to: "0.3.1" } } },
+    ]);
+    expect(both.stage).toBe("pending");
+  });
+});
+
 describe("updateViewOf / primaryActionOf", () => {
   it("初始：可一键更新显示「一键更新」，否则「去下载」；portable 显示「前往发布页下载」", () => {
     const s = run([{ type: "checked", info: INFO }]);

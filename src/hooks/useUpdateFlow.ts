@@ -12,7 +12,7 @@ import {
   type UpdateInfo,
 } from "../lib/update";
 
-/** Rust stream_dmg_to_file 广播的下载进度（update_check.rs::DownloadProgress）。 */
+/** Rust stream_asset_into 广播的下载进度（update_check/mod.rs::DownloadProgress）。 */
 type DownloadProgressPayload = {
   downloaded: number;
   total: number | null;
@@ -25,10 +25,12 @@ type DownloadProgressPayload = {
  * - Windows：idle → downloading → ready → restarting（安装器在重启时执行，§2.4-8）
  * - 任一步失败 → fallback（已为用户打开发布页）
  * - pending：上次更新未完成（Rust 启动对账给出），提供「重试」与「前往发布页」
+ * - updated：上次更新已完成（Rust 启动对账给出，只出现一次），提示「已更新到 {v}」，可关闭
  */
 export type UpdateStage =
   | "idle"
   | "pending"
+  | "updated"
   | "downloading"
   | "installing"
   | "ready"
@@ -79,7 +81,9 @@ export function updateFlowReducer(
       const info = event.info;
       if (!info) return state;
       if (info.pending) return { ...state, update: info, stage: "pending" };
+      // 已有更新的新版本时优先提示新版本；否则提示一次「已更新」。
       if (info.update_available) return { ...state, update: info, stage: "idle" };
+      if (info.updated) return { ...state, update: info, stage: "updated" };
       return state;
     }
     case "download-start":
@@ -115,7 +119,7 @@ export function updateFlowReducer(
 export type PrimaryAction = "none" | "download" | "relaunch" | "open-release";
 
 export function primaryActionOf(state: UpdateFlowState, oneClick: boolean): PrimaryAction {
-  if (!state.update || isBusyStage(state.stage)) return "none";
+  if (!state.update || isBusyStage(state.stage) || state.stage === "updated") return "none";
   if (state.stage === "ready") return "relaunch";
   if (state.stage === "fallback") return "open-release";
   return oneClick ? "download" : "open-release";
@@ -158,6 +162,9 @@ export function updateViewOf(
   let primary: MessageKey | null = null;
   let hint: MessageKey | null = null;
   switch (stage) {
+    case "updated":
+      status = { key: "update.succeeded", vars: { v: update.updated?.to ?? update.current } };
+      break;
     case "pending":
       status = { key: "update.pending" };
       primary = opts.oneClick ? "update.retry" : goKey;

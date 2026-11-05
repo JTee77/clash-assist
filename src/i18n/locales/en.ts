@@ -15,6 +15,7 @@ export const en: Messages = {
   "update.fallbackOpened": "Opened download page",
   "update.goPortable": "Download from release page",
   "update.pending": "Last update did not finish",
+  "update.succeeded": "Updated to {v}",
   "update.retry": "Retry",
   "update.openRelease": "Release page",
   "update.readyWin": "Version {v} is downloaded",

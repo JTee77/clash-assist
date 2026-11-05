@@ -528,6 +528,11 @@ Section EarlyChecks
   ; Abort silent installer if downgrades is disabled
   !if "${ALLOWDOWNGRADES}" == "false"
   ${If} ${Silent}
+    ; >>> clash-assist M5: $R0 is only set by PageReinstall, which silent mode
+    ; skips, so compare against the installed version here (src-tauri/windows/hooks.nsh).
+    ; Otherwise this file is tauri-cli v2.11.4's installer.nsi; see scripts/check-nsis-template.py.
+    !insertmacro CA_SILENT_COMPARE_INSTALLED_VERSION
+    ; <<< clash-assist M5
     ; If downgrading
     ${If} $R0 = -1
       System::Call 'kernel32::AttachConsole(i -1)i.r0'
