@@ -1626,7 +1626,7 @@ mod tests {
         );
     }
 
-    /// S-R6：真实 GitHub release API 响应（tests/fixtures/github-release/，取自本仓库已发布 release
+    /// S-R6：真实 GitHub release API 响应（src-tauri/tests/fixtures/，取自本仓库已发布 release
     /// 与 mihomo v1.19.33，字段形态原样保留）。
     // 真实 GitHub API 响应，原样保存（S-R6）。v0.2.9 与 Nate 的 e2e 回放共用同一份（#61，src-tauri/tests/fixtures/README.md）；
     // 另外两份由 M5 抓取（2026-10-31 14:08 UTC+8）：

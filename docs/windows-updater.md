@@ -53,7 +53,7 @@
 ## 前提：仓库开启 immutable releases
 
 - C-3 要求 `immutable == true`，且这条要求不区分平台。Mac 的 DMG 链也一样（M5 决定）。
-- 截至 M5，仓库的 0.2.x release 都是 `immutable: false`，真实快照见 `tests/fixtures/github-release/`。
+- 截至 M5，仓库的 0.2.x release 都是 `immutable: false`，真实快照见 `src-tauri/tests/fixtures/`（`release-clash-assist-v0.2.9.json`、`releases-clash-assist.json`）。
 - 因此，在仓库设置中开启 **immutable releases** 之前：
   - 新版客户端在 Mac 和 Windows 上都只会显示「去下载」；
   - 已发布的旧版 Mac 客户端不受影响，仍按旧规则工作。
@@ -83,7 +83,7 @@
    - 每次拒绝或失败写一行：`[update] error code=<码> <说明>`。
    - check：`[update] check current=… latest=… update_available=… install_kind=… one_click=… reason=<码|->`
    - 触发结果：`[update] e2e auto result=launched|no_one_click reason=<码>|error step=check|download|launch …`
-   - 成功启动：`[update] installer launched to=<版本> fate=StillRunning|ExitedOk，本进程退出`
+   - 成功启动：`[update] installer launched to=<版本> fate=StillRunning|ExitedOk，本进程退出`。这一行在 2 s 观察期结束后才写，安装程序可能在此之前结束本进程，所以**不保证出现**，也不能作为升级成功的证据（见下文「成功路径的证据」）。
 
    | 情形 | 码 | 出现在 |
    |---|---|---|
@@ -113,6 +113,28 @@
    - `src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json` 与 #61 是同一个文件（逐字节相同）。
    - M5 另外加了 `release-mihomo-v1.19.33.json`（`parse_release_asset` 的大样本，127 个资产）和 `releases-clash-assist.json`（26 个历史 release）。
    - 真实的 v0.2.9 是 `immutable: false`，客户端一律拒绝一键更新（C-3）；Happy 用例需要回放时改成 `true`。
+
+### 成功路径的证据
+
+一键更新成功时，旧进程不一定来得及写任何「已启动」日志：
+- 安装程序 `Section Install` 的 `CheckIfAppIsRunning`（`installer.nsi`）会结束正在运行的旧进程，可能发生在 2 s 观察期之内；
+- 在观察期之前写日志只能证明 CreateProcess 成功，不能证明升级成功；
+- 在观察期之后写的 `installer launched` 行不保证出现。
+
+客户端**不会**为了留下日志而推迟、绕过安装程序结束旧进程，也不改变启动语义。e2e 的 happy 用例以下列条件**同时成立**判定成功，缺一不可：
+
+1. 进程创建审计（Security 4688，含命令行）中恰好有 1 次安装程序启动，并且：
+   - 映像为 `%LOCALAPPDATA%\ClashAssist\updates\<32 位十六进制>\setup-<16 位十六进制>.exe`；
+   - 父进程是旧应用进程；
+   - 命令行逐字为 `"<该路径>" /S /UPDATE /R`；
+   - 启动时刻早于旧进程退出。
+2. 安装后 DisplayVersion 与 exe 的 PE ProductVersion 都精确等于 `0.3.1`。
+3. 有新的 `clash-assist.exe` 进程（`/R`），其 ProductVersion 也是 `0.3.1`。
+4. `[update] pending outcome=updated from=0.3.0 to=0.3.1` 在整个用例中恰好出现一次，之后 `update-pending.json` 被删除。
+5. 再启动一次（不设 e2e 环境变量）时，不再出现 pending 行，`updates\` 下也没有工作目录。
+6. 安装包只下载一次，字节数等于 `size`；旧进程在启动安装程序之前没有 `[update] error code=` 行；`e2e auto result=launched`。
+
+在 CreateProcess 成功之前失败的情况（例如 `installer_spawn_failed`、`no_staged`）满足不了第 1 条，因此不可能被判为通过。`installer launched` 行如果出现，只作记录。
 
 另外，降级由两层拦住：
 
