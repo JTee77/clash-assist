@@ -2099,6 +2099,18 @@ html[data-platform="macos"] .titlebar {
 .update-pill-go:hover {
   text-decoration: underline;
 }
+/* 自动打开发布页失败时展示的地址：一次点击即全选，便于复制 */
+.update-pill-url {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+  -webkit-user-select: all;
+  cursor: text;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-muted);
+}
 .update-pill-close {
   width: 14px;
   height: 14px;

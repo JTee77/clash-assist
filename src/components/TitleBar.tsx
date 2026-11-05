@@ -3,6 +3,15 @@ import { useUpdateFlow } from "../hooks/useUpdateFlow";
 
 type UpdateFlow = ReturnType<typeof useUpdateFlow>;
 
+async function copyText(text: string | null): Promise<void> {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // 剪贴板不可用时，地址本身可选中复制（user-select: all）
+  }
+}
+
 /**
  * 更新胶囊（Mac 标题栏与 Windows 更新条共用），按真实阶段清晰提示用户：
  * 1) 初始：`发现新版本 X.Y.Z  [一键更新]  ×`（绝不擅自后台联网下载，必须由用户主动点击）
@@ -10,6 +19,8 @@ type UpdateFlow = ReturnType<typeof useUpdateFlow>;
  * 3) 安装中（仅 Mac）：`下载完成，正在后台静默安装…`（静默挂载 DMG、清除 quarantine、校验签名并替换 .app）
  * 4) 就绪（零打扰）：`新版本 X.Y.Z 已安装好  [立即重启]  ×`（由用户决定何时重启；若暂不重启，下次重开软件自动生效）
  * 5) 上次更新未完成：`上次更新未完成  [重试]  [前往发布页]  ×`
+ * 6) 失败回退：发布页打开成功 → `已为你打开下载页  [去下载]  ×`；
+ *    打开失败 → `未能自动打开下载页  <发布页地址（可选中复制）>  [复制链接]  [去下载]  ×`
  */
 export function UpdatePill({ flow }: { flow: UpdateFlow }) {
   const { t } = useI18n();
@@ -31,6 +42,20 @@ export function UpdatePill({ flow }: { flow: UpdateFlow }) {
         >
           {t(view.primary)}
         </button>
+      )}
+      {view.releaseUrl && (
+        <>
+          <span className="update-pill-url" title={view.releaseUrl}>
+            {view.releaseUrl}
+          </span>
+          <button
+            type="button"
+            className="update-pill-go update-pill-go--secondary"
+            onClick={() => void copyText(view.releaseUrl)}
+          >
+            {t("update.copyLink")}
+          </button>
+        </>
       )}
       {view.showReleaseLink && (
         <button

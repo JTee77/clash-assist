@@ -1193,6 +1193,29 @@ pub fn open_verge_release_page() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// 生产 Tauri 命令 `relaunch_updated_app`（lib.rs 原样转发本函数）的错误形状：`Result<(), String>`。
+    /// `Err(String)` 经 tauri 的 `InvokeError` 变成 JSON 字符串，前端 `invoke` 以这个字符串 reject，
+    /// `useUpdateFlow` 据此进入 fallback 并打开发布页（src/hooks/useUpdateFlow.fallback.test.ts）。
+    /// installer_exit_nonzero 的说明文字来自 `fail()`（码只进日志，不进返回值）。
+    #[test]
+    fn relaunch_error_reaches_frontend_as_plain_string() {
+        fn takes<F: std::future::Future<Output = Result<(), String>>>(
+            _: fn(tauri::AppHandle) -> F,
+        ) {
+        }
+        takes(relaunch_updated_app);
+        let msg = fail(
+            code::INSTALLER_EXIT_NONZERO,
+            "安装程序退出码 42（可能是降级被拒绝或被系统拦截），未完成更新",
+        );
+        assert_eq!(
+            msg,
+            "安装程序退出码 42（可能是降级被拒绝或被系统拦截），未完成更新"
+        );
+        let shaped: tauri::ipc::InvokeError = msg.clone().into();
+        assert_eq!(shaped.0, serde_json::Value::String(msg));
+    }
+
     /// M4c 回归：在 tokio 工作线程上（与 `check_update` 命令相同的上下文）探测代理端口不得 panic。
     /// 旧实现在工作线程上同步调用 discovery，Windows 的管道探测内部 `block_on`，panic
     /// "Cannot start a runtime from within a runtime"（release 下即 0xC0000409 闪退）。
@@ -1626,7 +1649,7 @@ mod tests {
         );
     }
 
-    /// S-R6：真实 GitHub release API 响应（tests/fixtures/github-release/，取自本仓库已发布 release
+    /// S-R6：真实 GitHub release API 响应（src-tauri/tests/fixtures/，取自本仓库已发布 release
     /// 与 mihomo v1.19.33，字段形态原样保留）。
     // 真实 GitHub API 响应，原样保存（S-R6）。v0.2.9 与 Nate 的 e2e 回放共用同一份（#61，src-tauri/tests/fixtures/README.md）；
     // 另外两份由 M5 抓取（2026-10-31 14:08 UTC+8）：

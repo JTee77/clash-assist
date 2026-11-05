@@ -53,7 +53,7 @@
 ## 前提：仓库开启 immutable releases
 
 - C-3 要求 `immutable == true`，且这条要求不区分平台。Mac 的 DMG 链也一样（M5 决定）。
-- 截至 M5，仓库的 0.2.x release 都是 `immutable: false`，真实快照见 `tests/fixtures/github-release/`。
+- 截至 M5，仓库的 0.2.x release 都是 `immutable: false`，真实快照见 `src-tauri/tests/fixtures/`（`release-clash-assist-v0.2.9.json`、`releases-clash-assist.json`）。
 - 因此，在仓库设置中开启 **immutable releases** 之前：
   - 新版客户端在 Mac 和 Windows 上都只会显示「去下载」；
   - 已发布的旧版 Mac 客户端不受影响，仍按旧规则工作。
@@ -83,7 +83,9 @@
    - 每次拒绝或失败写一行：`[update] error code=<码> <说明>`。
    - check：`[update] check current=… latest=… update_available=… install_kind=… one_click=… reason=<码|->`
    - 触发结果：`[update] e2e auto result=launched|no_one_click reason=<码>|error step=check|download|launch …`
-   - 成功启动：`[update] installer launched to=<版本> fate=StillRunning|ExitedOk，本进程退出`
+   - 尝试启动：`[update] launch_attempt pid=<当前进程 PID> to=<目标版本> path=<暂存安装程序路径>`。全部校验（size、digest、PE 版本、启动前 semver 复核）通过并写好标记之后、紧接 CreateProcess 之前写这一行。它只证明「尝试启动」，不证明 CreateProcess 成功，更不证明升级成功；不含 URL 或任何凭据。
+     - **路径规范化**（`install::launch_log_path`）：只去掉 Win32 verbatim 前缀，`\\?\UNC\<x>` 变为 `\\<x>`，`\\?\<x>` 变为 `<x>`；其余字节原样保留，不改大小写、不换分隔符、不 trim。e2e 对 4688 的 `NewProcessName` 做同样处理后与它逐字节比较。
+   - 成功启动：`[update] installer launched to=<版本> fate=StillRunning|ExitedOk，本进程退出`。这一行在 2 s 观察期结束后才写，安装程序可能在此之前结束本进程，所以**不保证出现**，也不能作为升级成功的证据（见下文「成功路径的证据」）。
 
    | 情形 | 码 | 出现在 |
    |---|---|---|
@@ -113,6 +115,80 @@
    - `src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json` 与 #61 是同一个文件（逐字节相同）。
    - M5 另外加了 `release-mihomo-v1.19.33.json`（`parse_release_asset` 的大样本，127 个资产）和 `releases-clash-assist.json`（26 个历史 release）。
    - 真实的 v0.2.9 是 `immutable: false`，客户端一律拒绝一键更新（C-3）；Happy 用例需要回放时改成 `true`。
+
+### 成功路径的证据
+
+一键更新成功时，旧进程不一定来得及写任何「已启动」日志：
+- 安装程序 `Section Install` 的 `CheckIfAppIsRunning`（`installer.nsi`）会结束正在运行的旧进程，可能发生在 2 s 观察期之内；
+- 在观察期之前写日志只能证明 CreateProcess 成功，不能证明升级成功；
+- 在观察期之后写的 `installer launched` 行不保证出现。
+
+客户端**不会**为了留下日志而推迟、绕过安装程序结束旧进程，也不改变启动语义。e2e 的 happy 用例以下列条件**同时成立**判定成功，缺一不可：
+
+1. 进程创建审计（Security 4688，含命令行）中恰好有 1 次安装程序启动，并且：
+   - 映像为 `%LOCALAPPDATA%\ClashAssist\updates\<32 位十六进制>\setup-<16 位十六进制>.exe`；
+   - app.log 中恰好有一行 `launch_attempt`，其 `pid` 是旧进程、`to=0.3.1`，`path` 与 4688 映像按上面的规则规范化后逐字节相等；
+   - 父进程是旧应用进程；
+   - 命令行逐字为 `"<该路径>" /S /UPDATE /R`；
+   - 启动时刻早于旧进程退出。
+2. 安装后 DisplayVersion 与 exe 的 PE ProductVersion 都精确等于 `0.3.1`。
+3. 有新的 `clash-assist.exe` 进程（`/R`），其 ProductVersion 也是 `0.3.1`。
+4. `[update] pending outcome=updated from=0.3.0 to=0.3.1` 在整个用例中恰好出现一次，之后 `update-pending.json` 被删除。
+5. 再启动一次（不设 e2e 环境变量）时，不再出现 pending 行，`updates\` 下也没有工作目录。
+6. 安装包只下载一次，字节数等于 `size`；旧进程在启动安装程序之前没有 `[update] error code=` 行；`e2e auto result=launched`。
+
+在 CreateProcess 成功之前失败的情况（例如 `installer_spawn_failed`、`no_staged`）满足不了第 1 条，因此不可能被判为通过。`installer launched` 行如果出现，只作记录。
+
+### 安装程序非零退出（installer_exit_nonzero）与测试安装程序
+
+`installer-exit-nonzero` 用例经应用的完整路径（check → 下载 → size / digest / PE 校验 → 持句柄 CreateProcess）启动一个**测试安装程序**，验证核心在 2 s 观察期内看到非零退出后的处理。没有生产旁路，也没有任意路径覆盖：测试安装程序和真实安装包一样，由回放的 release.json 以真实 size 与 SHA-256 提供。
+
+- 来源：`scripts/updater-e2e-exit-nonzero.nsi`。`ProductVersion` 逐字为目标版本（`0.3.1`）。`.onInit` 第一条指令就设置退出码 42 并退出，不结束任何进程，不写注册表，也不改动任何文件。版本资源中含唯一标记 `CLASH_ASSIST_E2E_TEST_INSTALLER_EXIT_NONZERO`。
+- 隔离：
+  - 只在 `updater-e2e.yml` 的 e2e job 中用 runner 的 makensis 现场编译到 `runner.temp/e2e-test-installer`，不上传；
+  - selftest job 的 `scripts/updater-e2e-isolation-check.py` 固定：只有白名单文件可以引用它，`release-windows.yml` 与 `tauri*.conf.json` 不引用它，upload-artifact 不上传它；
+  - 运行时，`test-installer-isolation` 用例确认真实安装包、便携 zip 的全部文件中都没有这个标记。
+- 断言：
+  - 4688 中恰好创建一次，父进程是旧进程，映像与 `launch_attempt` 一致，命令行为 `"<路径>" /S /UPDATE /R`；
+  - 4689 记录退出码 42，存活时间不到 2 s；
+  - `[update] 安装程序：ExitedErr(Some(42))`，并且恰好一行 `[update] error code=installer_exit_nonzero`，`e2e auto result=error step=launch`；
+  - 没有 `installer launched` 行；旧进程 5 s 后仍在运行；
+  - 版本仍为 0.3.0，安装目录内容（文件、大小、时间、SHA-256）不变；
+  - 标记与工作目录都已当场删除；安装包只下载一次。
+  - `e2e auto result=error step=launch` 后的说明文字，与 `error code=installer_exit_nonzero` 行的说明文字逐字相同。也就是说，`relaunch_updated_app` 交给调用方的就是这个字符串。
+
+### 前端回退契约（自动化分层测试）
+
+安装程序非零退出后，应用要回落到发布页。这一项**不在**无界面 e2e 中验收：无界面触发不经前端，核心也不会为此写一条「浏览器已打开」的测试事件。它按层验收，每层只证明自己那一段：
+
+| 层 | 测试 | 证明范围 |
+|---|---|---|
+| e2e（Windows runner） | `installer-exit-nonzero` | 经真实下载、校验、持句柄 CreateProcess，测试安装程序以 42 退出。核心报 `installer_exit_nonzero`，清理标记与工作目录，旧进程不退出，并把说明文字原样返回给调用方 |
+| Rust（Windows CI） | `update_check::windows::tests::launch_blocking_nonzero_exit_maps_to_frontend_error_and_cleans_up` | 生产 `launch_blocking` 遇到非零退出（`xcopy.exe` 充当安装程序）时返回 `Err(String)`，以「安装程序退出码 」开头、以「未完成更新」结尾。经 tauri `InvokeError` 后是 JSON 字符串；标记与工作目录当场删除 |
+| Rust（全平台） | `update_check::tests::relaunch_error_reaches_frontend_as_plain_string`、`relaunch_command_shape_tests::relaunch_command_returns_string_error` | `relaunch_updated_app` 与生产 Tauri 命令的类型都是 `Result<(), String>`；installer_exit_nonzero 的说明文字原样成为前端收到的 rejection 值（错误码只进日志） |
+| 前端（vitest） | `src/hooks/useUpdateFlow.fallback.test.ts` | 驱动真实 `useUpdateFlow`（真实 reducer 与编排，只 mock Tauri invoke / listen，并用最小 hooks 运行时替代 React 渲染器），见下方列表 |
+| 实机（M6） | 物理设备测试 | 默认浏览器真的打开发布页 |
+
+`useUpdateFlow.fallback.test.ts` 覆盖的情形：
+- `relaunch_updated_app` 以上述字符串 reject（或以 Error reject）时：
+  - 恰好一次 `open_release_page({ url: <检查结果的 url> })`；
+  - 停在 `fallback`，`error` 保留原文，主按钮为「去下载」；只有 `open_release_page` 成功才提示「已为你打开下载页」；
+  - 不进入 `restarting` / `updated`，也不再次启动安装程序。
+- `open_release_page` 自身 reject：`openReleasePage` resolve `false`（不产生未处理的 rejection），不算成功，installer 错误仍可见。提示「未能自动打开下载页」，展示检查结果里经发布页白名单校验的 URL，既可选中复制也可用「复制链接」按钮。剪贴板不可用时仍可手动复制文本。
+- 请求尚未完成时提示「正在打开下载页…」，绝不提前显示成功；手动点击「去下载 / 前往发布页」也用同样的结果文案。重试成功后改为成功文案，不再展示 URL。
+- `src/components/TitleBar.fallback.test.ts` 验证实际 `UpdatePill` JSX：三种语言的成功 / 失败 / 进行中文案、失败时显示的地址和复制行为；任意 URL 不会被展示。
+- 文案（`update.fallbackOpened` / `update.fallbackOpenFailed` / `update.fallbackOpening` / `update.copyLink`）：
+
+  | 语言 | 成功 | 失败 | 进行中 | 复制按钮 |
+  |---|---|---|---|---|
+  | 简体中文 | 已为你打开下载页 | 未能自动打开下载页 | 正在打开下载页… | 复制链接 |
+  | 繁體中文 | 已為你開啟下載頁 | 未能自動開啟下載頁 | 正在開啟下載頁… | 複製連結 |
+  | English | Opened download page | Couldn’t open the download page | Opening download page… | Copy link |
+
+  命令成功只说明系统接受了打开请求，不替代 M6 的真实浏览器测试。地址只来自 `check_update` 的 `url`（Rust 已校验，前端展示时再次白名单校验），没有新增任意地址入口。
+- relaunch 成功：不回退，不打开发布页。
+
+e2e 的 cases 脚本把这一项记为 `frontend-fallback-contract`，状态为 `layered`：不计为通过，也不计为失败。
 
 另外，降级由两层拦住：
 

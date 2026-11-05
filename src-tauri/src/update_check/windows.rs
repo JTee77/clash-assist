@@ -514,6 +514,13 @@ fn launch_blocking(staged: Staged, root: &Path) -> Result<ChildFate, String> {
         drop(staged);
         return fail(&dir, e);
     }
+    // 全部校验（下载时的 size / digest / PE 版本，启动前的 semver 复核）都已通过，紧接着就是 CreateProcess。
+    // 这一行只证明「尝试启动」，e2e 用它与 4688 的映像路径逐字节比较（docs/windows-updater.md「成功路径的证据」）。
+    crate::append_app_log(&install::launch_attempt_line(
+        std::process::id(),
+        &staged.version,
+        &staged.path.to_string_lossy(),
+    ));
     // S-7：CreateProcess，不经 ShellExecute（不走外壳的 SmartScreen 检查路径）。
     let spawned = std::process::Command::new(&staged.path)
         .args(["/S", "/UPDATE", "/R"])
@@ -628,6 +635,38 @@ mod tests {
         let _ = std::fs::remove_dir(&link);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&target);
+    }
+
+    /// installer_exit_nonzero 经生产启动路径（`launch_blocking`：semver 复核 → 写标记 → launch_attempt →
+    /// CreateProcess → 2 s 观察）返回的错误，就是 `relaunch_updated_app` 命令 reject 给前端的值：
+    /// `Err(String)` → tauri `InvokeError` → JSON 字符串（前端 `useUpdateFlow` 的 errMsg 按 string 处理）。
+    /// 同时标记与工作目录当场清理。用 `System32\xcopy.exe` 充当「立即以非零码退出的安装程序」：
+    /// `xcopy /S /UPDATE /R` 缺源参数 / 开关无效，xcopy 以非零码退出，不读写任何文件。
+    #[test]
+    fn launch_blocking_nonzero_exit_maps_to_frontend_error_and_cleans_up() {
+        let root = temp_root("exit-nonzero");
+        let dir = prepare_update_dir(&root).unwrap();
+        let exe = PathBuf::from(std::env::var("SystemRoot").unwrap()).join(r"System32\xcopy.exe");
+        let reader = crate::safe_fs::open_read_share_read(&exe).unwrap();
+        let staged = Staged {
+            dir: dir.clone(),
+            path: exe,
+            reader,
+            version: "999.0.0".into(),
+            sha256: "0".repeat(64),
+        };
+        let err = launch_blocking(staged, &root).unwrap_err();
+        assert!(err.starts_with("安装程序退出码 "), "{err}");
+        assert!(!err.starts_with("安装程序退出码 0"), "{err}");
+        assert!(err.ends_with("未完成更新"), "{err}");
+        let shaped: tauri::ipc::InvokeError = err.clone().into();
+        assert_eq!(shaped.0, serde_json::Value::String(err));
+        assert!(
+            !crate::safe_fs::exists(&pending::marker_path(&root)),
+            "标记应当场删除"
+        );
+        assert!(!crate::safe_fs::exists(&dir), "工作目录应当场删除");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 测试进程不是从安装目录运行的：一律判为便携版（不会误开一键更新）。

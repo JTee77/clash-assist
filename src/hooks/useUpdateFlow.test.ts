@@ -90,10 +90,51 @@ describe("fallback", () => {
       expect(s).toMatchObject({ stage: "fallback", error: "sha256 mismatch", downloadPct: null });
       expect(primaryActionOf(s, true)).toBe("open-release");
       const view = updateViewOf(s, { oneClick: true, windows: true });
-      expect(view.status?.key).toBe("update.fallbackOpened");
+      // 还不知道发布页是否打开成功：不能说「已为你打开」
+      expect(view.status?.key).toBe("update.fallbackOpening");
+      expect(view.releaseUrl).toBeNull();
       expect(view.primary).toBe("update.go");
       expect(view.showClose).toBe(true);
     }
+  });
+
+  it("只有 open_release_page 成功才显示「已为你打开下载页」；失败显示「未能自动打开」并给出已校验的地址", () => {
+    const base = run([
+      { type: "checked", info: INFO },
+      { type: "download-start" },
+      { type: "failed", error: "x" },
+      { type: "release-open-start" },
+    ]);
+    expect(updateViewOf(base, { oneClick: true, windows: true }).status?.key).toBe("update.fallbackOpening");
+    const ok = run([{ type: "release-open-result", ok: true }], base);
+    const okView = updateViewOf(ok, { oneClick: true, windows: true });
+    expect(okView.status?.key).toBe("update.fallbackOpened");
+    expect(okView.releaseUrl).toBeNull();
+    const bad = run([{ type: "release-open-result", ok: false }], base);
+    const badView = updateViewOf(bad, { oneClick: true, windows: true });
+    expect(badView.status?.key).toBe("update.fallbackOpenFailed");
+    expect(badView.status?.key).not.toBe("update.fallbackOpened");
+    expect(badView.releaseUrl).toBe(INFO.url);
+    expect(badView.primary).toBe("update.go");
+    // 再次点击「去下载」成功后恢复为成功文案、不再展示地址
+    const retried = run([{ type: "release-open-start" }, { type: "release-open-result", ok: true }], bad);
+    expect(updateViewOf(retried, { oneClick: true, windows: true })).toMatchObject({
+      status: { key: "update.fallbackOpened" },
+      releaseUrl: null,
+    });
+    // 检查结果里的地址不在白名单内时不展示任何地址
+    const odd = run(
+      [
+        { type: "checked", info: { ...INFO, url: "https://evil.example/JTee77/clash-assist/releases" } },
+        { type: "download-start" },
+        { type: "failed", error: "x" },
+        { type: "release-open-result", ok: false },
+      ],
+    );
+    expect(updateViewOf(odd, { oneClick: true, windows: true })).toMatchObject({
+      status: { key: "update.fallbackOpenFailed" },
+      releaseUrl: null,
+    });
   });
 
   it("fallback 后不能再开始下载", () => {

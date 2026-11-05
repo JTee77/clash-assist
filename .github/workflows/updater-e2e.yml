@@ -1,0 +1,224 @@
+name: Updater e2e (Windows)
+
+# windows-plan r4 §2.4 / §3 / §6 M5（M-7、S-R4、S-R6、C-3）：Windows 更新器端到端测试。
+# 带 updater-e2e feature 分别构建 0.3.0 与 0.3.1（版本号只在 build job 的一次性 checkout 中临时改写），
+# 由真实 release API 响应回放出本地 release.json（scripts/updater-e2e-server.ps1），再跑 scripts/updater-e2e-cases.ps1。
+# 客户端接口见 docs/windows-updater.md「e2e 接口约定」（CLASH_ASSIST_E2E_API / CLASH_ASSIST_E2E_AUTO_UPDATE / app.log 信号）。
+# 产物只用于测试：不 attest、不建 release、不使用任何 secret；release-windows.yml 绝不启用 updater-e2e。
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .github/workflows/updater-e2e.yml
+      - scripts/updater-e2e-*
+      - scripts/scan-exe-markers.ps1
+      - scripts/check-version-sync.mjs
+      - src-tauri/src/update_check/**
+      - src-tauri/src/platform.rs
+      - src-tauri/src/safe_fs.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/tests/fixtures/release-*.json
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/tauri.conf.json
+      - src-tauri/tauri.windows.conf.json
+      - src-tauri/windows/**
+      - src/lib/update/**
+      - docs/windows-updater.md
+
+# 默认无任何权限；每个 job 只授予 contents: read。
+permissions: {}
+
+concurrency:
+  group: updater-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 不依赖 Windows 与构建产物的自测：回放改写规则（逐字段比对真实夹具）、本地服务器请求处理、版本改写、标记扫描器。
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: updater-e2e-server 自测（真实 release JSON 回放 + HttpListener，S-R6）
+        shell: pwsh
+        run: |
+          ./scripts/updater-e2e-server.ps1 -SelfTest
+          exit $LASTEXITCODE
+
+      - name: 标记扫描器自测（含 -Build E2E 正向断言，S-R4）
+        shell: pwsh
+        run: |
+          ./scripts/scan-exe-markers.ps1 -SelfTest
+          exit $LASTEXITCODE
+
+      - name: 版本改写脚本自测
+        run: node scripts/updater-e2e-set-version.mjs --self-test
+
+      # 测试安装程序（scripts/updater-e2e-exit-nonzero.nsi）不得被 release workflow / 打包配置引用，也不得进入上传的 artifact
+      - name: 测试安装程序隔离检查
+        run: |
+          python3 scripts/updater-e2e-isolation-check.py --self-test
+          python3 scripts/updater-e2e-isolation-check.py
+
+  build:
+    needs: selftest
+    runs-on: windows-2022
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['0.3.0', '0.3.1']
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TARGET: x86_64-pc-windows-msvc
+      VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust 工具链（rust-toolchain.toml）
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel *= *"(.*)"$').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal --target $env:TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.16.1
+
+      # 测试构建也不用缓存，与 release 构建保持同样的依赖获取方式
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: 临时改写版本号（只在本 job 的 checkout 中，§6 M5）
+        run: |
+          node scripts/updater-e2e-set-version.mjs $env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-version-sync.mjs --tag "v$($env:VERSION)"
+          exit $LASTEXITCODE
+
+      - name: 安装依赖（--frozen-lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 NSIS 安装包（--features updater-e2e，M-7）
+        run: pnpm tauri build --ci --target $env:TARGET --features updater-e2e -- --locked
+
+      # S-R4：与 release-windows.yml 的反向断言配对。e2e 构建的 exe 必须含 CLASH_ASSIST_UPDATER_E2E_BUILD。
+      - name: S-R4 正向断言（exe 必须含 CLASH_ASSIST_UPDATER_E2E_BUILD）
+        run: |
+          ./scripts/scan-exe-markers.ps1 -Exe "src-tauri/target/$env:TARGET/release/clash-assist.exe" -Build E2E
+          exit $LASTEXITCODE
+
+      - name: 改名（V8）并打便携 zip
+        run: |
+          $bundle = "src-tauri/target/$env:TARGET/release/bundle/nsis"
+          $setups = @(Get-ChildItem -LiteralPath $bundle -Filter '*-setup.exe' -File)
+          if ($setups.Count -ne 1) { Write-Error "$bundle 下应恰有一个 *-setup.exe，实际 $($setups.Count) 个"; exit 1 }
+          $dist = Join-Path $env:RUNNER_TEMP 'e2e-dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item -LiteralPath $setups[0].FullName -Destination (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe")
+          $stage = Join-Path $env:RUNNER_TEMP 'portable-stage'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath "src-tauri/target/$env:TARGET/release/clash-assist.exe" -Destination $stage
+          Copy-Item -LiteralPath 'src-tauri/windows/portable.txt' -Destination $stage
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-portable.zip") -CompressionLevel Optimal
+          Get-ChildItem -LiteralPath $dist | ForEach-Object { '{0}  {1}  {2}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Length, $_.Name }
+
+      - name: 上传 e2e 安装包（仅测试用）
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-dist-${{ matrix.version }}
+          path: ${{ runner.temp }}/e2e-dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  e2e:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-dist-0.3.0
+          path: e2e/0.3.0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-dist-0.3.1
+          path: e2e/0.3.1
+
+      # 只改这台一次性 runner 的本地策略：开启「进程创建」审计并记录命令行（Security 4688）与「进程终止」审计（4689，含退出码），
+      # 用例据此判断安装程序是否被启动、由谁以什么参数启动、以什么码在何时退出（audit-control 用例做正向对照）。
+      - name: 进程创建 / 终止审计（仅 runner）
+        run: |
+          foreach ($g in '{0CCE922B-69AE-11D9-BED3-505054503030}', '{0CCE922C-69AE-11D9-BED3-505054503030}') {
+            auditpol /set /subcategory:"$g" /success:enable
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name ProcessCreationIncludeCmdLine_Enabled -PropertyType DWord -Value 1 -Force | Out-Null
+          auditpol /get /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030},{0CCE922C-69AE-11D9-BED3-505054503030}"
+
+      # installer-exit-nonzero 用例的测试安装程序：runner 预装的 makensis 现场编译，ProductVersion 0.3.1，启动即以 42 退出。
+      # 输出在 runner.temp/e2e-test-installer，不上传（见下方 upload-artifact 的 path，由 selftest 的隔离检查固定）。
+      - name: 编译测试安装程序（仅 e2e）
+        run: |
+          $mk = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          if (-not (Test-Path -LiteralPath $mk -PathType Leaf)) { Write-Host "::error::找不到 $mk"; exit 1 }
+          & $mk /VERSION
+          $out = Join-Path $env:RUNNER_TEMP 'e2e-test-installer'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          & $mk /WX /V2 /DVERSION=0.3.1 "/DOUTFILE=$(Join-Path $out 'exit-nonzero-0.3.1.exe')" scripts/updater-e2e-exit-nonzero.nsi
+          exit $LASTEXITCODE
+
+      # audit-control、build-versions、sr4-marker、test-installer-isolation、server-windows、installer-downgrade-rejected、
+      # portable-one-click、install-kind-nsis、wrong-digest、wrong-size、immutable-false、pe-mismatch、installer-exit-nonzero、
+      # frontend-fallback-contract（layered，不计为通过）、happy、downgrade、semver-not-newer、semver-same-version
+      # 步骤级超时（短于 job 的 45 分钟）：脚本内的看门狗兜不住时由这里结束，之后的「上传用例结果」仍会运行
+      #（!cancelled()；步骤超时记为失败而非取消），progress.log 能看出卡在哪个用例。
+      - name: 端到端用例
+        timeout-minutes: 25
+        run: |
+          ./scripts/updater-e2e-cases.ps1 -Dist030 e2e/0.3.0 -Dist031 e2e/0.3.1 `
+            -Fixture src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json `
+            -ExitNonzeroInstaller (Join-Path $env:RUNNER_TEMP 'e2e-test-installer\exit-nonzero-0.3.1.exe') `
+            -ResultsDir (Join-Path $env:RUNNER_TEMP 'e2e-results')
+          exit $LASTEXITCODE
+
+      - name: 上传用例结果
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: updater-e2e-results
+          path: |
+            ${{ runner.temp }}/e2e-results/results.json
+            ${{ runner.temp }}/e2e-results/app.log
+            ${{ runner.temp }}/e2e-results/progress.log
+            ${{ runner.temp }}/e2e-results/requests-*.jsonl
+            ${{ runner.temp }}/e2e-results/root-*/release.json
+          if-no-files-found: warn
+          retention-days: 7

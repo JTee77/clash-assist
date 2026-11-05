@@ -73,8 +73,26 @@ export function checkUpdateOnce(windows: boolean = isWindows()): Promise<UpdateI
   return once;
 }
 
-export function openReleasePage(url: string): Promise<void> {
-  return invoke<void>("open_release_page", { url }).catch(() => {});
+/**
+ * 请 Rust 用系统浏览器打开 release 页面（Rust 侧再做一次白名单校验）。
+ * 从不 reject：成功 resolve true，失败（白名单拒绝、浏览器打不开等）resolve false，由调用方决定提示。
+ */
+export function openReleasePage(url: string): Promise<boolean> {
+  return invoke<void>("open_release_page", { url }).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * 与 Rust `validate_release_page_url` 同一白名单：只认本项目的 release 列表 / latest / tag 页面。
+ * 用于在「未能自动打开」时把检查结果里的地址展示给用户复制；不符合时返回 null（不展示任何地址）。
+ */
+const RELEASE_PAGE_RE =
+  /^https:\/\/github\.com\/JTee77\/clash-assist\/releases(?:\/latest|\/tag\/[A-Za-z0-9_-][A-Za-z0-9._-]*)?\/?$/;
+
+export function verifiedReleasePageUrl(url: string | null | undefined): string | null {
+  return typeof url === "string" && url === url.trim() && RELEASE_PAGE_RE.test(url) ? url : null;
 }
 
 /**

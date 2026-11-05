@@ -24,6 +24,26 @@ pub fn normalize_win_path(p: &str) -> String {
     p.replace('/', "\\").to_lowercase()
 }
 
+/// `[update] launch_attempt` 日志里的路径（docs/windows-updater.md「成功路径的证据」）：只去掉 Win32 verbatim 前缀
+/// （`\\?\UNC\x` → `\\x`，`\\?\x` → `x`），其余字节原样保留（不改大小写、不换分隔符、不 trim），
+/// 便于 e2e 与进程创建审计 4688 的 `NewProcessName` 做同样处理后逐字节比较。
+pub fn launch_log_path(p: &str) -> String {
+    if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        p.strip_prefix(r"\\?\").unwrap_or(p).to_string()
+    }
+}
+
+/// 启动安装程序前的最后一行日志（全部校验之后、CreateProcess 之前）。只证明**尝试**启动，
+/// 不证明 CreateProcess 成功，更不证明升级成功。不含 URL 或任何凭据。
+pub fn launch_attempt_line(pid: u32, to: &str, staged_path: &str) -> String {
+    format!(
+        "[update] launch_attempt pid={pid} to={to} path={}",
+        launch_log_path(staged_path)
+    )
+}
+
 /// 去掉 Win32 扩展路径的 `\\?\` 前缀（仅盘符形式）。
 ///
 /// `GetFinalPathNameByHandleW` 常返回 `\\?\C:\…`；生产侧 `is_file` 走 `safe_fs`，
@@ -144,6 +164,23 @@ mod tests {
     use super::*;
 
     const EXE: &str = r"C:\Users\me\AppData\Local\Clash Assist\clash-assist.exe";
+
+    #[test]
+    fn launch_log_path_strips_only_verbatim_prefix() {
+        let p = r"C:\Users\Me\AppData\Local\ClashAssist\updates\0123456789abcdef0123456789abcdef\setup-0123456789abcdef.exe";
+        assert_eq!(launch_log_path(p), p);
+        assert_eq!(launch_log_path(&format!(r"\\?\{p}")), p);
+        assert_eq!(
+            launch_log_path(r"\\?\UNC\srv\share\a b\Setup.exe"),
+            r"\\srv\share\a b\Setup.exe"
+        );
+        // 不改大小写、不换分隔符、不 trim
+        assert_eq!(launch_log_path(" C:/X/Y.exe "), " C:/X/Y.exe ");
+        assert_eq!(
+            launch_attempt_line(4242, "0.3.1", &format!(r"\\?\{p}")),
+            format!("[update] launch_attempt pid=4242 to=0.3.1 path={p}")
+        );
+    }
 
     fn id(p: &str) -> Option<String> {
         Some(p.to_string())
