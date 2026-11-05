@@ -513,6 +513,13 @@ fn launch_blocking(staged: Staged, root: &Path) -> Result<ChildFate, String> {
         drop(staged);
         return fail(&dir, e);
     }
+    // 全部校验（下载时的 size / digest / PE 版本，启动前的 semver 复核）都已通过，紧接着就是 CreateProcess。
+    // 这一行只证明「尝试启动」，e2e 用它与 4688 的映像路径逐字节比较（docs/windows-updater.md「成功路径的证据」）。
+    crate::append_app_log(&install::launch_attempt_line(
+        std::process::id(),
+        &staged.version,
+        &staged.path.to_string_lossy(),
+    ));
     // S-7：CreateProcess，不经 ShellExecute（不走外壳的 SmartScreen 检查路径）。
     let spawned = std::process::Command::new(&staged.path)
         .args(["/S", "/UPDATE", "/R"])
