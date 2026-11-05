@@ -149,7 +149,7 @@ function Get-ProcessCreations([datetime]$since) {
   $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688; StartTime = $since } -ErrorAction SilentlyContinue)
   foreach ($e in $ev) {
     $x = [xml]$e.ToXml(); $d = @{}
-    foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = [string]$n.'#text' }
+    foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = [string]$n.InnerText }
     [pscustomobject]@{
       Time = $e.TimeCreated; Image = $d['NewProcessName']; CommandLine = $d['CommandLine']
       Pid = [Convert]::ToInt32($d['NewProcessId'], 16); ParentPid = [Convert]::ToInt32($d['ProcessId'], 16)
@@ -217,7 +217,7 @@ function Invoke-RejectCase([string]$from, [string]$tag, [string]$asset, [string]
     Start-Sleep -Seconds 5
     $app.Refresh()
     if ($app.HasExited) { $e += "旧进程退出了（退出码 $($app.ExitCode)），失败时应保持运行" } else { Write-Host "  旧进程 PID $($app.Id) 仍在运行" }
-    $gets = Get-AssetGets $srv
+    $gets = @(Get-AssetGets $srv)
     Write-Host "  资产下载请求 $($gets.Count) 次"
     if ($expectDownload -and $gets.Count -ne 1) { $e += "应下载安装包 1 次，实际 $($gets.Count) 次" }
     if (-not $expectDownload -and $gets.Count -ne 0) { $e += "不应下载安装包，实际 $($gets.Count) 次" }
@@ -332,7 +332,8 @@ try {
     $e = @()
     if (Read-UninstallKey) { return @('前置条件：不应有安装版') }
     if (-not $script:AuditOk) { $e += '进程创建审计不可用，无法证明安装程序未运行' }
-    $pexe = @(Get-ChildItem -LiteralPath $portableDir -Filter '*.exe' -File)[0].FullName
+    $pexe = @(Get-ChildItem -LiteralPath $portableDir -Filter '*.exe' -File) | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $pexe) { return @("$portableDir 中没有便携版 exe") }
     $srv = Start-Release 'portable-one-click' 'v0.3.1' $d1.Setup 'Happy'
     $off = Get-LogLength; $t0 = Get-Date; $app = $null
     try {
@@ -344,7 +345,7 @@ try {
       if ($auto -notmatch 'result=no_one_click reason=portable$') { $e += "e2e auto 结果不符：$auto" }
       Start-Sleep -Seconds 5; $app.Refresh()
       if ($app.HasExited) { $e += '便携版进程退出了' }
-      if ((Get-AssetGets $srv).Count) { $e += '便携版下载了安装包' }
+      if (@(Get-AssetGets $srv).Count) { $e += '便携版下载了安装包' }
       $runs = @(Get-InstallerRuns $t0); if ($runs.Count) { $e += "安装程序被运行了：$($runs[0].Image)" }
       if (Test-Path -LiteralPath $Marker) { $e += '写入了 pending 标记' }
       if (Read-UninstallKey) { $e += '出现了安装版' }
@@ -355,6 +356,29 @@ try {
   # ----- 已装 0.3.0：拒绝类用例 -----
   $code = Invoke-Setup $d0.Setup @('/S')
   if ($code -ne 0) { throw "安装 0.3.0 失败（$code）" }
+  # 安装版必须被客户端判为 nsis（S-10）；否则后续一键更新类用例都无意义。这里先记录客户端判定依据的原始状态。
+  Invoke-Named 'install-kind-nsis' {
+    $e = @()
+    $k = Get-Item -LiteralPath $UninstKey
+    foreach ($v in 'InstallLocation', 'MainBinaryName', 'DisplayVersion', 'UninstallString') {
+      Write-Host ("  {0} = [{1}] {2}" -f $v, $k.GetValueKind($v), $k.GetValue($v, $null, 'DoNotExpandEnvironmentNames'))
+    }
+    $i = Get-Installed
+    $un = Join-Path $i.Dir 'uninstall.exe'
+    foreach ($f in $i.Exe, $un, $i.Dir) {
+      $it = Get-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+      Write-Host ("  {0}：{1}" -f $f, $(if ($it) { "Attributes=$($it.Attributes) LinkType=$($it.LinkType)" } else { '不存在' }))
+    }
+    $srv = Start-Release 'install-kind-nsis' 'v0.3.0' $d0.Setup 'Happy'
+    $off = Get-LogLength; $app = $null
+    try {
+      $app = Start-App $i.Exe $srv
+      $check = Wait-LogLine $off '\[update\] check current='
+      Write-Host "  $check"
+      if ($check -notmatch 'install_kind=nsis ') { $e += "从安装目录启动的 0.3.0 被判为非 nsis：$check" }
+    } finally { if ($app) { Stop-Tree $app.Id }; Stop-AllApps; Stop-Release $srv }
+    $e
+  }
   Invoke-Named 'wrong-digest' { Invoke-RejectCase '0.3.0' 'v0.3.1' $d1.Setup 'WrongDigest' 'result=error step=download' 'digest_mismatch' $true 'one_click=true reason=-$' }
   Invoke-Named 'wrong-size' { Invoke-RejectCase '0.3.0' 'v0.3.1' $d1.Setup 'WrongSize' 'result=error step=download' 'size_mismatch' $true 'one_click=true reason=-$' }
   # C-3：immutable 不是 true → check 阶段就拒绝，不下载
@@ -376,7 +400,7 @@ try {
       $launched = Wait-LogLine $off '\[update\] installer launched to=0\.3\.1 fate='
       if (-not $launched) { $e += '没有 installer launched to=0.3.1 行' } else { Write-Host "  $launched" }
       $lines = Get-LogSince $off
-      $check = @($lines | Where-Object { $_ -match '\[update\] check current=' })[0]
+      $check = @($lines | Where-Object { $_ -match '\[update\] check current=' }) | Select-Object -First 1
       if ($check -notmatch 'current=0\.3\.0 latest=0\.3\.1 update_available=true install_kind=nsis one_click=true reason=-$') { $e += "check 行不符：$check" }
       if (-not @($lines | Where-Object { $_ -match '\[update\] e2e auto result=launched$' }).Count) { $e += '没有 e2e auto result=launched 行' }
       # 只看旧进程在启动安装程序之前写的行（/R 拉起的 0.3.1 继承了 e2e 环境变量，会再检查一次并记 up_to_date）
@@ -400,7 +424,7 @@ try {
       if (-not $new) { $e += '安装后没有新的 clash-assist.exe 进程（/R）' }
       elseif ((Get-Item -LiteralPath $new.Path).VersionInfo.ProductVersion -cne '0.3.1') { $e += "新进程 ProductVersion 不是 0.3.1" }
       # 服务器：安装包恰好下载 1 次、字节数与 size 一致
-      $gets = Get-AssetGets $srv
+      $gets = @(Get-AssetGets $srv)
       if ($gets.Count -ne 1 -or $gets[0].status -ne 200 -or [long]$gets[0].bytes -ne $srv.Size) { $e += "安装包下载记录不符：$($gets | ConvertTo-Json -Compress)" }
       # 4688：安装程序是核心暂存的那个文件，由旧进程直接 CreateProcess，参数 /S /UPDATE /R
       Start-Sleep -Seconds 2
