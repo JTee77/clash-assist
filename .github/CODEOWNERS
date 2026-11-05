@@ -1,3 +1,9 @@
-# 发布与安装器相关文件需要仓库所有者评审（#57 跟进，M4d）。
+# 发布、CI 与安装器相关文件的所有者（#57 跟进，M4d；CI 加固）。
+# 注意：只有在仓库设置（分支保护 / ruleset）里开启「Require review from Code Owners」后才会强制审查；
+# 未开启时 GitHub 只会自动请求所有者评审。
 /src-tauri/windows/ @JTee77
 /.github/workflows/release-windows.yml @JTee77
+/.github/workflows/** @JTee77
+/scripts/check-*.py @JTee77
+/scripts/scan-nsis-rmdir.ps1 @JTee77
+/.github/CODEOWNERS @JTee77

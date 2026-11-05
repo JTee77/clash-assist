@@ -205,7 +205,7 @@ jobs:
           exit $LASTEXITCODE
 
       # 冒烟失败时也上传：stdout/stderr、Application 事件、应用日志。只保留 3 天。
-      # 仓库公开，常规诊断 artifact 不得含内存转储（M4d）：这里排除 dumps/ 与所有 .dmp。
+      # 仓库公开，常规诊断 artifact 不得含内存转储（M4d）：这里排除 dumps/** 与所有 .dmp。
       - name: 上传冒烟诊断
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -213,7 +213,7 @@ jobs:
           name: smoke-diagnostics
           path: |
             ${{ runner.temp }}/smoke-diag/
-            !${{ runner.temp }}/smoke-diag/dumps/
+            !${{ runner.temp }}/smoke-diag/dumps/**
             !${{ runner.temp }}/smoke-diag/**/*.dmp
           if-no-files-found: ignore
           retention-days: 3
