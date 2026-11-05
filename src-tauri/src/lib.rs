@@ -11,6 +11,9 @@ mod dns;
 mod dns_query;
 #[cfg(windows)]
 mod dns_windows;
+// M5 e2e：测试构建标记（S-R4）；release 构建不启用 updater-e2e，该模块不存在。
+#[cfg(feature = "updater-e2e")]
+mod e2e_marker;
 mod http_body;
 mod mihomo;
 mod platform;
@@ -917,6 +920,8 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
 }
 
 pub fn run() {
+    #[cfg(feature = "updater-e2e")]
+    e2e_marker::touch();
     install_panic_log_hook();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]

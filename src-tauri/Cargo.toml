@@ -60,6 +60,12 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_RemoteDesktop",        # WTSEnumerateProcessesExW（规则 4 的 foreign-user 判定，C-4 / F4）
 ] }
 
+[features]
+# 仅 .github/workflows/updater-e2e.yml 使用；release 构建禁止启用（windows-plan r4 §2.4 / §3，M-7）。
+# 当前只编进测试构建标记 CLASH_ASSIST_UPDATER_E2E_BUILD（src/e2e_marker.rs，S-R4）；
+# 端点覆盖 CLASH_ASSIST_E2E_API 与本地下载白名单由 M5 更新器核心接入。
+updater-e2e = []
+
 [profile.release]
 codegen-units = 1
 lto = true
