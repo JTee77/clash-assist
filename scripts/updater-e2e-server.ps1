@@ -32,9 +32,9 @@
 
   -SelfTest 不依赖 Windows：用夹具跑全部改写用例并逐字段比对，再起一个 -Serve 子进程验证请求处理。
 
-  客户端如何指向本服务器（环境变量名、下载 URL 的路径形状）属于 M5 更新器核心的接口（Pit）。
-  这里默认按 GitHub 的形状生成 browser_download_url：<BaseUrl><DownloadPath>/<tag>/<name>，
-  DownloadPath 默认 /JTee77/clash-assist/releases/download，待核心定稿后再对齐。
+  客户端接口见 docs/windows-updater.md「e2e 接口约定」：CLASH_ASSIST_E2E_API=http://127.0.0.1:<port>/release.json，
+  browser_download_url 必须逐字节等于 http://127.0.0.1:<同一端口>/JTee77/clash-assist/releases/download/<tag>/<name>，
+  即本脚本的默认 DownloadPath。客户端不跟随本地 3xx，本脚本也不发重定向。
 
 .EXAMPLE
   pwsh scripts/updater-e2e-server.ps1 -Replay -Fixture src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json `
