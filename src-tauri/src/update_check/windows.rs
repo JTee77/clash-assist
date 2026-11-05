@@ -647,7 +647,7 @@ mod tests {
         let root = temp_root("exit-nonzero");
         let dir = prepare_update_dir(&root).unwrap();
         let exe = PathBuf::from(std::env::var("SystemRoot").unwrap()).join(r"System32\xcopy.exe");
-        let reader = std::fs::File::open(&exe).unwrap();
+        let reader = crate::safe_fs::open_read_share_read(&exe).unwrap();
         let staged = Staged {
             dir: dir.clone(),
             path: exe,
@@ -661,8 +661,11 @@ mod tests {
         assert!(err.ends_with("未完成更新"), "{err}");
         let shaped: tauri::ipc::InvokeError = err.clone().into();
         assert_eq!(shaped.0, serde_json::Value::String(err));
-        assert!(!pending::marker_path(&root).exists(), "标记应当场删除");
-        assert!(!dir.exists(), "工作目录应当场删除");
+        assert!(
+            !crate::safe_fs::exists(&pending::marker_path(&root)),
+            "标记应当场删除"
+        );
+        assert!(!crate::safe_fs::exists(&dir), "工作目录应当场删除");
         let _ = std::fs::remove_dir_all(&root);
     }
 
