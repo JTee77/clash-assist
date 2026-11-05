@@ -6,6 +6,9 @@ name: Updater e2e (Windows)
 # 客户端接口见 docs/windows-updater.md「e2e 接口约定」（CLASH_ASSIST_E2E_API / CLASH_ASSIST_E2E_AUTO_UPDATE / app.log 信号）。
 # 产物只用于测试：不 attest、不建 release、不使用任何 secret；release-windows.yml 绝不启用 updater-e2e。
 on:
+  # 探针分支专用（不合入 #61）：验证 install_kind 修正后其余用例的结果
+  push:
+    branches: [win/m5-e2e-probe-installkind]
   workflow_dispatch: {}
   pull_request:
     paths:

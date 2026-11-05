@@ -162,7 +162,9 @@ pub fn install_kind() -> InstallKind {
         bin.as_deref(),
         exe.as_deref(),
         |p| final_path(Path::new(p)),
-        |p| crate::safe_fs::is_file(Path::new(p)),
+        // 探针（#61 e2e，未经 Pit 审查）：final_path 返回 `\\?\C:\…`，safe_fs 只接受盘符路径，
+        // 直接传入会让 uninstall.exe 检查恒为 false、安装版被判为 portable。
+        |p| crate::safe_fs::is_file(Path::new(p.strip_prefix(r"\\?\").unwrap_or(p))),
     )
 }
 
