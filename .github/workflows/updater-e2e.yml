@@ -198,7 +198,10 @@ jobs:
       # audit-control、build-versions、sr4-marker、test-installer-isolation、server-windows、installer-downgrade-rejected、
       # portable-one-click、install-kind-nsis、wrong-digest、wrong-size、immutable-false、pe-mismatch、installer-exit-nonzero、
       # frontend-fallback-contract（layered，不计为通过）、happy、downgrade、semver-not-newer、semver-same-version
+      # 步骤级超时（短于 job 的 45 分钟）：脚本内的看门狗兜不住时由这里结束，之后的「上传用例结果」仍会运行
+      #（!cancelled()；步骤超时记为失败而非取消），progress.log 能看出卡在哪个用例。
       - name: 端到端用例
+        timeout-minutes: 25
         run: |
           ./scripts/updater-e2e-cases.ps1 -Dist030 e2e/0.3.0 -Dist031 e2e/0.3.1 `
             -Fixture src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json `
@@ -214,6 +217,7 @@ jobs:
           path: |
             ${{ runner.temp }}/e2e-results/results.json
             ${{ runner.temp }}/e2e-results/app.log
+            ${{ runner.temp }}/e2e-results/progress.log
             ${{ runner.temp }}/e2e-results/requests-*.jsonl
             ${{ runner.temp }}/e2e-results/root-*/release.json
           if-no-files-found: warn

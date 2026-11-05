@@ -28,7 +28,10 @@ param(
   [Parameter(Mandatory)][string]$ExitNonzeroInstaller,
   [Parameter(Mandatory)][string]$ResultsDir,
   [int]$UninstallTimeoutSeconds = 120,
-  [int]$AppSignalTimeoutSeconds = 90
+  [int]$AppSignalTimeoutSeconds = 90,
+  # 看门狗：安装 / 卸载 / 辅助进程的单次等待上限，以及单个用例的总耗时预算（超出即判失败）
+  [int]$ProcessTimeoutSeconds = 240,
+  [int]$CaseBudgetSeconds = 600
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -60,14 +63,25 @@ function Add-Result([string]$name, [string]$status, [string]$detail) {
   elseif ($status -ne 'pass') { Write-Host "::error::$name：$detail" }
 }
 # 用例脚本块返回失败原因的列表（空 = 通过）；抛异常算失败。Write-Host 的证据行留在日志里。
+# 进度行：带时间戳写到控制台，并追加到 -ResultsDir\progress.log（随结果 artifact 上传，便于定位卡在哪个用例）
+function Write-Progress2([string]$msg) {
+  $line = "[{0}] {1}" -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'), $msg
+  Write-Host $line
+  if ($script:ProgressLog) { Add-Content -LiteralPath $script:ProgressLog -Value $line -Encoding utf8 }
+}
 function Invoke-Case([string]$name, [scriptblock]$body) {
   Write-Host "`n=== $name"
+  Write-Progress2 "case-start $name"
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $status = 'fail'
   try {
     $errs = @(& $body | Where-Object { $_ -is [string] -and $_ })
-    if ($errs.Count -eq 0) { Add-Result $name 'pass' '通过' } else { Add-Result $name 'fail' ($errs -join '；') }
+    if ($sw.Elapsed.TotalSeconds -gt $CaseBudgetSeconds) { $errs += "用例耗时 $([int]$sw.Elapsed.TotalSeconds) 秒，超过预算 $CaseBudgetSeconds 秒" }
+    if ($errs.Count -eq 0) { Add-Result $name 'pass' '通过'; $status = 'pass' } else { Add-Result $name 'fail' ($errs -join '；') }
   } catch {
     Add-Result $name 'fail' "异常：$($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)"
   }
+  Write-Progress2 "case-end $name status=$status elapsed=$([int]$sw.Elapsed.TotalSeconds)s"
 }
 
 function Get-Dist([string]$dir, [string]$ver) {
@@ -90,14 +104,33 @@ function Get-Installed {
 function Test-InstalledIs([string]$ver) { $i = Get-Installed; [bool]($i -and $i.Version -ceq $ver -and $i.Pe -ceq $ver) }
 function Format-Installed { $i = Get-Installed; if ($i) { "DisplayVersion=$($i.Version) ProductVersion=$($i.Pe)" } else { '未安装' } }
 
+# 有界等待：$timeout 秒内没退出 → 记录进程树诊断、结束整个进程树、抛异常（所在用例判失败，绝不计为通过）。
+# 不用 Start-Process -Wait：它没有超时，并且会一直等到所有后代进程退出。
+function Wait-ProcessBounded([Diagnostics.Process]$p, [string]$what, [int]$timeout = $ProcessTimeoutSeconds) {
+  if ($p.WaitForExit($timeout * 1000)) { $p.WaitForExit(); return $p.ExitCode }
+  $diag = @()
+  try {
+    $tree = @($p.Id) + @(Get-Descendants $p.Id)
+    $procs = @(Get-CimInstance Win32_Process -OperationTimeoutSec 20 -ErrorAction SilentlyContinue | Where-Object { $_.ProcessId -in $tree })
+    $diag = @($procs | ForEach-Object { "PID $($_.ProcessId) 父 $($_.ParentProcessId) $($_.Name) [$($_.CommandLine)]" })
+  } catch { $diag = @("诊断失败：$($_.Exception.Message)") }
+  foreach ($d in $diag) { Write-Host "  看门狗：$d" }
+  try { & "$env:SystemRoot\System32\taskkill.exe" /T /F /PID $p.Id 2>&1 | ForEach-Object { Write-Host "  taskkill：$_" } }
+  catch { Write-Host "  taskkill 失败：$($_.Exception.Message)" }
+  Stop-Tree $p.Id
+  Write-Progress2 "watchdog-timeout $what pid=$($p.Id) after ${timeout}s"
+  throw "看门狗：$what 超过 $timeout 秒未退出，已结束其进程树（$($diag -join ' / ')）"
+}
 function Invoke-Setup([string]$setup, [string[]]$argv) {
-  $p = Start-Process -FilePath $setup -ArgumentList $argv -Wait -PassThru
-  Write-Host "  $(Split-Path -Leaf $setup) $($argv -join ' ') → 退出码 $($p.ExitCode)"
-  $p.ExitCode
+  $p = Start-Process -FilePath $setup -ArgumentList $argv -PassThru
+  $null = $p.Handle  # 先取句柄，进程退出后才能读到 ExitCode
+  $code = Wait-ProcessBounded $p "$(Split-Path -Leaf $setup) $($argv -join ' ')"
+  Write-Host "  $(Split-Path -Leaf $setup) $($argv -join ' ') → 退出码 $code"
+  $code
 }
 
 function Get-Descendants([int]$RootPid) {
-  $all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId)
+  $all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId -OperationTimeoutSec 20)
   $out = [Collections.Generic.List[int]]::new(); $q = [Collections.Generic.Queue[int]]::new(); $q.Enqueue($RootPid)
   while ($q.Count) { $p = $q.Dequeue(); foreach ($c in $all | Where-Object { $_.ParentProcessId -eq $p -and $_.ProcessId -ne $p }) { $out.Add([int]$c.ProcessId); $q.Enqueue([int]$c.ProcessId) } }
   $out
@@ -117,7 +150,11 @@ function Uninstall-All {
   $i = Get-Installed
   if (-not $i) { return $true }
   $u = Join-Path $i.Dir 'uninstall.exe'
-  if (Test-Path -LiteralPath $u) { Start-Process -FilePath $u -ArgumentList '/S' -Wait | Out-Null }
+  if (Test-Path -LiteralPath $u) {
+    $p = Start-Process -FilePath $u -ArgumentList '/S' -PassThru
+    $null = $p.Handle
+    [void](Wait-ProcessBounded $p 'uninstall.exe /S')
+  }
   $deadline = (Get-Date).AddSeconds($UninstallTimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
     if (-not (Read-UninstallKey) -and -not (Test-Path -LiteralPath $u)) { return $true }
@@ -293,6 +330,8 @@ function Invoke-Named([string]$name, [scriptblock]$body) { $script:CurrentCase =
 # ---------- 准备 ----------
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 $ResultsDir = (Resolve-Path -LiteralPath $ResultsDir).Path
+$script:ProgressLog = Join-Path $ResultsDir 'progress.log'
+Write-Progress2 "harness-start ProcessTimeout=${ProcessTimeoutSeconds}s CaseBudget=${CaseBudgetSeconds}s"
 if (Read-UninstallKey) { Write-Host "::error::本机已安装 $ProductName（$UninstKey 存在），拒绝运行"; exit 2 }
 if (Test-Path -LiteralPath $AppDataDir) { Write-Host "::error::$AppDataDir 已存在，拒绝运行"; exit 2 }
 foreach ($n in $E2eEnv) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
@@ -308,14 +347,16 @@ try {
   Invoke-Named 'audit-control' {
     $t0 = (Get-Date).AddSeconds(-1)
     $tok = [Guid]::NewGuid().ToString('N')
-    $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @('/c', "exit 0 & rem $tok") -Wait -PassThru -WindowStyle Hidden
+    $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @('/c', "exit 0 & rem $tok") -PassThru -WindowStyle Hidden
+    $null = $p.Handle; [void](Wait-ProcessBounded $p 'cmd.exe（审计对照）' 30)
     Start-Sleep -Seconds 2
     $hit = @(Get-ProcessCreations $t0 | Where-Object { $_.Pid -eq $p.Id -and $_.Image -match '\\cmd\.exe$' })
     if (-not $hit.Count) { return @('Security 日志中没有这次 cmd.exe 的 4688 事件（审计未开启？）') }
     if ($hit[0].CommandLine -notmatch $tok) { return @("4688 事件没有记录命令行（CommandLine=$($hit[0].CommandLine)）") }
     Write-Host "  4688：$($hit[0].Image) [$($hit[0].CommandLine)] 父进程 $($hit[0].ParentPid)"
     # 进程终止审计（4689）的正向对照：退出码 5 必须被记录
-    $p2 = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @('/c', "exit 5 & rem $tok") -Wait -PassThru -WindowStyle Hidden
+    $p2 = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @('/c', "exit 5 & rem $tok") -PassThru -WindowStyle Hidden
+    $null = $p2.Handle; [void](Wait-ProcessBounded $p2 'cmd.exe（终止审计对照）' 30)
     Start-Sleep -Seconds 2
     $term = @(Get-ProcessTerminations $t0 | Where-Object { $_.Pid -eq $p2.Id -and $_.Image -match '\\cmd\.exe$' })
     if (-not $term.Count) { return @('Security 日志中没有 cmd.exe 的 4689 事件（进程终止审计未开启？）') }
@@ -377,10 +418,10 @@ try {
     foreach ($case in 'Happy', 'WrongDigest', 'WrongSize', 'ImmutableFalse') {
       $srv = Start-Release "server-$case" 'v0.3.1' $d1.Setup $case
       try {
-        $j = Invoke-RestMethod -Uri $srv.Api
+        $j = Invoke-RestMethod -Uri $srv.Api -TimeoutSec 30
         $a = @($j.assets)
         $tmp = Join-Path $ResultsDir "dl-$case.exe"
-        Invoke-WebRequest -Uri $a[0].browser_download_url -OutFile $tmp
+        Invoke-WebRequest -Uri $a[0].browser_download_url -OutFile $tmp -TimeoutSec 120
         $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash.ToLowerInvariant(); Remove-Item -LiteralPath $tmp -Force
         if ($got -ne $srv.Sha256) { $e += "$case：下载内容不一致" }
         if (($a[0].digest -eq "sha256:$($srv.Sha256)") -ne ($case -ne 'WrongDigest')) { $e += "$case：digest=$($a[0].digest)" }
@@ -649,6 +690,7 @@ try {
   Add-Result 'harness' 'fail' "用例框架异常：$($_.Exception.Message) @ $($_.InvocationInfo.ScriptLineNumber)"
 } finally {
   Write-Host "`n=== 清理"
+  Write-Progress2 'harness-cleanup'
   if (Test-Path -LiteralPath $AppLog) { Copy-Item -LiteralPath $AppLog -Destination (Join-Path $ResultsDir 'app.log') -Force -ErrorAction SilentlyContinue }
   [void](Uninstall-All)
   Remove-Item -LiteralPath $portableDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -665,4 +707,5 @@ $fail = @($results | Where-Object { $_.status -notin 'pass', 'layered' }).Count
 $pass = @($results | Where-Object status -eq 'pass').Count
 $layered = @($results | Where-Object status -eq 'layered').Count
 Write-Host "`nupdater-e2e：通过 $pass，失败 $fail，分层验收（不在此计为通过）$layered"
+Write-Progress2 "harness-end pass=$pass fail=$fail layered=$layered"
 exit $(if ($fail) { 1 } else { 0 })
