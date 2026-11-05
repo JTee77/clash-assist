@@ -162,7 +162,8 @@ pub fn install_kind() -> InstallKind {
         bin.as_deref(),
         exe.as_deref(),
         |p| final_path(Path::new(p)),
-        |p| crate::safe_fs::is_file(Path::new(p)),
+        // 与 classify_install 内剥前缀双保险：safe_fs 只接受 X:\…（#61 e2e）
+        |p| crate::safe_fs::is_file(Path::new(install::strip_win32_verbatim_prefix(p))),
     )
 }
 
