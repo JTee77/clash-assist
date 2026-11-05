@@ -83,6 +83,8 @@
    - 每次拒绝或失败写一行：`[update] error code=<码> <说明>`。
    - check：`[update] check current=… latest=… update_available=… install_kind=… one_click=… reason=<码|->`
    - 触发结果：`[update] e2e auto result=launched|no_one_click reason=<码>|error step=check|download|launch …`
+   - 尝试启动：`[update] launch_attempt pid=<当前进程 PID> to=<目标版本> path=<暂存安装程序路径>`。全部校验（size、digest、PE 版本、启动前 semver 复核）通过并写好标记之后、紧接 CreateProcess 之前写这一行。它只证明「尝试启动」，不证明 CreateProcess 成功，更不证明升级成功；不含 URL 或任何凭据。
+     - **路径规范化**（`install::launch_log_path`）：只去掉 Win32 verbatim 前缀，`\\?\UNC\<x>` 变为 `\\<x>`，`\\?\<x>` 变为 `<x>`；其余字节原样保留，不改大小写、不换分隔符、不 trim。e2e 对 4688 的 `NewProcessName` 做同样处理后与它逐字节比较。
    - 成功启动：`[update] installer launched to=<版本> fate=StillRunning|ExitedOk，本进程退出`。这一行在 2 s 观察期结束后才写，安装程序可能在此之前结束本进程，所以**不保证出现**，也不能作为升级成功的证据（见下文「成功路径的证据」）。
 
    | 情形 | 码 | 出现在 |
@@ -125,6 +127,7 @@
 
 1. 进程创建审计（Security 4688，含命令行）中恰好有 1 次安装程序启动，并且：
    - 映像为 `%LOCALAPPDATA%\ClashAssist\updates\<32 位十六进制>\setup-<16 位十六进制>.exe`；
+   - app.log 中恰好有一行 `launch_attempt`，其 `pid` 是旧进程、`to=0.3.1`，`path` 与 4688 映像按上面的规则规范化后逐字节相等；
    - 父进程是旧应用进程；
    - 命令行逐字为 `"<该路径>" /S /UPDATE /R`；
    - 启动时刻早于旧进程退出。
@@ -135,6 +138,24 @@
 6. 安装包只下载一次，字节数等于 `size`；旧进程在启动安装程序之前没有 `[update] error code=` 行；`e2e auto result=launched`。
 
 在 CreateProcess 成功之前失败的情况（例如 `installer_spawn_failed`、`no_staged`）满足不了第 1 条，因此不可能被判为通过。`installer launched` 行如果出现，只作记录。
+
+### 安装程序非零退出（installer_exit_nonzero）与测试安装程序
+
+`installer-exit-nonzero` 用例经应用的完整路径（check → 下载 → size / digest / PE 校验 → 持句柄 CreateProcess）启动一个**测试安装程序**，验证核心在 2 s 观察期内看到非零退出后的处理。没有生产旁路，也没有任意路径覆盖：测试安装程序和真实安装包一样，由回放的 release.json 以真实 size 与 SHA-256 提供。
+
+- 来源：`scripts/updater-e2e-exit-nonzero.nsi`。`ProductVersion` 逐字为目标版本（`0.3.1`）。`.onInit` 第一条指令就设置退出码 42 并退出，不结束任何进程，不写注册表，也不改动任何文件。版本资源中含唯一标记 `CLASH_ASSIST_E2E_TEST_INSTALLER_EXIT_NONZERO`。
+- 隔离：
+  - 只在 `updater-e2e.yml` 的 e2e job 中用 runner 的 makensis 现场编译到 `runner.temp/e2e-test-installer`，不上传；
+  - selftest job 的 `scripts/updater-e2e-isolation-check.py` 固定：只有白名单文件可以引用它，`release-windows.yml` 与 `tauri*.conf.json` 不引用它，upload-artifact 不上传它；
+  - 运行时，`test-installer-isolation` 用例确认真实安装包、便携 zip 的全部文件中都没有这个标记。
+- 断言：
+  - 4688 中恰好创建一次，父进程是旧进程，映像与 `launch_attempt` 一致，命令行为 `"<路径>" /S /UPDATE /R`；
+  - 4689 记录退出码 42，存活时间不到 2 s；
+  - `[update] 安装程序：ExitedErr(Some(42))`，并且恰好一行 `[update] error code=installer_exit_nonzero`，`e2e auto result=error step=launch`；
+  - 没有 `installer launched` 行；旧进程 5 s 后仍在运行；
+  - 版本仍为 0.3.0，安装目录内容（文件、大小、时间、SHA-256）不变；
+  - 标记与工作目录都已当场删除；安装包只下载一次。
+- **阻塞（未验收）**：没有可从进程外安全观察的「回落到发布页」状态。前端 `useUpdateFlow` 在 relaunch 失败时调用 `openReleasePage`，但无界面触发不经过前端，核心只写 `e2e auto result=error step=launch`。用例 `installer-exit-nonzero-fallback` 如实记为失败，等核心或前端提供可观察接口后再验收。
 
 另外，降级由两层拦住：
 
