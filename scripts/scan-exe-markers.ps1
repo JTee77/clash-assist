@@ -13,7 +13,8 @@
     - Release（tag / 演练的 release exe）：CLASH_ASSIST_FAKE_LATEST 与 CLASH_ASSIST_UPDATER_E2E_BUILD 出现任何一个都失败
       （M5 起 FAKE_LATEST 只在 debug 与 updater-e2e 构建中编译，M-7）；
     - Debug（ci.yml 的 debug exe）：允许 FAKE_LATEST；出现 E2E 标记失败（CI 不得启用 updater-e2e feature）；
-    - E2E（updater-e2e.yml 的 `--features updater-e2e` 构建）：必须含 E2E 标记（证明测的是 e2e 构建），允许 FAKE_LATEST。
+    - E2E（updater-e2e.yml 的 `--features updater-e2e` 构建）：必须含 UTF-8 形式的 E2E 标记（Rust 字节字面量；
+      只有 UTF-16LE 形式不算），证明测的是 e2e 构建、标记没被优化掉或拼错；允许 FAKE_LATEST。
 
   用法：pwsh scripts/scan-exe-markers.ps1 -Exe <path> -Build Release|Debug|E2E
         pwsh scripts/scan-exe-markers.ps1 -SelfTest
@@ -59,8 +60,8 @@ function Invoke-Scan([byte[]]$bytes, [string]$build) {
 
   $hits = Find-Marker $hay $E2eMarker
   if ($build -eq 'E2E') {
-    if ($hits.Count) { $lines.Add("含 $E2eMarker（$($hits -join '、')），确认是 updater-e2e 构建") }
-    else { $lines.Add("::error::E2E 构建中找不到 $E2eMarker：没有启用 updater-e2e feature，e2e 结果无效"); $code = 1 }
+    if (Test-Utf8 $hay $E2eMarker) { $lines.Add("含 $E2eMarker（$($hits -join '、')），确认是 updater-e2e 构建") }
+    else { $lines.Add("::error::E2E 构建中找不到 UTF-8 字符串 $E2eMarker（标记被优化掉、拼错，或没有启用 updater-e2e feature），e2e 结果无效"); $code = 1 }
   } elseif ($hits.Count) {
     $lines.Add("::error::$build 构建中含 $E2eMarker（$($hits -join '、')），只有 updater-e2e.yml 可以启用 updater-e2e feature"); $code = 1
   } else { $lines.Add("不含 $E2eMarker（UTF-8 / UTF-16LE）") }
@@ -105,6 +106,8 @@ if ($SelfTest) {
     @{ Name = 'Debug 含 E2E 标记 UTF-16LE 失败'; Parts = @($c8, $c16, $e16); Build = 'Debug'; Want = 1 }
     @{ Name = 'E2E 含 E2E 标记 + FAKE_LATEST 通过'; Parts = @($c8, $c16, $e8, $f8); Build = 'E2E'; Want = 0 }
     @{ Name = 'E2E 缺 E2E 标记失败'; Parts = @($c8, $c16, $f8); Build = 'E2E'; Want = 1 }
+    @{ Name = 'E2E 标记只有 UTF-16LE 形式不算'; Parts = @($c8, $c16, $e16); Build = 'E2E'; Want = 1 }
+    @{ Name = 'E2E 拼错的标记不算'; Parts = @($c8, $c16, $u8.GetBytes('CLASH_ASSIST_UPDATER_E2E_BUIL')); Build = 'E2E'; Want = 1 }
   )
   $fail = 0
   foreach ($c in $cases) {

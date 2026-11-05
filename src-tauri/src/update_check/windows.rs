@@ -41,8 +41,9 @@ use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_P
 use super::install::{self, ChildFate};
 use super::pending::{self, PendingMarker};
 use super::{
-    active_local_proxy_port_async, check, is_newer, resolve_download_target, sha256_of_reader,
-    stream_asset_into, AssetKind, DownloadLimits, InstallKind, ProgressCallback, ReleaseAsset,
+    active_local_proxy_port_async, check, code, fail as coded, is_newer, resolve_download_target,
+    sha256_of_reader, stream_asset_into, AssetKind, DownloadLimits, InstallKind, ProgressCallback,
+    ReleaseAsset,
 };
 use crate::mihomo::trust::Who;
 use crate::win::sid::OwnedSid;
@@ -351,8 +352,9 @@ pub(crate) async fn fetch_and_verify(
         let mut r = open_read_shared_with_retry(&read_path)?;
         let digest = sha256_of_reader(&mut r).map_err(|e| format!("读取安装包失败：{e}"))?;
         if digest != expected {
-            return Err(format!(
-                "安装包 SHA-256 校验不匹配（期望 {expected}，实际 {digest}）"
+            return Err(coded(
+                code::DIGEST_MISMATCH,
+                format!("安装包 SHA-256 校验不匹配（期望 {expected}，实际 {digest}）"),
             ));
         }
         Ok(r)
@@ -415,12 +417,18 @@ pub(crate) fn product_version(path: &Path) -> Option<String> {
 /// 阶段 1：下载最新安装包到私有更新目录并完成全部校验（①②③），保存只读句柄，返回工作目录。
 pub async fn download_and_verify(on_progress: ProgressCallback<'_>) -> Result<String, String> {
     if install_kind() != InstallKind::Nsis {
-        return Err("便携版不支持一键更新，请前往发布页下载".into());
+        return Err(coded(
+            code::PORTABLE,
+            "便携版不支持一键更新，请前往发布页下载",
+        ));
     }
     let info = check(CURRENT).await?;
     let asset: ReleaseAsset = resolve_download_target(&info)?;
     if asset.kind != AssetKind::WinSetupX64 {
-        return Err("最新 Release 中没有 Windows 安装包".into());
+        return Err(coded(
+            code::ASSET_MISSING,
+            "最新 Release 中没有 Windows 安装包",
+        ));
     }
     // 上一次下载但没有启动的安装包：丢弃（重试时重新下载并校验，不复用旧文件）。
     discard_staged();
@@ -445,7 +453,8 @@ pub async fn download_and_verify(on_progress: ProgressCallback<'_>) -> Result<St
         let found = tauri::async_runtime::spawn_blocking(move || product_version(&pv_path))
             .await
             .map_err(|e| format!("读取版本资源异常终止：{e}"))?;
-        install::check_product_version(found.as_deref(), &asset.version)?;
+        install::check_product_version(found.as_deref(), &asset.version)
+            .map_err(|e| coded(code::PE_VERSION_MISMATCH, e))?;
         Ok::<_, String>(reader)
     }
     .await;
@@ -484,7 +493,13 @@ fn launch_blocking(staged: Staged, root: &Path) -> Result<ChildFate, String> {
     if !is_newer(&staged.version, CURRENT) {
         let dir = staged.dir.clone();
         drop(staged);
-        return fail(&dir, format!("拒绝安装：目标版本不比当前版本 {CURRENT} 新"));
+        return fail(
+            &dir,
+            coded(
+                code::NOT_NEWER,
+                format!("拒绝安装：目标版本不比当前版本 {CURRENT} 新"),
+            ),
+        );
     }
     let marker = PendingMarker {
         from: CURRENT.to_string(),
@@ -508,7 +523,15 @@ fn launch_blocking(staged: Staged, root: &Path) -> Result<ChildFate, String> {
     drop(reader);
     let mut child = match spawned {
         Ok(c) => c,
-        Err(e) => return fail(&dir, format!("启动安装程序失败：{e}")),
+        Err(e) => {
+            return fail(
+                &dir,
+                coded(
+                    code::INSTALLER_SPAWN_FAILED,
+                    format!("启动安装程序失败：{e}"),
+                ),
+            )
+        }
     };
     let fate = install::observe_child(
         || child.try_wait().map(|s| s.map(|s| s.code())),
@@ -518,21 +541,35 @@ fn launch_blocking(staged: Staged, root: &Path) -> Result<ChildFate, String> {
     );
     crate::append_app_log(&format!("[update] 安装程序：{fate:?}"));
     match fate {
-        ChildFate::ExitedErr(code) => fail(
+        ChildFate::ExitedErr(exit) => fail(
             &dir,
-            format!(
-                "安装程序退出码 {}（可能是降级被拒绝或被系统拦截），未完成更新",
-                code.map(|c| c.to_string()).unwrap_or_else(|| "未知".into())
+            coded(
+                code::INSTALLER_EXIT_NONZERO,
+                format!(
+                    "安装程序退出码 {}（可能是降级被拒绝或被系统拦截），未完成更新",
+                    exit.map(|c| c.to_string()).unwrap_or_else(|| "未知".into())
+                ),
             ),
         ),
-        ok => Ok(ok),
+        ok => {
+            crate::append_app_log(&format!(
+                "[update] installer launched to={} fate={ok:?}，本进程退出",
+                marker.to
+            ));
+            Ok(ok)
+        }
     }
 }
 
 /// 阶段 3：启动已校验的安装程序（`/S /UPDATE /R`）。成功（观察期内以 0 退出，或 2 s 后仍在运行）
 /// 时本进程退出；失败时清理目录与标记、不退出，由前端提示并给出「前往发布页」。
 pub async fn launch_installer(app: tauri::AppHandle) -> Result<(), String> {
-    let staged = take_staged().ok_or("没有已下载并校验的更新包，请重新点击「一键更新」")?;
+    let staged = take_staged().ok_or_else(|| {
+        coded(
+            code::NO_STAGED,
+            "没有已下载并校验的更新包，请重新点击「一键更新」",
+        )
+    })?;
     let root = crate::platform::app_data_dir().ok_or("无法定位 %LOCALAPPDATA%")?;
     tauri::async_runtime::spawn_blocking(move || launch_blocking(staged, &root))
         .await

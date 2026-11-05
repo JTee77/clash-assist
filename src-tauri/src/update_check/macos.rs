@@ -56,8 +56,9 @@ pub fn verify_sha256_file(path: &Path, expected_digest: Option<&str>) -> Result<
     let mut file = crate::safe_fs::open_read(path).map_err(|e| format!("打开安装包失败：{e}"))?;
     let actual = sha256_of_reader(&mut file).map_err(|e| format!("读取安装包失败：{e}"))?;
     if actual != expected {
-        return Err(format!(
-            "安装包 SHA-256 校验不匹配（期望 {expected}，实际 {actual}）"
+        return Err(super::fail(
+            super::code::DIGEST_MISMATCH,
+            format!("安装包 SHA-256 校验不匹配（期望 {expected}，实际 {actual}）"),
         ));
     }
     Ok(())

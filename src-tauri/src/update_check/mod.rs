@@ -31,6 +31,60 @@ pub const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/JTee77/clash-assist/releases/latest";
 pub const RELEASES_PAGE: &str = "https://github.com/JTee77/clash-assist/releases";
 pub const DOWNLOAD_PREFIX: &str = "https://github.com/JTee77/clash-assist/releases/download/";
+
+/// 稳定的错误码（e2e 与排障用，见 docs/windows-updater.md「e2e 接口约定」）。
+/// 每次拒绝 / 失败都会在 app.log 写一行 `[update] error code=<码> <说明>`；说明文字可能调整，码不变。
+#[cfg_attr(not(windows), allow(dead_code))] // 部分码只在 Windows 安装链中使用
+pub mod code {
+    pub const RELEASE_TAG_INVALID: &str = "release_tag_invalid";
+    pub const RELEASE_DRAFT: &str = "release_draft";
+    pub const RELEASE_PRERELEASE: &str = "release_prerelease";
+    pub const IMMUTABLE_FALSE: &str = "immutable_false";
+    pub const ASSET_MISSING: &str = "asset_missing";
+    pub const ASSET_STATE: &str = "asset_state";
+    pub const ASSET_SIZE_INVALID: &str = "asset_size_invalid";
+    pub const ASSET_TOO_LARGE: &str = "asset_too_large";
+    pub const ASSET_DIGEST_INVALID: &str = "asset_digest_invalid";
+    pub const ASSET_URL_REJECTED: &str = "asset_url_rejected";
+    pub const UP_TO_DATE: &str = "up_to_date";
+    pub const PORTABLE: &str = "portable";
+    pub const NOT_NEWER: &str = "not_newer";
+    pub const DOWNLOAD_FAILED: &str = "download_failed";
+    pub const DOWNLOAD_TOO_LARGE: &str = "download_too_large";
+    pub const SIZE_MISMATCH: &str = "size_mismatch";
+    pub const DIGEST_MISMATCH: &str = "digest_mismatch";
+    pub const PE_VERSION_MISMATCH: &str = "pe_version_mismatch";
+    pub const NO_STAGED: &str = "no_staged";
+    pub const INSTALLER_SPAWN_FAILED: &str = "installer_spawn_failed";
+    pub const INSTALLER_EXIT_NONZERO: &str = "installer_exit_nonzero";
+}
+
+/// 记一行 `[update] error code=<码> <说明>` 并原样返回说明（给 `map_err` / `return Err` 用）。
+pub(crate) fn fail(code: &'static str, msg: impl Into<String>) -> String {
+    let msg = msg.into();
+    crate::append_app_log(&format!("[update] error code={code} {msg}"));
+    msg
+}
+
+/// release / 资产校验未通过（不是 I/O 错误）：带稳定错误码，调用方据此关闭一键更新。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejected {
+    pub code: &'static str,
+    pub reason: String,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+fn rejected(code: &'static str, reason: impl Into<String>) -> Rejected {
+    Rejected {
+        code,
+        reason: reason.into(),
+    }
+}
 /// 测试用假版本号（跳过网络）。M-7：只在 debug 构建与 `updater-e2e` feature 中编译，
 /// release 构建的 exe 里不含这个字符串（`scan-exe-markers.ps1` 对 release 构建发现即失败）。
 #[cfg(any(debug_assertions, feature = "updater-e2e"))]
@@ -108,6 +162,9 @@ pub struct UpdateInfo {
     /// 通过全部校验的资产（不发给前端；下载阶段只用它，不接受前端传入）。
     #[serde(skip)]
     pub asset: Option<ReleaseAsset>,
+    /// 没有一键更新时的原因（`code::*`；只写日志，不发给前端）。
+    #[serde(skip)]
+    pub no_one_click: Option<&'static str>,
 }
 
 /// 「v1.2.3」/「1.2.3-beta.1」→ semver（S-11）。两段号、四段号、前导零等一律非法。
@@ -305,41 +362,69 @@ pub struct ReleaseAsset {
 /// - 资产 `state == "uploaded"`；`size` 存在、为正、不超过上限；
 /// - `digest` 为 `sha256:` 加 64 位十六进制；
 /// - `browser_download_url` 逐字节等于 `DOWNLOAD_PREFIX/{tag}/{name}`。
-pub fn parse_release_asset(v: &serde_json::Value, kind: AssetKind) -> Result<ReleaseAsset, String> {
-    let tag = v["tag_name"].as_str().ok_or("release 缺少 tag_name")?;
+pub fn parse_release_asset(
+    v: &serde_json::Value,
+    kind: AssetKind,
+) -> Result<ReleaseAsset, Rejected> {
+    use code::*;
+    let tag = v["tag_name"]
+        .as_str()
+        .ok_or_else(|| rejected(RELEASE_TAG_INVALID, "release 缺少 tag_name"))?;
     let version = parse_version(tag)
         .filter(|_| tag.starts_with('v'))
-        .ok_or_else(|| format!("release 的 tag 不是 v+版本号：{tag}"))?
+        .ok_or_else(|| {
+            rejected(
+                RELEASE_TAG_INVALID,
+                format!("release 的 tag 不是 v+版本号：{tag}"),
+            )
+        })?
         .to_string();
     if tag != format!("v{version}") {
-        return Err(format!("release 的 tag 不是规范的 v+版本号：{tag}"));
+        return Err(rejected(
+            RELEASE_TAG_INVALID,
+            format!("release 的 tag 不是规范的 v+版本号：{tag}"),
+        ));
     }
     if v["draft"].as_bool() != Some(false) {
-        return Err("release 不是已发布状态（draft 不为 false）".into());
+        return Err(rejected(
+            RELEASE_DRAFT,
+            "release 不是已发布状态（draft 不为 false）",
+        ));
     }
     if v["prerelease"].as_bool() != Some(false) {
-        return Err("release 是预发布或缺少 prerelease 字段".into());
+        return Err(rejected(
+            RELEASE_PRERELEASE,
+            "release 是预发布或缺少 prerelease 字段",
+        ));
     }
     if v["immutable"].as_bool() != Some(true) {
-        return Err("release 不是不可变发布（immutable 不为 true），已关闭一键更新".into());
+        return Err(rejected(
+            IMMUTABLE_FALSE,
+            "release 不是不可变发布（immutable 不为 true），已关闭一键更新",
+        ));
     }
     let name = kind.expected_name(&version);
-    let assets = v["assets"].as_array().ok_or("release 缺少 assets")?;
+    let assets = v["assets"]
+        .as_array()
+        .ok_or_else(|| rejected(ASSET_MISSING, "release 缺少 assets"))?;
     let asset = assets
         .iter()
         .find(|a| a["name"].as_str() == Some(name.as_str()))
-        .ok_or_else(|| format!("release 中没有 {name}"))?;
+        .ok_or_else(|| rejected(ASSET_MISSING, format!("release 中没有 {name}")))?;
     if asset["state"].as_str() != Some("uploaded") {
-        return Err(format!("{name} 尚未上传完成（state 不为 uploaded）"));
+        return Err(rejected(
+            ASSET_STATE,
+            format!("{name} 尚未上传完成（state 不为 uploaded）"),
+        ));
     }
     let size = asset["size"]
         .as_u64()
         .filter(|s| *s > 0)
-        .ok_or_else(|| format!("{name} 缺少 size"))?;
+        .ok_or_else(|| rejected(ASSET_SIZE_INVALID, format!("{name} 缺少 size")))?;
     if size > kind.max_bytes() {
-        return Err(format!(
-            "{name} 过大（{size} > {} 字节上限）",
-            kind.max_bytes()
+        return Err(rejected(
+            ASSET_TOO_LARGE,
+            format!("{name} 过大（{size} > {} 字节上限）", kind.max_bytes()),
         ));
     }
     let sha256 = asset["digest"]
@@ -347,11 +432,19 @@ pub fn parse_release_asset(v: &serde_json::Value, kind: AssetKind) -> Result<Rel
         .and_then(|d| d.strip_prefix("sha256:"))
         .filter(|hex| hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()))
         .map(str::to_ascii_lowercase)
-        .ok_or_else(|| format!("{name} 缺少合法的 sha256 digest"))?;
-    let url = asset["browser_download_url"]
-        .as_str()
-        .ok_or_else(|| format!("{name} 缺少 browser_download_url"))?;
-    validate_asset_url(url, tag, &name)?;
+        .ok_or_else(|| {
+            rejected(
+                ASSET_DIGEST_INVALID,
+                format!("{name} 缺少合法的 sha256 digest"),
+            )
+        })?;
+    let url = asset["browser_download_url"].as_str().ok_or_else(|| {
+        rejected(
+            ASSET_URL_REJECTED,
+            format!("{name} 缺少 browser_download_url"),
+        )
+    })?;
+    validate_asset_url(url, tag, &name).map_err(|e| rejected(ASSET_URL_REJECTED, e))?;
     Ok(ReleaseAsset {
         kind,
         tag: tag.to_string(),
@@ -381,17 +474,20 @@ pub fn info_from_release(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{RELEASES_PAGE}/tag/{tag}"));
     let update_available = is_newer(&latest, current);
-    let asset = if update_available {
+    let (asset, mut no_one_click) = if update_available {
         match parse_release_asset(v, kind) {
-            Ok(a) => Some(a),
+            Ok(a) => (Some(a), None),
             Err(e) => {
-                crate::append_app_log(&format!("[update] 不提供一键更新：{e}"));
-                None
+                fail(e.code, format!("不提供一键更新：{e}"));
+                (None, Some(e.code))
             }
         }
     } else {
-        None
+        (None, Some(code::UP_TO_DATE))
     };
+    if asset.is_some() && install_kind == InstallKind::Portable {
+        no_one_click = Some(code::PORTABLE);
+    }
     let one_click = asset.is_some() && install_kind != InstallKind::Portable;
     let (dmg_url, dmg_sha256) = match &asset {
         Some(a) if a.kind == AssetKind::MacDmgAarch64 => {
@@ -412,6 +508,7 @@ pub fn info_from_release(
         pending: None,
         updated: None,
         asset,
+        no_one_click,
     })
 }
 
@@ -419,18 +516,27 @@ pub fn info_from_release(
 /// 下载地址与期望摘要只来自 Rust 侧解析的 release 元数据，不接受前端传入。
 pub fn resolve_download_target(info: &UpdateInfo) -> Result<ReleaseAsset, String> {
     if !info.update_available {
-        return Err("当前已是最新版本，无需下载".into());
+        return Err(fail(code::UP_TO_DATE, "当前已是最新版本，无需下载"));
     }
     if info.install_kind == InstallKind::Portable {
-        return Err("便携版不支持一键更新，请前往发布页下载".into());
+        return Err(fail(
+            code::PORTABLE,
+            "便携版不支持一键更新，请前往发布页下载",
+        ));
     }
     let asset = info.asset.clone().ok_or_else(|| {
-        "最新 Release 未通过安全校验（安装包、SHA-256 摘要或不可变发布），为安全起见已停止一键更新，请前往下载页手动更新"
-            .to_string()
+        fail(
+            info.no_one_click.unwrap_or(code::ASSET_MISSING),
+            "最新 Release 未通过安全校验（安装包、SHA-256 摘要或不可变发布），为安全起见已停止一键更新，请前往下载页手动更新",
+        )
     })?;
-    validate_asset_url(&asset.url, &asset.tag, &asset.name)?;
+    validate_asset_url(&asset.url, &asset.tag, &asset.name)
+        .map_err(|e| fail(code::ASSET_URL_REJECTED, e))?;
     if !is_newer(&asset.version, &info.current) {
-        return Err("最新 Release 不比当前版本新，拒绝安装".into());
+        return Err(fail(
+            code::NOT_NEWER,
+            "最新 Release 不比当前版本新，拒绝安装",
+        ));
     }
     Ok(asset)
 }
@@ -696,14 +802,18 @@ where
         let total = resp.content_length();
         if let Some(t) = total {
             if t > max_bytes {
-                return Err(format!(
-                    "安装包过大（Content-Length {t} > {max_bytes} 上限），已拒绝下载"
+                return Err(fail(
+                    code::DOWNLOAD_TOO_LARGE,
+                    format!("安装包过大（Content-Length {t} > {max_bytes} 上限），已拒绝下载"),
                 ));
             }
             if let Some(want) = limits.expected_size {
                 if t != want {
-                    return Err(format!(
-                        "安装包大小与 release 记录不符（Content-Length {t}，应为 {want}），已拒绝下载"
+                    return Err(fail(
+                        code::SIZE_MISMATCH,
+                        format!(
+                            "安装包大小与 release 记录不符（Content-Length {t}，应为 {want}），已拒绝下载"
+                        ),
                     ));
                 }
             }
@@ -733,14 +843,18 @@ where
             let chunk = chunk.map_err(|e| format!("读取下载流失败：{e}"))?;
             downloaded += chunk.len() as u64;
             if downloaded > max_bytes {
-                return Err(format!(
-                    "安装包过大（已下载 {downloaded} > {max_bytes} 上限），已中止"
+                return Err(fail(
+                    code::DOWNLOAD_TOO_LARGE,
+                    format!("安装包过大（已下载 {downloaded} > {max_bytes} 上限），已中止"),
                 ));
             }
             if let Some(want) = limits.expected_size {
                 if downloaded > want {
-                    return Err(format!(
-                        "安装包大小与 release 记录不符（已下载 {downloaded} > {want}），已中止"
+                    return Err(fail(
+                        code::SIZE_MISMATCH,
+                        format!(
+                            "安装包大小与 release 记录不符（已下载 {downloaded} > {want}），已中止"
+                        ),
                     ));
                 }
             }
@@ -768,8 +882,9 @@ where
         file.flush().await.map_err(|e| format!("落盘失败：{e}"))?;
         if let Some(want) = limits.expected_size {
             if downloaded != want {
-                return Err(format!(
-                    "安装包大小与 release 记录不符（下载 {downloaded} 字节，应为 {want}）"
+                return Err(fail(
+                    code::SIZE_MISMATCH,
+                    format!("安装包大小与 release 记录不符（下载 {downloaded} 字节，应为 {want}）"),
                 ));
             }
         }
@@ -786,11 +901,14 @@ where
         }
         return Ok(file);
     }
-    Err(if last_err.is_empty() {
-        "无可用的下载路径".to_string()
-    } else {
-        last_err
-    })
+    Err(fail(
+        code::DOWNLOAD_FAILED,
+        if last_err.is_empty() {
+            "无可用的下载路径".to_string()
+        } else {
+            last_err
+        },
+    ))
 }
 
 /// 流式下载到 `dest`（创建 / 截断）；失败时删除半截文件。Mac DMG 链与单测使用。
@@ -876,6 +994,7 @@ fn fake_latest(current: &str, install_kind: InstallKind) -> Option<Result<Update
         pending: None,
         updated: None,
         asset: None,
+        no_one_click: Some(code::UP_TO_DATE),
     }))
 }
 
@@ -901,6 +1020,24 @@ fn apply_notice(info: &mut UpdateInfo, notice: &pending::Outcome) {
     }
 }
 
+/// 每次检查写一行固定格式的摘要（e2e 从进程外读 install_kind / one_click 的方式，见 docs/windows-updater.md）：
+/// `[update] check current=0.3.0 latest=0.3.1 update_available=true install_kind=nsis one_click=true reason=-`
+fn log_check_summary(info: &UpdateInfo) {
+    let kind = match info.install_kind {
+        InstallKind::Dmg => "dmg",
+        InstallKind::Nsis => "nsis",
+        InstallKind::Portable => "portable",
+    };
+    crate::append_app_log(&format!(
+        "[update] check current={} latest={} update_available={} install_kind={kind} one_click={} reason={}",
+        info.current,
+        info.latest,
+        info.update_available,
+        info.one_click,
+        if info.one_click { "-" } else { info.no_one_click.unwrap_or("-") },
+    ));
+}
+
 pub async fn check(current: &str) -> Result<UpdateInfo, String> {
     let install_kind = current_install_kind();
     let notice = startup_notice().await;
@@ -908,6 +1045,7 @@ pub async fn check(current: &str) -> Result<UpdateInfo, String> {
     if let Some(fake) = fake_latest(current, install_kind) {
         return fake.map(|mut info| {
             apply_notice(&mut info, &notice);
+            log_check_summary(&info);
             info
         });
     }
@@ -928,6 +1066,7 @@ pub async fn check(current: &str) -> Result<UpdateInfo, String> {
     match fetched {
         Ok(mut info) => {
             apply_notice(&mut info, &notice);
+            log_check_summary(&info);
             Ok(info)
         }
         // 查不到最新版时，「上次更新未完成 / 已更新」的提示照样给出（不提供一键更新）。
@@ -946,8 +1085,10 @@ pub async fn check(current: &str) -> Result<UpdateInfo, String> {
                 pending: None,
                 updated: None,
                 asset: None,
+                no_one_click: Some(code::DOWNLOAD_FAILED),
             };
             apply_notice(&mut info, &notice);
+            log_check_summary(&info);
             Ok(info)
         }
         Err(e) => Err(e),
@@ -992,6 +1133,41 @@ pub async fn relaunch_updated_app(app: tauri::AppHandle) -> Result<(), String> {
         let _ = app;
         macos::relaunch_updated_app()
     }
+}
+
+/// e2e 无界面触发（`updater-e2e` feature + Windows，接口约定第 3 点）：启动后依次执行
+/// check → `download_to_staging` → `relaunch_updated_app`，与用户点击走同一段代码。
+/// 结果只写日志：`[update] e2e auto result=launched|no_one_click|error …`（launched 之后本进程退出）。
+#[cfg(all(windows, feature = "updater-e2e"))]
+pub fn spawn_e2e_auto_update(app: tauri::AppHandle) {
+    if !e2e::auto_update_requested() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        crate::append_app_log("[update] e2e auto start");
+        let info = match check(env!("CARGO_PKG_VERSION")).await {
+            Ok(i) => i,
+            Err(e) => {
+                crate::append_app_log(&format!("[update] e2e auto result=error step=check {e}"));
+                return;
+            }
+        };
+        if !info.one_click {
+            crate::append_app_log(&format!(
+                "[update] e2e auto result=no_one_click reason={}",
+                info.no_one_click.unwrap_or("-")
+            ));
+            return;
+        }
+        if let Err(e) = download_to_staging(&|_| {}).await {
+            crate::append_app_log(&format!("[update] e2e auto result=error step=download {e}"));
+            return;
+        }
+        crate::append_app_log("[update] e2e auto result=launched");
+        if let Err(e) = relaunch_updated_app(app).await {
+            crate::append_app_log(&format!("[update] e2e auto result=error step=launch {e}"));
+        }
+    });
 }
 
 /// 只允许打开本项目的 GitHub release 页面（防止前端被诱导打开任意 URL）。
@@ -1243,6 +1419,77 @@ mod tests {
         assert!(r.is_err(), "{why}: should reject, got {r:?}");
     }
 
+    /// 拒绝时给出的稳定错误码（e2e 接口约定第 4 点）。
+    #[test]
+    fn rejection_codes_are_stable() {
+        let code_of = |mutate: &dyn Fn(&mut serde_json::Value)| {
+            let mut v = release("0.3.1");
+            mutate(&mut v);
+            parse_release_asset(&v, AssetKind::WinSetupX64)
+                .unwrap_err()
+                .code
+        };
+        assert_eq!(
+            code_of(&|v| v["immutable"] = false.into()),
+            "immutable_false"
+        );
+        assert_eq!(
+            code_of(&|v| v["immutable"] = serde_json::Value::Null),
+            "immutable_false"
+        );
+        assert_eq!(code_of(&|v| v["draft"] = true.into()), "release_draft");
+        assert_eq!(
+            code_of(&|v| v["prerelease"] = true.into()),
+            "release_prerelease"
+        );
+        assert_eq!(
+            code_of(&|v| v["tag_name"] = "v0.3".into()),
+            "release_tag_invalid"
+        );
+        assert_eq!(
+            code_of(&|v| v["assets"][1]["name"] = "x.exe".into()),
+            "asset_missing"
+        );
+        assert_eq!(
+            code_of(&|v| v["assets"][1]["state"] = "starter".into()),
+            "asset_state"
+        );
+        assert_eq!(
+            code_of(&|v| v["assets"][1]["size"] = 0.into()),
+            "asset_size_invalid"
+        );
+        assert_eq!(
+            code_of(&|v| v["assets"][1]["size"] = (65u64 << 20).into()),
+            "asset_too_large"
+        );
+        assert_eq!(
+            code_of(&|v| v["assets"][1]["digest"] = "sha1:abc".into()),
+            "asset_digest_invalid"
+        );
+        assert_eq!(
+            code_of(&|v| v["assets"][1]["browser_download_url"] =
+                "https://example.com/Clash.Assist_0.3.1_x64-setup.exe".into()),
+            "asset_url_rejected"
+        );
+        // 没有一键更新的原因也进 UpdateInfo（只写日志）
+        let v = release("0.3.1");
+        let same =
+            info_from_release(&v, "0.3.1", AssetKind::WinSetupX64, InstallKind::Nsis).unwrap();
+        assert_eq!(same.no_one_click, Some(code::UP_TO_DATE));
+        let portable =
+            info_from_release(&v, "0.3.0", AssetKind::WinSetupX64, InstallKind::Portable).unwrap();
+        assert_eq!(portable.no_one_click, Some(code::PORTABLE));
+        let mut imm = release("0.3.1");
+        imm["immutable"] = false.into();
+        let i =
+            info_from_release(&imm, "0.3.0", AssetKind::WinSetupX64, InstallKind::Nsis).unwrap();
+        assert_eq!(i.no_one_click, Some(code::IMMUTABLE_FALSE));
+        assert!(!i.one_click);
+        // 序列化给前端时不带内部字段
+        let json = serde_json::to_value(&i).unwrap();
+        assert!(json.get("no_one_click").is_none() && json.get("asset").is_none());
+    }
+
     fn win_asset(v: &mut serde_json::Value) -> &mut serde_json::Value {
         &mut v["assets"][1]
     }
@@ -1381,12 +1628,14 @@ mod tests {
 
     /// S-R6：真实 GitHub release API 响应（tests/fixtures/github-release/，取自本仓库已发布 release
     /// 与 mihomo v1.19.33，字段形态原样保留）。
+    // 真实 GitHub API 响应，原样保存（S-R6）。v0.2.9 与 Nate 的 e2e 回放共用同一份（#61，src-tauri/tests/fixtures/README.md）；
+    // 另外两份由 M5 抓取（2026-10-31 14:08 UTC+8）：
+    //   gh api repos/JTee77/clash-assist/releases?per_page=100   → releases-clash-assist.json（26 个 release）
+    //   gh api repos/MetaCubeX/mihomo/releases/tags/v1.19.33      → release-mihomo-v1.19.33.json（127 个资产）
     const FIXTURE_LATEST: &str =
-        include_str!("../../../tests/fixtures/github-release/clash-assist-latest.json");
-    const FIXTURE_RELEASES: &str =
-        include_str!("../../../tests/fixtures/github-release/clash-assist-releases.json");
-    const FIXTURE_MIHOMO: &str =
-        include_str!("../../../tests/fixtures/github-release/mihomo-v1.19.33.json");
+        include_str!("../../tests/fixtures/release-clash-assist-v0.2.9.json");
+    const FIXTURE_RELEASES: &str = include_str!("../../tests/fixtures/releases-clash-assist.json");
+    const FIXTURE_MIHOMO: &str = include_str!("../../tests/fixtures/release-mihomo-v1.19.33.json");
 
     #[test]
     fn real_release_json_without_immutability_is_refused() {
@@ -1394,7 +1643,8 @@ mod tests {
         let latest: serde_json::Value = serde_json::from_str(FIXTURE_LATEST).unwrap();
         assert_eq!(latest["immutable"], serde_json::Value::Bool(false));
         let err = parse_release_asset(&latest, AssetKind::MacDmgAarch64).unwrap_err();
-        assert!(err.contains("immutable"), "{err}");
+        assert_eq!(err.code, code::IMMUTABLE_FALSE);
+        assert!(err.reason.contains("immutable"), "{err}");
         let all: Vec<serde_json::Value> = serde_json::from_str(FIXTURE_RELEASES).unwrap();
         assert!(all.len() > 20);
         for r in &all {
@@ -1434,7 +1684,8 @@ mod tests {
             latest["assets"][0]["digest"].as_str().unwrap()
         );
         let err = parse_release_asset(&latest, AssetKind::WinSetupX64).unwrap_err();
-        assert!(err.contains("x64-setup.exe"), "{err}");
+        assert_eq!(err.code, code::ASSET_MISSING);
+        assert!(err.reason.contains("x64-setup.exe"), "{err}");
         // 历史 release：每一个改成 immutable 后都能解析出 V8 命名的 DMG（有 digest 的那些）
         let all: Vec<serde_json::Value> = serde_json::from_str(FIXTURE_RELEASES).unwrap();
         let mut ok = 0;

@@ -129,14 +129,52 @@ pub fn remove_work_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// 启动时删除 `updates\` 下所有工作目录（只认 32 位十六进制名字；不跟随链接）。
+/// 本进程此时还没有开始任何下载，所以这些都是以前遗留的：下载后没重启、安装程序已结束等。
+/// 仍被占用的（例如安装程序还没退出）删不掉就留到下次启动。
+pub fn sweep_work_dirs(root: &Path) -> usize {
+    let Ok(rd) = crate::safe_fs::read_dir(&updates_root(root)) else {
+        return 0;
+    };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let is_dir = e
+            .file_type()
+            .map(|t| t.is_dir() && !t.is_symlink())
+            .unwrap_or(false);
+        if is_dir && name.to_str().is_some_and(is_work_dir_name) {
+            remove_work_dir(&e.path());
+            n += 1;
+        }
+    }
+    n
+}
+
 /// 读标记 → 判定 → 清理（任何结果都清理）。标记存在但无法解析时同样删除。
+/// 日志行（e2e 接口约定第 6 点）：`[update] pending outcome=updated|unfinished|none from=… to=…`。
 pub fn reconcile(root: &Path, current: &str, now: u64) -> Outcome {
     let marker = read(root);
     let exists = crate::safe_fs::exists(&marker_path(root));
     let outcome = decide(marker.as_ref(), current, now);
     if marker.is_some() || exists {
         clear(root, marker.as_ref());
-        crate::append_app_log(&format!("[update] 启动对账：{outcome:?}"));
+        let (kind, pair) = match &outcome {
+            Outcome::Updated(p) => ("updated", Some(p)),
+            Outcome::Unfinished(p) => ("unfinished", Some(p)),
+            Outcome::None => ("none", None),
+        };
+        crate::append_app_log(&match pair {
+            Some(p) => format!(
+                "[update] pending outcome={kind} from={} to={}",
+                p.from, p.to
+            ),
+            None => format!("[update] pending outcome={kind}"),
+        });
+    }
+    let swept = sweep_work_dirs(root);
+    if swept > 0 {
+        crate::append_app_log(&format!("[update] 启动时清理遗留更新目录 {swept} 个"));
     }
     outcome
 }
@@ -250,6 +288,32 @@ mod tests {
             assert_eq!(work_dir_of(&root, &bad.to_string_lossy()), None, "{bad:?}");
         }
         assert_eq!(work_dir_of(&root, ""), None);
+    }
+
+    #[test]
+    fn startup_sweeps_only_work_dirs() {
+        let root = std::env::temp_dir().join(format!("ca-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ups = updates_root(&root);
+        let stale = ups.join("00112233445566778899aabbccddeeff");
+        std::fs::create_dir_all(&stale).unwrap();
+        crate::safe_fs::write_for_test(&stale.join("setup-0000000000000000.exe"), b"MZ").unwrap();
+        // 名字不符合的目录与文件不碰
+        let other = ups.join("keep-me");
+        std::fs::create_dir_all(&other).unwrap();
+        crate::safe_fs::write_for_test(&ups.join("00112233445566778899aabbccddeef0"), b"file")
+            .unwrap();
+        // 没有标记也清理
+        assert_eq!(reconcile(&root, "0.3.0", now_unix()), Outcome::None);
+        assert!(!crate::safe_fs::exists(&stale));
+        assert!(crate::safe_fs::is_dir(&other));
+        assert!(crate::safe_fs::is_file(
+            &ups.join("00112233445566778899aabbccddeef0")
+        ));
+        // updates\ 不存在时什么都不做
+        let empty = root.join("empty-root");
+        assert_eq!(sweep_work_dirs(&empty), 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

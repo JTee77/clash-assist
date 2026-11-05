@@ -3,9 +3,12 @@
 //! release workflow **绝不启用**这个 feature。启用后只多出三件事：
 //! 1. 环境变量 `CLASH_ASSIST_E2E_API` 可把 latest release API 指向
 //!    `http://127.0.0.1:<port>/release.json`（只认这个形状）；
-//! 2. 下载地址白名单放宽到同一个本地源：`http://127.0.0.1:<port>/download/<tag>/<资产名>`；
+//! 2. 下载地址白名单放宽到同一个本地源，路径与 GitHub 相同：
+//!    `http://127.0.0.1:<port>/JTee77/clash-assist/releases/download/<tag>/<资产名>`（端口与 API 相同；不跟随重定向）；
 //! 3. 编译进标记常量 `CLASH_ASSIST_UPDATER_E2E_BUILD`（`#[used]` + 启动时 `black_box`），
-//!    `updater-e2e.yml` 对 e2e 构建做正向断言、release 构建做反向断言（S-R4）。
+//!    `updater-e2e.yml` 对 e2e 构建做正向断言、release 构建做反向断言（S-R4）；
+//! 4. 无界面触发：`CLASH_ASSIST_E2E_AUTO_UPDATE=1`（且 API 已重定向到本地）时，启动后自动执行
+//!    check → 下载校验 → 启动安装程序，与用户依次点「一键更新」「立即重启」走同一段代码。
 //!
 //! digest、size、immutable 等校验照旧从 JSON 读取，**校验逻辑一行不改**。
 //! 不启用 feature 时，下面的函数退化为常量结果，环境变量名与标记字符串都不会进入 exe。
@@ -13,6 +16,9 @@
 #[cfg(feature = "updater-e2e")]
 mod imp {
     pub const API_ENV: &str = "CLASH_ASSIST_E2E_API";
+    pub const AUTO_ENV: &str = "CLASH_ASSIST_E2E_AUTO_UPDATE";
+    /// 本地源的下载路径前缀（与 `DOWNLOAD_PREFIX` 的路径部分相同）。
+    pub const DOWNLOAD_PATH: &str = "/JTee77/clash-assist/releases/download/";
 
     #[used]
     static UPDATER_E2E_BUILD_MARKER: [u8; 30] = *b"CLASH_ASSIST_UPDATER_E2E_BUILD";
@@ -44,7 +50,19 @@ mod imp {
             Some(p) => p,
             None => return false,
         };
-        url == format!("http://127.0.0.1:{port}/download/{tag}/{name}")
+        url == format!("http://127.0.0.1:{port}{DOWNLOAD_PATH}{tag}/{name}")
+    }
+
+    /// 只有 API 也指向本地时才生效（避免 e2e 构建被误用时自动从 GitHub 下载安装）。
+    pub fn auto_update_requested() -> bool {
+        auto_requested_from(
+            std::env::var(AUTO_ENV).ok().as_deref(),
+            std::env::var(API_ENV).ok().as_deref(),
+        )
+    }
+
+    pub fn auto_requested_from(auto: Option<&str>, api: Option<&str>) -> bool {
+        auto == Some("1") && api.and_then(parse_api).is_some()
     }
 }
 
@@ -71,6 +89,19 @@ pub fn local_asset_url_ok(url: &str, tag: &str, name: &str) -> bool {
     }
 }
 
+/// 无界面触发是否开启（生产构建恒为 false；只有 Windows 的 e2e 构建会调用）。
+#[cfg_attr(not(all(windows, feature = "updater-e2e")), allow(dead_code))]
+pub fn auto_update_requested() -> bool {
+    #[cfg(feature = "updater-e2e")]
+    {
+        imp::auto_update_requested()
+    }
+    #[cfg(not(feature = "updater-e2e"))]
+    {
+        false
+    }
+}
+
 pub fn keep_marker() {
     #[cfg(feature = "updater-e2e")]
     imp::keep_marker();
@@ -87,16 +118,19 @@ mod tests {
         std::env::set_var("CLASH_ASSIST_E2E_API", "http://127.0.0.1:8123/release.json");
         assert_eq!(release_api(), super::super::LATEST_RELEASE_API);
         assert!(!local_asset_url_ok(
-            "http://127.0.0.1:8123/download/v9.9.9/Clash.Assist_9.9.9_x64-setup.exe",
+            "http://127.0.0.1:8123/JTee77/clash-assist/releases/download/v9.9.9/Clash.Assist_9.9.9_x64-setup.exe",
             "v9.9.9",
             "Clash.Assist_9.9.9_x64-setup.exe"
         ));
         assert!(super::super::validate_asset_url(
-            "http://127.0.0.1:8123/download/v9.9.9/Clash.Assist_9.9.9_x64-setup.exe",
+            "http://127.0.0.1:8123/JTee77/clash-assist/releases/download/v9.9.9/Clash.Assist_9.9.9_x64-setup.exe",
             "v9.9.9",
             "Clash.Assist_9.9.9_x64-setup.exe"
         )
         .is_err());
+        std::env::set_var("CLASH_ASSIST_E2E_AUTO_UPDATE", "1");
+        assert!(!auto_update_requested());
+        std::env::remove_var("CLASH_ASSIST_E2E_AUTO_UPDATE");
         std::env::remove_var("CLASH_ASSIST_E2E_API");
     }
 
@@ -119,21 +153,48 @@ mod tests {
         let name = "Clash.Assist_0.3.1_x64-setup.exe";
         assert!(imp::local_asset_url_ok_for(
             &api,
+            &format!("http://127.0.0.1:8123/JTee77/clash-assist/releases/download/v0.3.1/{name}"),
+            "v0.3.1",
+            name
+        ));
+        assert!(!imp::local_asset_url_ok_for(
+            &api,
+            &format!("http://127.0.0.1:9999/JTee77/clash-assist/releases/download/v0.3.1/{name}"),
+            "v0.3.1",
+            name
+        ));
+        // 旧的短路径（/download/…）与别的 owner / repo 都不接受
+        assert!(!imp::local_asset_url_ok_for(
+            &api,
             &format!("http://127.0.0.1:8123/download/v0.3.1/{name}"),
             "v0.3.1",
             name
         ));
         assert!(!imp::local_asset_url_ok_for(
             &api,
-            &format!("http://127.0.0.1:9999/download/v0.3.1/{name}"),
+            &format!("http://127.0.0.1:8123/other/clash-assist/releases/download/v0.3.1/{name}"),
             "v0.3.1",
             name
         ));
         assert!(!imp::local_asset_url_ok_for(
             &api,
-            &format!("http://127.0.0.1:8123/download/v0.3.0/{name}"),
+            &format!("http://127.0.0.1:8123/JTee77/clash-assist/releases/download/v0.3.0/{name}"),
             "v0.3.1",
             name
+        ));
+    }
+
+    #[cfg(feature = "updater-e2e")]
+    #[test]
+    fn auto_update_needs_local_api() {
+        let api = Some("http://127.0.0.1:8123/release.json");
+        assert!(imp::auto_requested_from(Some("1"), api));
+        assert!(!imp::auto_requested_from(Some("true"), api));
+        assert!(!imp::auto_requested_from(None, api));
+        assert!(!imp::auto_requested_from(Some("1"), None));
+        assert!(!imp::auto_requested_from(
+            Some("1"),
+            Some("https://api.github.com/x")
         ));
     }
 }

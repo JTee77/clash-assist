@@ -61,20 +61,60 @@
   - `gh release view vX.Y.Z --json isImmutable` 为 `true`；
   - API 返回里 `immutable` 为 `true`。
 
-## updater-e2e 契约（给 `updater-e2e.yml` 用）
+## e2e 接口约定
 
-e2e workflow 和本地服务器脚本不在 M5 范围内，由后续 PR 实现。这里列出客户端一侧已经固定的契约。
+`updater-e2e.yml` 和本地服务器脚本属于 #61（Nate）。下面是客户端一侧固定的接口，只在 `--features updater-e2e` 构建中存在。release workflow 不得启用这个 feature，`check-release-workflow.py` 会检查。
 
-- **构建**：`pnpm tauri build -- --features updater-e2e`。release workflow 不得启用这个 feature，`check-release-workflow.py` 会检查。
-- **API 重定向**：设置环境变量 `CLASH_ASSIST_E2E_API=http://127.0.0.1:<port>/release.json`。
-  - 只接受这种形状：http、`127.0.0.1`、显式端口，没有用户信息、查询串和片段。
-  - 其他值会被忽略，仍然请求 GitHub。
-- **资产地址**：`browser_download_url` 必须正好是 `http://127.0.0.1:<port>/download/<tag>/<资产名>`，端口与 API 相同。其余校验（digest、size、immutable、资产名、ProductVersion）与生产构建完全一致。
-- **代理**：请求本地回环地址时不走系统或 Clash 代理。
-- **假版本**：`CLASH_ASSIST_FAKE_LATEST` 只在 debug 与 e2e 构建中存在。e2e 跑真实链路时不要设置它。
-- **标记**：e2e 构建含有 `CLASH_ASSIST_UPDATER_E2E_BUILD`，扫描时用 `scan-exe-markers.ps1 -Build E2E`，找不到就失败。release 构建用 `-Build Release` 扫描，两种标记任何一个出现都失败。
-- **可观察结果**：
-  - `update-pending.json` 的写入与清理；
-  - `app.log` 中 `[update]` 开头的行；
-  - 重启后前端的「已更新到 {v}」提示，或者「上次更新未完成」提示。
-  - 注意：Windows 版没有 CLI（`is_cli_mode` 恒为 false），只能从 GUI 和日志观察。
+1. **端点覆盖**：`CLASH_ASSIST_E2E_API` 取 release.json 的完整 URL，只接受 `http://127.0.0.1:<端口>/release.json` 这一种形状：
+   - 必须是 http、`127.0.0.1`，并写明端口；
+   - 路径只能是 `/release.json`；
+   - 不能带用户信息、查询串或片段。
+
+   其他值一律忽略，客户端照旧请求 GitHub。生产构建里这个环境变量名根本不存在。
+2. **下载白名单**：`browser_download_url` 必须逐字节等于 `http://127.0.0.1:<同一端口>/JTee77/clash-assist/releases/download/<tag>/<资产名>`，路径形状与 GitHub 相同，也就是服务器脚本的默认 `DownloadPath`。
+   - 旧的短路径 `/download/<tag>/<name>`、其他 owner 或 repo 都会被拒绝。
+   - **不模拟 302**：重定向策略只允许跳到 GitHub 的 https 主机（`release-assets.githubusercontent.com` 等），由单测 `redirect_targets_limited_to_github_https` 覆盖。本地服务器返回任何 3xx 都会导致下载失败（`download_failed`），这本身也可以作为一条反例。
+   - 请求 127.0.0.1 时不走代理。
+3. **无界面触发**：设置 `CLASH_ASSIST_E2E_AUTO_UPDATE=1`。只有同时设置了合法的 `CLASH_ASSIST_E2E_API` 才生效，并且仅限 Windows。
+   - 启动后依次执行 check → `download_and_verify` → `launch_installer`，与用户先点「一键更新」再点「立即重启」走同一段代码。
+   - 成功时启动安装程序（`/S /UPDATE /R`），本进程退出，安装程序完成后重新打开新版本。
+   - 失败时进程**不退出**，版本不变。
+4. **可断言的信号**：都写在 `%LOCALAPPDATA%\ClashAssist\logs\app.log`，行格式固定，说明文字以后可能调整。
+   - 每次拒绝或失败写一行：`[update] error code=<码> <说明>`。
+   - check：`[update] check current=… latest=… update_available=… install_kind=… one_click=… reason=<码|->`
+   - 触发结果：`[update] e2e auto result=launched|no_one_click reason=<码>|error step=check|download|launch …`
+   - 成功启动：`[update] installer launched to=<版本> fate=StillRunning|ExitedOk，本进程退出`
+
+   | 情形 | 码 | 出现在 |
+   |---|---|---|
+   | `immutable` 不是 JSON `true` | `immutable_false` | check（`one_click=false reason=immutable_false`） |
+   | draft / prerelease / tag 不合法 | `release_draft` / `release_prerelease` / `release_tag_invalid` | check |
+   | 资产缺失、state、size 字段、digest 字段、URL 不合规 | `asset_missing` / `asset_state` / `asset_size_invalid` / `asset_too_large` / `asset_digest_invalid` / `asset_url_rejected` | check |
+   | 已是最新，或 tag 不比当前新（semver） | `up_to_date`（check）/ `not_newer`（启动前复核） | check / launch |
+   | 便携版 | `portable` | check / download |
+   | 实际字节数 ≠ API `size` | `size_mismatch` | download |
+   | SHA-256 ≠ `digest` | `digest_mismatch` | download |
+   | PE ProductVersion ≠ tag 版本 | `pe_version_mismatch` | download |
+   | 网络或 HTTP 错误、重定向被拒 | `download_failed` | download |
+   | 安装程序在 2 s 内以非零码退出（例如被 NSIS 拒绝的降级） | `installer_exit_nonzero` | launch |
+   | 启动安装程序失败 / 没有已校验的安装包 | `installer_spawn_failed` / `no_staged` | launch |
+
+   单测 `rejection_codes_are_stable` 固定这些码。
+5. **从进程外读 install_kind / one_click**：Windows 版没有 CLI，所以从 app.log 读取 `[update] check …` 那一行（见第 4 点）。便携版会是 `install_kind=portable one_click=false reason=portable`（release 合规时），或者是 release 本身被拒的那个码。
+6. **标记与目录**：
+   - 标记文件：`%LOCALAPPDATA%\ClashAssist\update-pending.json`。点「立即重启」时，在启动安装程序之前写入。下次启动对账后无论结果如何都删除，并写一行 `[update] pending outcome=updated|unfinished|none from=… to=…`。如果安装程序启动失败或在观察期内以非零码退出，当场删除。
+   - 工作目录：`%LOCALAPPDATA%\ClashAssist\updates\<32 位十六进制>\`。
+     - 下载或校验失败时当场删除；
+     - 启动失败时当场删除；
+     - 对账时删除标记所指的那个目录；
+     - 每次启动还会删除 `updates\` 下所有名字符合规则的目录（下载后没重启等情况留下的）。仍被占用的（安装程序还没退出）留到下一次启动再删。
+7. **PE 版本规则**：比较的是安装包 `StringFileInfo` 里的 `ProductVersion` 字符串。去掉末尾的 NUL 和首尾空白后，必须与 tag 去掉 `v` 的版本逐字相等，例如 `0.3.1`。`0.3.1.0` 会被拒绝。Tauri 模板写入的是 `VIAddVersionKey "ProductVersion" "${VERSION}"`，即三段号；四段的 `VIProductVersion` 不参与比较。
+8. **夹具**：
+   - `src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json` 与 #61 是同一个文件（逐字节相同）。
+   - M5 另外加了 `release-mihomo-v1.19.33.json`（`parse_release_asset` 的大样本，127 个资产）和 `releases-clash-assist.json`（26 个历史 release）。
+   - 真实的 v0.2.9 是 `immutable: false`，客户端一律拒绝一键更新（C-3）；Happy 用例需要回放时改成 `true`。
+
+另外，降级由两层拦住：
+
+- 客户端在 check 和启动安装程序之前都要求目标版本严格新于当前版本，并且 PE 版本必须等于 tag。
+- 安装程序本身在静默模式下也拒绝降级（`installer.nsi` 的 M5 段，见 [windows-nsis-template.md](windows-nsis-template.md)）。所以「已装 0.3.1，用 /S 或 /S /UPDATE 运行 0.3.0 安装包」会返回非零码，不会降级。

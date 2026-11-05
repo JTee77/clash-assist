@@ -951,6 +951,9 @@ pub fn run() {
             // M5（M-5）：上次一键更新的对账（成功 / 未完成 / 过期），结果供 check_update 带给前端。
             #[cfg(windows)]
             tauri::async_runtime::spawn_blocking(update_check::pending::startup_outcome);
+            // updater-e2e 构建：CLASH_ASSIST_E2E_AUTO_UPDATE=1 时无界面执行一键更新（生产构建无此代码）。
+            #[cfg(all(windows, feature = "updater-e2e"))]
+            update_check::spawn_e2e_auto_update(app.handle().clone());
 
             // 主窗口在这里创建（tauri.conf.json 里 create:false），以便 CLI 模式单独配置：
             // - visible(false)：一开始就不显示，不再先闪一下再隐藏；
