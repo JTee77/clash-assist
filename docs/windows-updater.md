@@ -172,9 +172,20 @@
 `useUpdateFlow.fallback.test.ts` 覆盖的情形：
 - `relaunch_updated_app` 以上述字符串 reject（或以 Error reject）时：
   - 恰好一次 `open_release_page({ url: <检查结果的 url> })`；
-  - 停在 `fallback`，`error` 保留原文，提示「已为你打开下载页」，主按钮为「去下载」；
+  - 停在 `fallback`，`error` 保留原文，主按钮为「去下载」；只有 `open_release_page` 成功才提示「已为你打开下载页」；
   - 不进入 `restarting` / `updated`，也不再次启动安装程序。
-- `open_release_page` 自身 reject：没有未处理的 rejection，不算成功，installer 错误仍可见。
+- `open_release_page` 自身 reject：`openReleasePage` resolve `false`（不产生未处理的 rejection），不算成功，installer 错误仍可见。提示「未能自动打开下载页」，展示检查结果里经发布页白名单校验的 URL，既可选中复制也可用「复制链接」按钮。剪贴板不可用时仍可手动复制文本。
+- 请求尚未完成时提示「正在打开下载页…」，绝不提前显示成功；手动点击「去下载 / 前往发布页」也用同样的结果文案。重试成功后改为成功文案，不再展示 URL。
+- `src/components/TitleBar.fallback.test.ts` 验证实际 `UpdatePill` JSX：三种语言的成功 / 失败 / 进行中文案、失败时显示的地址和复制行为；任意 URL 不会被展示。
+- 文案（`update.fallbackOpened` / `update.fallbackOpenFailed` / `update.fallbackOpening` / `update.copyLink`）：
+
+  | 语言 | 成功 | 失败 | 进行中 | 复制按钮 |
+  |---|---|---|---|---|
+  | 简体中文 | 已为你打开下载页 | 未能自动打开下载页 | 正在打开下载页… | 复制链接 |
+  | 繁體中文 | 已為你開啟下載頁 | 未能自動開啟下載頁 | 正在開啟下載頁… | 複製連結 |
+  | English | Opened download page | Couldn’t open the download page | Opening download page… | Copy link |
+
+  命令成功只说明系统接受了打开请求，不替代 M6 的真实浏览器测试。地址只来自 `check_update` 的 `url`（Rust 已校验，前端展示时再次白名单校验），没有新增任意地址入口。
 - relaunch 成功：不回退，不打开发布页。
 
 e2e 的 cases 脚本把这一项记为 `frontend-fallback-contract`，状态为 `layered`：不计为通过，也不计为失败。

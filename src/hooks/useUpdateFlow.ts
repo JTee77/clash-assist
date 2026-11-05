@@ -9,6 +9,7 @@ import {
   openReleasePage,
   relaunchUpdatedApp,
   updaterSupported,
+  verifiedReleasePageUrl,
   type UpdateInfo,
 } from "../lib/update";
 
@@ -23,7 +24,8 @@ type DownloadProgressPayload = {
  * 更新状态机（Mac 标题栏 TitleBar 与 Windows 更新条 UpdateBar 共用，windows-plan §2.7）：
  * - Mac：idle → downloading → installing（静默挂载 DMG 替换 .app）→ ready → restarting
  * - Windows：idle → downloading → ready → restarting（安装器在重启时执行，§2.4-8）
- * - 任一步失败 → fallback（已为用户打开发布页）
+ * - 任一步失败 → fallback，并尝试为用户打开发布页：打开成功才提示「已为你打开下载页」；
+ *   失败时提示「未能自动打开下载页」并展示检查结果里（经白名单校验的）发布页地址供复制
  * - pending：上次更新未完成（Rust 启动对账给出），提供「重试」与「前往发布页」
  * - updated：上次更新已完成（Rust 启动对账给出，只出现一次），提示「已更新到 {v}」，可关闭
  */
@@ -37,12 +39,16 @@ export type UpdateStage =
   | "restarting"
   | "fallback";
 
+/** 最近一次「打开发布页」的结果：none 未尝试，opening 进行中，opened 成功，failed 失败。 */
+export type ReleaseOpenState = "none" | "opening" | "opened" | "failed";
+
 export type UpdateFlowState = {
   update: UpdateInfo | null;
   stage: UpdateStage;
   dismissed: boolean;
   error: string | null;
   downloadPct: number | null;
+  releaseOpen: ReleaseOpenState;
 };
 
 export type UpdateFlowEvent =
@@ -54,6 +60,8 @@ export type UpdateFlowEvent =
   | { type: "installed" }
   | { type: "restart-start" }
   | { type: "failed"; error: string }
+  | { type: "release-open-start" }
+  | { type: "release-open-result"; ok: boolean }
   | { type: "dismiss" };
 
 export const initialUpdateFlowState: UpdateFlowState = {
@@ -62,6 +70,7 @@ export const initialUpdateFlowState: UpdateFlowState = {
   dismissed: false,
   error: null,
   downloadPct: null,
+  releaseOpen: "none",
 };
 
 const BUSY: ReadonlySet<UpdateStage> = new Set(["downloading", "installing", "restarting"]);
@@ -89,7 +98,7 @@ export function updateFlowReducer(
     case "download-start":
       if (!state.update) return state;
       if (state.stage !== "idle" && state.stage !== "pending") return state;
-      return { ...state, stage: "downloading", error: null, downloadPct: null };
+      return { ...state, stage: "downloading", error: null, downloadPct: null, releaseOpen: "none" };
     case "progress":
       if (state.stage !== "downloading") return state;
       return { ...state, downloadPct: event.percent };
@@ -109,6 +118,12 @@ export function updateFlowReducer(
     case "failed":
       if (!state.update) return state;
       return { ...state, stage: "fallback", error: event.error, downloadPct: null };
+    case "release-open-start":
+      if (!state.update) return state;
+      return { ...state, releaseOpen: "opening" };
+    case "release-open-result":
+      if (!state.update) return state;
+      return { ...state, releaseOpen: event.ok ? "opened" : "failed" };
     case "dismiss":
       if (isBusyStage(state.stage)) return state;
       return { ...state, dismissed: true };
@@ -137,6 +152,8 @@ export type UpdateView = {
   showClose: boolean;
   /** 悬停提示的 i18n key；fallback 时组件改用 state.error 原文。 */
   hint: MessageKey | null;
+  /** 自动打开发布页失败时展示给用户复制的地址（只取检查结果里经白名单校验的 url）。 */
+  releaseUrl: string | null;
 };
 
 export function updateViewOf(
@@ -152,6 +169,7 @@ export function updateViewOf(
     showReleaseLink: false,
     showClose: false,
     hint: null,
+    releaseUrl: null,
   };
   if (!update || state.dismissed) return hidden;
   const v = { v: update.latest };
@@ -184,12 +202,24 @@ export function updateViewOf(
       status = { key: "update.restarting" };
       break;
     case "fallback":
-      status = { key: "update.fallbackOpened" };
+      status = { key: "update.fallbackOpening" };
       primary = goKey;
       break;
     default:
       status = { key: "update.found", vars: v };
       primary = opts.oneClick ? "update.install" : goKey;
+  }
+  // 自动回退与用户手动点击「去下载 / 前往发布页」共用结果文案。
+  // 只有 open_release_page 成功才说「已为你打开」；失败如实说明并给出地址；进行中不下结论。
+  if (!busy && state.releaseOpen !== "none") {
+    status = {
+      key:
+        state.releaseOpen === "opened"
+          ? "update.fallbackOpened"
+          : state.releaseOpen === "failed"
+            ? "update.fallbackOpenFailed"
+            : "update.fallbackOpening",
+    };
   }
   return {
     visible: true,
@@ -199,6 +229,7 @@ export function updateViewOf(
     showReleaseLink: stage === "pending" && opts.oneClick,
     showClose: !busy,
     hint,
+    releaseUrl: state.releaseOpen === "failed" ? verifiedReleasePageUrl(update.url) : null,
   };
 }
 
@@ -244,16 +275,23 @@ export function useUpdateFlow({ windows }: { windows: boolean }) {
     };
   }, [stage]);
 
+  // 打开发布页并记录结果（openReleasePage 从不 reject）
+  const openRelease = () => {
+    if (!update) return Promise.resolve();
+    dispatch({ type: "release-open-start" });
+    return openReleasePage(update.url).then((ok) => dispatch({ type: "release-open-result", ok }));
+  };
+
   const fail = (err: unknown, fallback: string) => {
     dispatch({ type: "failed", error: errMsg(err, fallback) });
-    if (update) void openReleasePage(update.url);
+    void openRelease();
   };
 
   const primary = async () => {
     if (!update || !supported) return;
     const action = primaryActionOf(state, oneClick);
     if (action === "open-release") {
-      void openReleasePage(update.url);
+      await openRelease();
       return;
     }
     if (action === "relaunch") {
@@ -280,17 +318,13 @@ export function useUpdateFlow({ windows }: { windows: boolean }) {
     }
   };
 
-  const openRelease = () => {
-    if (update) void openReleasePage(update.url);
-  };
-
   const view = updateViewOf(state, { oneClick, windows });
 
   return {
     state,
     view,
     primary,
-    openRelease,
+    openRelease: () => void openRelease(),
     dismiss: () => dispatch({ type: "dismiss" }),
   };
 }

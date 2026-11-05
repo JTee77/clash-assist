@@ -68,6 +68,15 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}
 
 import { useUpdateFlow } from "./useUpdateFlow";
 import { __resetUpdateCheckForTests, type UpdateInfo } from "../lib/update";
+import { zhHans } from "../i18n/locales/zh-Hans";
+import { zhHant } from "../i18n/locales/zh-Hant";
+import { en } from "../i18n/locales/en";
+
+const COPY = [
+  [zhHans, "已为你打开下载页", "未能自动打开下载页"],
+  [zhHant, "已為你開啟下載頁", "未能自動開啟下載頁"],
+  [en, "Opened download page", "Couldn’t open the download page"],
+] as const;
 
 type Flow = ReturnType<typeof useUpdateFlow>;
 
@@ -114,11 +123,11 @@ const INFO: UpdateInfo = {
 const EXIT_NONZERO = "安装程序退出码 42（可能是降级被拒绝或被系统拦截），未完成更新";
 
 type Handlers = { relaunch: () => Promise<unknown>; openRelease: () => Promise<unknown> };
-function wire(hs: Handlers) {
+function wire(hs: Handlers, info: UpdateInfo = INFO) {
   h.impl = (cmd: string) => {
     switch (cmd) {
       case "check_update":
-        return Promise.resolve(INFO);
+        return Promise.resolve(info);
       case "download_update":
         return Promise.resolve("C:\\Users\\me\\AppData\\Local\\ClashAssist\\updates\\x");
       case "relaunch_updated_app":
@@ -174,11 +183,16 @@ describe("前端回退契约：relaunch 失败（installer_exit_nonzero）→ �
     expect(calls("open_release_page")).toEqual([["open_release_page", { url: RELEASE_URL }]]);
     expect(m.flow.state.stage).toBe("fallback");
     expect(m.flow.state.error).toBe(EXIT_NONZERO);
+    expect(m.flow.state.releaseOpen).toBe("opened");
+    for (const [messages, opened] of COPY) {
+      expect(messages[m.flow.view.status!.key]).toBe(opened);
+    }
     expect(m.flow.view).toMatchObject({
       visible: true,
       status: { key: "update.fallbackOpened" },
       primary: "update.go",
       showClose: true,
+      releaseUrl: null,
     });
     // 再等几轮也不会进入成功 / 退出状态，也不会再次打开发布页
     await m.flush();
@@ -205,7 +219,22 @@ describe("前端回退契约：relaunch 失败（installer_exit_nonzero）→ �
     expect(m.flow.state.stage).not.toBe("restarting");
     expect(m.flow.state.error).toBe(EXIT_NONZERO);
     expect(m.flow.view.primary).toBe("update.go");
+    // 打开失败：绝不显示成功文案；显示「未能自动打开下载页」并给出检查结果里的发布页地址
+    expect(m.flow.state.releaseOpen).toBe("failed");
+    expect(m.flow.view.status?.key).toBe("update.fallbackOpenFailed");
+    expect(m.flow.view.status?.key).not.toBe("update.fallbackOpened");
+    expect(m.flow.view.releaseUrl).toBe(RELEASE_URL);
+    for (const [messages, opened, failed] of COPY) {
+      expect(messages[m.flow.view.status!.key]).toBe(failed);
+      expect(messages[m.flow.view.status!.key]).not.toBe(opened);
+    }
     expect(unhandled).toEqual([]);
+    // 用户点「去下载」重试且这次成功：恢复成功文案、不再展示地址
+    wire({ relaunch: () => Promise.reject(EXIT_NONZERO), openRelease: () => Promise.resolve(null) });
+    await m.flow.primary();
+    await m.flush();
+    expect(calls("open_release_page")).toHaveLength(2);
+    expect(m.flow.view).toMatchObject({ status: { key: "update.fallbackOpened" }, releaseUrl: null });
     m.unmount();
   });
 
@@ -214,6 +243,42 @@ describe("前端回退契约：relaunch 失败（installer_exit_nonzero）→ �
     const m = await toRelaunch();
     expect(m.flow.state).toMatchObject({ stage: "fallback", error: EXIT_NONZERO });
     expect(calls("open_release_page")).toEqual([["open_release_page", { url: RELEASE_URL }]]);
+    m.unmount();
+  });
+
+  it("发布页打开请求尚未完成时不显示成功文案，只有失败才给出地址", async () => {
+    let finish!: (value: unknown) => void;
+    wire({
+      relaunch: () => Promise.reject(EXIT_NONZERO),
+      openRelease: () => new Promise((resolve) => { finish = resolve; }),
+    });
+    const m = await toRelaunch();
+    expect(m.flow.state).toMatchObject({ stage: "fallback", releaseOpen: "opening", error: EXIT_NONZERO });
+    expect(m.flow.view.status?.key).toBe("update.fallbackOpening");
+    expect(m.flow.view.releaseUrl).toBeNull();
+    expect(calls("open_release_page")).toHaveLength(1);
+    finish(null);
+    await m.flush();
+    expect(m.flow.view.status?.key).toBe("update.fallbackOpened");
+    expect(m.flow.view.releaseUrl).toBeNull();
+    expect(unhandled).toEqual([]);
+    m.unmount();
+  });
+
+  it("便携版手动点击发布页，打开失败也显示失败文案和已校验的地址", async () => {
+    wire({ relaunch: () => Promise.resolve(null), openRelease: () => Promise.reject("blocked") }, {
+      ...INFO, install_kind: "portable", one_click: false,
+    });
+    const m = mount(true);
+    await m.flush();
+    expect(m.flow.view.primary).toBe("update.goPortable");
+    await m.flow.primary();
+    await m.flush();
+    expect(m.flow.view).toMatchObject({ status: { key: "update.fallbackOpenFailed" }, releaseUrl: RELEASE_URL });
+    expect(calls("download_update")).toHaveLength(0);
+    expect(calls("relaunch_updated_app")).toHaveLength(0);
+    expect(calls("open_release_page")).toEqual([["open_release_page", { url: RELEASE_URL }]]);
+    expect(unhandled).toEqual([]);
     m.unmount();
   });
 

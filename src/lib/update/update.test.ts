@@ -18,6 +18,7 @@ import {
   openVergeReleasePage,
   relaunchUpdatedApp,
   updaterSupported,
+  verifiedReleasePageUrl,
   WINDOWS_UPDATER_ENABLED,
 } from "./index";
 
@@ -146,10 +147,42 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     }
   });
 
-  it("openReleasePage swallows errors gracefully", async () => {
+  it("openReleasePage 从不 reject：失败 resolve false，成功 resolve true", async () => {
     h.invoke.mockRejectedValue(new Error("blocked"));
     await expect(
       openReleasePage("https://github.com/JTee77/clash-assist/releases"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
+    h.invoke.mockResolvedValue(null);
+    await expect(
+      openReleasePage("https://github.com/JTee77/clash-assist/releases/tag/v0.3.1"),
+    ).resolves.toBe(true);
+    expect(h.invoke).toHaveBeenLastCalledWith("open_release_page", {
+      url: "https://github.com/JTee77/clash-assist/releases/tag/v0.3.1",
+    });
+  });
+
+  it("verifiedReleasePageUrl 与 Rust validate_release_page_url 同一白名单", () => {
+    for (const ok of [
+      "https://github.com/JTee77/clash-assist/releases",
+      "https://github.com/JTee77/clash-assist/releases/",
+      "https://github.com/JTee77/clash-assist/releases/latest",
+      "https://github.com/JTee77/clash-assist/releases/tag/v0.3.1",
+    ]) {
+      expect(verifiedReleasePageUrl(ok), ok).toBe(ok);
+    }
+    for (const bad of [
+      "http://github.com/JTee77/clash-assist/releases",
+      "https://github.com/JTee77/clash-assist/releases/tag/.hidden",
+      "https://github.com/JTee77/clash-assist/releases/tag/v1?x=1",
+      "https://github.com/JTee77/clash-assist/releases#x",
+      "https://github.com/other/clash-assist/releases",
+      "https://github.com.evil/JTee77/clash-assist/releases",
+      "https://github.com/JTee77/clash-assist/releases/download/v1/a.exe",
+      "javascript:alert(1)",
+      "",
+    ]) {
+      expect(verifiedReleasePageUrl(bad), bad).toBeNull();
+    }
+    expect(verifiedReleasePageUrl(null)).toBeNull();
   });
 });
