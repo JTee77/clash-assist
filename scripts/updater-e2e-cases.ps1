@@ -397,21 +397,21 @@ try {
       $exe = (Get-Installed).Exe
       $app = Start-App $exe $srv -Auto
       $oldPid = $app.Id
-      $launched = Wait-LogLine $off '\[update\] installer launched to=0\.3\.1 fate='
-      if (-not $launched) { $e += '没有 installer launched to=0.3.1 行' } else { Write-Host "  $launched" }
+      $autoLine = Wait-LogLine $off '\[update\] e2e auto result='
+      Write-Host "  $autoLine"
+      if ($autoLine -notmatch 'e2e auto result=launched$') { $e += "e2e auto 结果不是 launched：$autoLine" }
       $lines = Get-LogSince $off
       $check = @($lines | Where-Object { $_ -match '\[update\] check current=' }) | Select-Object -First 1
       if ($check -notmatch 'current=0\.3\.0 latest=0\.3\.1 update_available=true install_kind=nsis one_click=true reason=-$') { $e += "check 行不符：$check" }
-      if (-not @($lines | Where-Object { $_ -match '\[update\] e2e auto result=launched$' }).Count) { $e += '没有 e2e auto result=launched 行' }
       # 只看旧进程在启动安装程序之前写的行（/R 拉起的 0.3.1 继承了 e2e 环境变量，会再检查一次并记 up_to_date）
-      $cut = [array]::FindIndex([string[]]$lines, [Predicate[string]] { param($l) $l -match '\[update\] installer launched' })
+      $cut = [array]::FindIndex([string[]]$lines, [Predicate[string]] { param($l) $l -match '\[update\] e2e auto result=' })
       $before = if ($cut -ge 0) { $lines[0..$cut] } else { $lines }
       $errLines = @($before | Where-Object { $_ -match '\[update\] error code=' })
       if ($errLines.Count) { $e += "启动安装程序之前出现了 error 行：$($errLines -join ' / ')" }
       # 旧进程退出
       $deadline = (Get-Date).AddSeconds(30)
       while (-not $app.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500; $app.Refresh() }
-      if (-not $app.HasExited) { $e += '旧进程 30 秒内没有退出' } else { Write-Host "  旧进程 PID $oldPid 已退出（退出码 $($app.ExitCode)）" }
+      if (-not $app.HasExited) { $e += '旧进程 30 秒内没有退出' } else { Write-Host "  旧进程 PID $oldPid 已退出（退出码 $($app.ExitCode)，退出时刻 $($app.ExitTime.ToString('o'))）" }
       # 安装完成 + 新进程（/R）
       $deadline = (Get-Date).AddSeconds(120); $new = $null
       while ((Get-Date) -lt $deadline) {
@@ -434,6 +434,13 @@ try {
       if ($staged.Count -ne 1) { $e += "应恰有 1 次从 updates\<32hex>\setup-<16hex>.exe 启动的安装程序，实际 $($staged.Count) 次" }
       elseif ($staged[0].ParentPid -ne $oldPid) { $e += "安装程序的父进程是 $($staged[0].ParentPid)，不是旧应用进程 $oldPid" }
       elseif ($staged[0].CommandLine -notmatch '\s/S\s+/UPDATE\s+/R\s*$') { $e += "安装程序命令行不符：$($staged[0].CommandLine)" }
+      elseif ($app.HasExited -and $app.ExitTime -lt $staged[0].Time.AddSeconds(-1)) { $e += "旧进程在安装程序启动之前就退出了（$($app.ExitTime.ToString('o')) < $($staged[0].Time.ToString('o'))）" }
+      # 「[update] installer launched … 本进程退出」行（接口约定第 4 点）只有旧进程在 2 s 观察期内没被安装程序结束时才写得出来。
+      # 模板 Section Install 的 CheckIfAppIsRunning 会先结束正在运行的旧进程，所以这一行可能缺失；这里只记录，
+      # 成功与否以 4688（父进程 = 旧进程、参数 /S /UPDATE /R）、版本、新进程与 pending 对账为准。
+      $launchedLine = @($lines | Where-Object { $_ -match '\[update\] installer launched to=' }) | Select-Object -First 1
+      Write-Host "  installer launched 行：$(if ($launchedLine) { $launchedLine } else { '缺失（旧进程在观察期内被安装程序结束）' })"
+
       if ($runs.Count -ne $staged.Count) { $e += "还运行了其他安装程序：$(($runs | Where-Object { $_.Image -notmatch $StagedInstallerRe } | ForEach-Object Image) -join ', ')" }
       # pending：新进程启动时对账 → updated，标记删除
       $pend = Wait-LogLine $off '\[update\] pending outcome=' 60
