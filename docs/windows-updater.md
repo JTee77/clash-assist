@@ -155,7 +155,29 @@
   - 没有 `installer launched` 行；旧进程 5 s 后仍在运行；
   - 版本仍为 0.3.0，安装目录内容（文件、大小、时间、SHA-256）不变；
   - 标记与工作目录都已当场删除；安装包只下载一次。
-- **阻塞（未验收）**：没有可从进程外安全观察的「回落到发布页」状态。前端 `useUpdateFlow` 在 relaunch 失败时调用 `openReleasePage`，但无界面触发不经过前端，核心只写 `e2e auto result=error step=launch`。用例 `installer-exit-nonzero-fallback` 如实记为失败，等核心或前端提供可观察接口后再验收。
+  - `e2e auto result=error step=launch` 后的说明文字，与 `error code=installer_exit_nonzero` 行的说明文字逐字相同。也就是说，`relaunch_updated_app` 交给调用方的就是这个字符串。
+
+### 前端回退契约（自动化分层测试）
+
+安装程序非零退出后，应用要回落到发布页。这一项**不在**无界面 e2e 中验收：无界面触发不经前端，核心也不会为此写一条「浏览器已打开」的测试事件。它按层验收，每层只证明自己那一段：
+
+| 层 | 测试 | 证明范围 |
+|---|---|---|
+| e2e（Windows runner） | `installer-exit-nonzero` | 经真实下载、校验、持句柄 CreateProcess，测试安装程序以 42 退出。核心报 `installer_exit_nonzero`，清理标记与工作目录，旧进程不退出，并把说明文字原样返回给调用方 |
+| Rust（Windows CI） | `update_check::windows::tests::launch_blocking_nonzero_exit_maps_to_frontend_error_and_cleans_up` | 生产 `launch_blocking` 遇到非零退出（`xcopy.exe` 充当安装程序）时返回 `Err(String)`，以「安装程序退出码 」开头、以「未完成更新」结尾。经 tauri `InvokeError` 后是 JSON 字符串；标记与工作目录当场删除 |
+| Rust（全平台） | `update_check::tests::relaunch_error_reaches_frontend_as_plain_string`、`relaunch_command_shape_tests::relaunch_command_returns_string_error` | `relaunch_updated_app` 与生产 Tauri 命令的类型都是 `Result<(), String>`；installer_exit_nonzero 的说明文字原样成为前端收到的 rejection 值（错误码只进日志） |
+| 前端（vitest） | `src/hooks/useUpdateFlow.fallback.test.ts` | 驱动真实 `useUpdateFlow`（真实 reducer 与编排，只 mock Tauri invoke / listen，并用最小 hooks 运行时替代 React 渲染器），见下方列表 |
+| 实机（M6） | 物理设备测试 | 默认浏览器真的打开发布页 |
+
+`useUpdateFlow.fallback.test.ts` 覆盖的情形：
+- `relaunch_updated_app` 以上述字符串 reject（或以 Error reject）时：
+  - 恰好一次 `open_release_page({ url: <检查结果的 url> })`；
+  - 停在 `fallback`，`error` 保留原文，提示「已为你打开下载页」，主按钮为「去下载」；
+  - 不进入 `restarting` / `updated`，也不再次启动安装程序。
+- `open_release_page` 自身 reject：没有未处理的 rejection，不算成功，installer 错误仍可见。
+- relaunch 成功：不回退，不打开发布页。
+
+e2e 的 cases 脚本把这一项记为 `frontend-fallback-contract`，状态为 `layered`：不计为通过，也不计为失败。
 
 另外，降级由两层拦住：
 

@@ -13,6 +13,8 @@
   audit-control 用例做正向对照（审计不可用时，依赖它的断言一律失败，不会放行）。
 
   每个用例的结果为 pass 或 fail，写入 -ResultsDir\results.json 与 job summary。没有 pending。
+  另有一项 layered（frontend-fallback-contract，前端回退契约）：明确标注「不在无界面 e2e 中验收」，
+  既不计为通过也不计为失败，由 CI 的 vitest / cargo test 分层验收（docs/windows-updater.md）。
   已有 Clash Assist 安装或 %LOCALAPPDATA%\ClashAssist 时拒绝运行。
 
   退出码：0 = 全部通过；1 = 有失败；2 = 用法或环境错误。
@@ -52,8 +54,10 @@ $TestInstallerExitCode = 42
 $results = [Collections.Generic.List[object]]::new()
 function Add-Result([string]$name, [string]$status, [string]$detail) {
   $results.Add([pscustomobject]@{ case = $name; status = $status; detail = $detail })
-  Write-Host "$(if ($status -eq 'pass') { 'ok  ' } else { 'FAIL' }) $name：$detail"
-  if ($status -ne 'pass') { Write-Host "::error::$name：$detail" }
+  $tag = switch ($status) { 'pass' { 'ok  ' } 'layered' { 'LAYR' } default { 'FAIL' } }
+  Write-Host "$tag $name：$detail"
+  if ($status -eq 'layered') { Write-Host "::notice::$name：$detail" }
+  elseif ($status -ne 'pass') { Write-Host "::error::$name：$detail" }
 }
 # 用例脚本块返回失败原因的列表（空 = 通过）；抛异常算失败。Write-Host 的证据行留在日志里。
 function Invoke-Case([string]$name, [scriptblock]$body) {
@@ -486,6 +490,12 @@ try {
       if ($check -notmatch 'current=0\.3\.0 latest=0\.3\.1 update_available=true install_kind=nsis one_click=true reason=-$') { $e += "check 行不符：$check" }
       $codes = @($lines | Where-Object { $_ -match '\[update\] error code=' })
       if ($codes.Count -ne 1 -or $codes[0] -notmatch '\[update\] error code=installer_exit_nonzero ') { $e += "错误码行应恰为一行 installer_exit_nonzero：$($codes -join ' / ')" }
+      elseif ($auto) {
+        # relaunch_updated_app 返回给调用方（e2e 触发器 / 前端 invoke）的字符串 = error code 行的说明文字（分层契约的 e2e 一侧）
+        $returned = ($auto -split 'e2e auto result=error step=launch ', 2)[1]
+        $logged = ($codes[0] -split 'error code=installer_exit_nonzero ', 2)[1]
+        if ($returned -cne $logged) { $e += "返回给调用方的错误与 error code 行不一致：[$returned] ≠ [$logged]" } else { Write-Host "  返回给调用方的错误：$returned" }
+      }
       if (-not @($lines | Where-Object { $_ -cmatch '\[update\] 安装程序：ExitedErr\(Some\(42\)\)$' }).Count) { $e += '没有「安装程序：ExitedErr(Some(42))」行' }
       if (@($lines | Where-Object { $_ -match '\[update\] installer launched' }).Count) { $e += '出现了 installer launched 行' }
       $att = @(Get-LaunchAttempts $lines)
@@ -523,11 +533,15 @@ try {
     } finally { Show-Log $off 'installer-exit-nonzero'; if ($app) { Stop-Tree $app.Id }; Stop-AllApps; Stop-Release $srv }
     $e
   }
-  # 「失败后回落到发布页」：前端 useUpdateFlow 在 relaunch 失败时调用 openReleasePage；无界面触发不经前端，
-  # 核心也没有可从进程外观察的「已回落」状态。按要求不发明接口、不放宽：这里如实记为失败（阻塞项）。
-  Invoke-Named 'installer-exit-nonzero-fallback' {
-    @('阻塞：没有可从进程外安全观察的「回落到发布页」状态（e2e 无界面触发不经前端 useUpdateFlow；核心只写 e2e auto result=error step=launch），需核心 / 前端提供可观察接口后再验收')
-  }
+  # 前端回退契约（自动化分层测试）：无界面 e2e 不经前端，这里不验收、也不计为通过（状态 layered）。
+  # 分层证据见 docs/windows-updater.md「前端回退契约（自动化分层测试）」：
+  #   - 本用例 installer-exit-nonzero：生产启动路径把 installer_exit_nonzero 的说明文字原样交给调用方（见上方断言）；
+  #   - Rust 单测：relaunch_error_reaches_frontend_as_plain_string、relaunch_command_returns_string_error、
+  #     launch_blocking_nonzero_exit_maps_to_frontend_error_and_cleans_up（Windows）——命令以 JSON 字符串 reject；
+  #   - vitest：src/hooks/useUpdateFlow.fallback.test.ts——真实 useUpdateFlow 恰好打开一次发布页、停在 fallback；
+  #   - 真实浏览器被打开：M6 实机测试。
+  $script:CurrentCase = 'frontend-fallback-contract'
+  Add-Result 'frontend-fallback-contract' 'layered' '前端回退契约（自动化分层测试）：不在无界面 e2e 中验收，不计为通过；由 CI 的 vitest（useUpdateFlow.fallback.test.ts）与 cargo test（relaunch_* / launch_blocking_nonzero_exit_*）验收，真实浏览器打开留给 M6 实机测试'
 
   # ----- 正常路径：0.3.0 → 0.3.1，走核心的 check → download_and_verify → CreateProcess(/S /UPDATE /R) -----
   Invoke-Named 'happy' {
@@ -641,13 +655,14 @@ try {
   Remove-Item -LiteralPath $AppDataDir -Recurse -Force -ErrorAction SilentlyContinue
   $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResultsDir 'results.json') -Encoding utf8
   if ($env:GITHUB_STEP_SUMMARY) {
-    $md = @('### updater-e2e 用例', '', '| 用例 | 结果 | 说明 |', '|---|---|---|')
+    $md = @('### updater-e2e 用例', '', '`layered` = 不在本 e2e 中验收、不计为通过，由 CI 的 vitest / cargo test 分层验收。', '', '| 用例 | 结果 | 说明 |', '|---|---|---|')
     foreach ($r in $results) { $md += "| $($r.case) | $($r.status) | $($r.detail -replace '\|', '/') |" }
     ($md -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
   }
 }
 
-$fail = @($results | Where-Object status -ne 'pass').Count
+$fail = @($results | Where-Object { $_.status -notin 'pass', 'layered' }).Count
 $pass = @($results | Where-Object status -eq 'pass').Count
-Write-Host "`nupdater-e2e：通过 $pass，失败 $fail"
+$layered = @($results | Where-Object status -eq 'layered').Count
+Write-Host "`nupdater-e2e：通过 $pass，失败 $fail，分层验收（不在此计为通过）$layered"
 exit $(if ($fail) { 1 } else { 0 })

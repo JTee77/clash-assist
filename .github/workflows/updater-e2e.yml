@@ -197,7 +197,7 @@ jobs:
 
       # audit-control、build-versions、sr4-marker、test-installer-isolation、server-windows、installer-downgrade-rejected、
       # portable-one-click、install-kind-nsis、wrong-digest、wrong-size、immutable-false、pe-mismatch、installer-exit-nonzero、
-      # installer-exit-nonzero-fallback、happy、downgrade、semver-not-newer、semver-same-version
+      # frontend-fallback-contract（layered，不计为通过）、happy、downgrade、semver-not-newer、semver-same-version
       - name: 端到端用例
         run: |
           ./scripts/updater-e2e-cases.ps1 -Dist030 e2e/0.3.0 -Dist031 e2e/0.3.1 `
