@@ -60,6 +60,12 @@ jobs:
       - name: 版本改写脚本自测
         run: node scripts/updater-e2e-set-version.mjs --self-test
 
+      # 测试安装程序（scripts/updater-e2e-exit-nonzero.nsi）不得被 release workflow / 打包配置引用，也不得进入上传的 artifact
+      - name: 测试安装程序隔离检查
+        run: |
+          python3 scripts/updater-e2e-isolation-check.py --self-test
+          python3 scripts/updater-e2e-isolation-check.py
+
   build:
     needs: selftest
     runs-on: windows-2022
@@ -164,23 +170,39 @@ jobs:
           name: e2e-dist-0.3.1
           path: e2e/0.3.1
 
-      # 只改这台一次性 runner 的本地策略：开启「进程创建」审计并记录命令行（Security 4688），
-      # 用例据此判断安装程序是否被启动、由谁以什么参数启动（audit-control 用例做正向对照）。
-      - name: 进程创建审计（仅 runner）
+      # 只改这台一次性 runner 的本地策略：开启「进程创建」审计并记录命令行（Security 4688）与「进程终止」审计（4689，含退出码），
+      # 用例据此判断安装程序是否被启动、由谁以什么参数启动、以什么码在何时退出（audit-control 用例做正向对照）。
+      - name: 进程创建 / 终止审计（仅 runner）
         run: |
-          auditpol /set /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030}" /success:enable
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($g in '{0CCE922B-69AE-11D9-BED3-505054503030}', '{0CCE922C-69AE-11D9-BED3-505054503030}') {
+            auditpol /set /subcategory:"$g" /success:enable
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
           New-Item -Path $key -Force | Out-Null
           New-ItemProperty -Path $key -Name ProcessCreationIncludeCmdLine_Enabled -PropertyType DWord -Value 1 -Force | Out-Null
-          auditpol /get /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030}"
+          auditpol /get /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030},{0CCE922C-69AE-11D9-BED3-505054503030}"
 
-      # audit-control、build-versions、sr4-marker、server-windows、installer-downgrade-rejected、portable-one-click、
-      # wrong-digest、wrong-size、immutable-false、pe-mismatch、happy、downgrade、semver-not-newer、semver-same-version
+      # installer-exit-nonzero 用例的测试安装程序：runner 预装的 makensis 现场编译，ProductVersion 0.3.1，启动即以 42 退出。
+      # 输出在 runner.temp/e2e-test-installer，不上传（见下方 upload-artifact 的 path，由 selftest 的隔离检查固定）。
+      - name: 编译测试安装程序（仅 e2e）
+        run: |
+          $mk = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          if (-not (Test-Path -LiteralPath $mk -PathType Leaf)) { Write-Host "::error::找不到 $mk"; exit 1 }
+          & $mk /VERSION
+          $out = Join-Path $env:RUNNER_TEMP 'e2e-test-installer'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          & $mk /WX /V2 /DVERSION=0.3.1 "/DOUTFILE=$(Join-Path $out 'exit-nonzero-0.3.1.exe')" scripts/updater-e2e-exit-nonzero.nsi
+          exit $LASTEXITCODE
+
+      # audit-control、build-versions、sr4-marker、test-installer-isolation、server-windows、installer-downgrade-rejected、
+      # portable-one-click、install-kind-nsis、wrong-digest、wrong-size、immutable-false、pe-mismatch、installer-exit-nonzero、
+      # installer-exit-nonzero-fallback、happy、downgrade、semver-not-newer、semver-same-version
       - name: 端到端用例
         run: |
           ./scripts/updater-e2e-cases.ps1 -Dist030 e2e/0.3.0 -Dist031 e2e/0.3.1 `
             -Fixture src-tauri/tests/fixtures/release-clash-assist-v0.2.9.json `
+            -ExitNonzeroInstaller (Join-Path $env:RUNNER_TEMP 'e2e-test-installer\exit-nonzero-0.3.1.exe') `
             -ResultsDir (Join-Path $env:RUNNER_TEMP 'e2e-results')
           exit $LASTEXITCODE
 

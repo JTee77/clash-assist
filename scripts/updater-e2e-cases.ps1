@@ -22,6 +22,8 @@ param(
   [Parameter(Mandatory)][string]$Dist030,
   [Parameter(Mandatory)][string]$Dist031,
   [Parameter(Mandatory)][string]$Fixture,
+  # scripts/updater-e2e-exit-nonzero.nsi 编译出的测试安装程序（ProductVersion 0.3.1，启动即以 42 退出）
+  [Parameter(Mandatory)][string]$ExitNonzeroInstaller,
   [Parameter(Mandatory)][string]$ResultsDir,
   [int]$UninstallTimeoutSeconds = 120,
   [int]$AppSignalTimeoutSeconds = 90
@@ -43,6 +45,9 @@ $E2eEnv = @('CLASH_ASSIST_E2E_API', 'CLASH_ASSIST_E2E_AUTO_UPDATE', 'CLASH_ASSIS
 $WorkDirRe = '^[0-9a-f]{32}$'
 # 由核心启动的安装程序：%LOCALAPPDATA%\ClashAssist\updates\<32 hex>\setup-<16 hex>.exe
 $StagedInstallerRe = '\\ClashAssist\\updates\\[0-9a-f]{32}\\setup-[0-9a-f]{16}\.exe$'
+# 测试安装程序的唯一标记（版本资源中的 UTF-16LE 字符串）；release 产物中不得出现
+$TestInstallerMarker = 'CLASH_ASSIST_E2E_TEST_INSTALLER_EXIT_NONZERO'
+$TestInstallerExitCode = 42
 
 $results = [Collections.Generic.List[object]]::new()
 function Add-Result([string]$name, [string]$status, [string]$detail) {
@@ -156,6 +161,49 @@ function Get-ProcessCreations([datetime]$since) {
     }
   }
 }
+# 进程终止审计（Security 4689）：退出码与时刻
+function Get-ProcessTerminations([datetime]$since) {
+  $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4689; StartTime = $since } -ErrorAction SilentlyContinue)
+  foreach ($e in $ev) {
+    $x = [xml]$e.ToXml(); $d = @{}
+    foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = [string]$n.InnerText }
+    [pscustomobject]@{
+      Time = $e.TimeCreated; Image = $d['ProcessName']
+      Pid = [Convert]::ToInt32($d['ProcessId'], 16); Status = [Convert]::ToInt64($d['Status'], 16)
+    }
+  }
+}
+# 与核心 install::launch_log_path 相同的规范化：只去掉 \\?\ / \\?\UNC\ 前缀，其余逐字节保留
+function ConvertTo-LaunchPath([string]$p) {
+  if ($p.StartsWith('\\?\UNC\', [StringComparison]::Ordinal)) { return '\\' + $p.Substring(8) }
+  if ($p.StartsWith('\\?\', [StringComparison]::Ordinal)) { return $p.Substring(4) }
+  $p
+}
+# [update] launch_attempt pid=<pid> to=<ver> path=<path>
+function Get-LaunchAttempts([string[]]$lines) {
+  foreach ($l in $lines) {
+    if ($l -cmatch '\[update\] launch_attempt pid=(\d+) to=(\S+) path=(.+)$') {
+      [pscustomobject]@{ Pid = [int]$Matches[1]; To = $Matches[2]; Path = $Matches[3]; Line = $l }
+    }
+  }
+}
+# 文件中某字符串的出现次数（UTF-8 与 UTF-16LE 两种编码）
+function Get-MarkerCount([string]$file, [string]$text) {
+  # Latin-1 把每个字节一一映射成一个字符，于是可以用序数字符串查找做字节串匹配
+  $l1 = [Text.Encoding]::Latin1
+  $hay = $l1.GetString([IO.File]::ReadAllBytes($file)); $n = 0
+  foreach ($enc in [Text.Encoding]::UTF8, [Text.Encoding]::Unicode) {
+    $pat = $l1.GetString($enc.GetBytes($text)); $i = 0
+    while (($i = $hay.IndexOf($pat, $i, [StringComparison]::Ordinal)) -ge 0) { $n++; $i += $pat.Length }
+  }
+  $n
+}
+# 安装目录快照：相对路径、大小、修改时间、SHA-256
+function Get-DirSnapshot([string]$dir) {
+  @(Get-ChildItem -LiteralPath $dir -Recurse -Force -File | Sort-Object FullName | ForEach-Object {
+    "$($_.FullName.Substring($dir.Length))|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)|$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
+  }) -join "`n"
+}
 function Get-InstallerRuns([datetime]$since) {
   @(Get-ProcessCreations $since | Where-Object { $_.Image -match $StagedInstallerRe -or $_.Image -match '(?i)setup[^\\]*\.exe$' })
 }
@@ -214,6 +262,7 @@ function Invoke-RejectCase([string]$from, [string]$tag, [string]$asset, [string]
     if ($expectCheck -and -not ($check -match $expectCheck)) { $e += "check 行不符：$check（期望匹配 $expectCheck）" }
     if ($expectCode -and -not @($lines | Where-Object { $_ -match "\[update\] error code=$expectCode\b" }).Count) { $e += "app.log 中没有 [update] error code=$expectCode" }
     if (@($lines | Where-Object { $_ -match '\[update\] installer launched' }).Count) { $e += '出现了 installer launched 行' }
+    if (@(Get-LaunchAttempts $lines).Count) { $e += "出现了 launch_attempt 行（不应走到 CreateProcess）：$(@(Get-LaunchAttempts $lines)[0].Line)" }
     Start-Sleep -Seconds 5
     $app.Refresh()
     if ($app.HasExited) { $e += "旧进程退出了（退出码 $($app.ExitCode)），失败时应保持运行" } else { Write-Host "  旧进程 PID $($app.Id) 仍在运行" }
@@ -261,6 +310,13 @@ try {
     if (-not $hit.Count) { return @('Security 日志中没有这次 cmd.exe 的 4688 事件（审计未开启？）') }
     if ($hit[0].CommandLine -notmatch $tok) { return @("4688 事件没有记录命令行（CommandLine=$($hit[0].CommandLine)）") }
     Write-Host "  4688：$($hit[0].Image) [$($hit[0].CommandLine)] 父进程 $($hit[0].ParentPid)"
+    # 进程终止审计（4689）的正向对照：退出码 5 必须被记录
+    $p2 = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @('/c', "exit 5 & rem $tok") -Wait -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 2
+    $term = @(Get-ProcessTerminations $t0 | Where-Object { $_.Pid -eq $p2.Id -and $_.Image -match '\\cmd\.exe$' })
+    if (-not $term.Count) { return @('Security 日志中没有 cmd.exe 的 4689 事件（进程终止审计未开启？）') }
+    if ($term[0].Status -ne 5) { return @("4689 记录的退出码是 $($term[0].Status)，应为 5") }
+    Write-Host "  4689：$($term[0].Image) PID $($term[0].Pid) 退出码 $($term[0].Status)"
     $script:AuditOk = $true
   }
 
@@ -287,6 +343,28 @@ try {
     $pexe = @(Get-ChildItem -LiteralPath $portableDir -Filter '*.exe' -File)
     if ($pexe.Count -ne 1) { $e += "便携 zip 根目录应恰有一个 exe（实际 $($pexe.Count)）" }
     else { & $Scanner -Exe $pexe[0].FullName -Build E2E; if ($LASTEXITCODE -ne 0) { $e += '便携版 exe：-Build E2E 扫描失败' } }
+    $e
+  }
+
+  # 测试安装程序与 release 产物隔离：标记只在测试安装程序里；它的 ProductVersion 逐字为 0.3.1
+  Invoke-Named 'test-installer-isolation' {
+    $e = @()
+    $n = Get-MarkerCount $ExitNonzeroInstaller $TestInstallerMarker
+    Write-Host "  测试安装程序 $ExitNonzeroInstaller：标记 $n 处"
+    if ($n -lt 1) { $e += '测试安装程序中没有标记' }
+    $pv = (Get-Item -LiteralPath $ExitNonzeroInstaller).VersionInfo.ProductVersion
+    if ($pv -cne '0.3.1') { $e += "测试安装程序 ProductVersion=$pv（应逐字为 0.3.1）" }
+    $files = @($d0.Setup, $d1.Setup) + @(Get-ChildItem -LiteralPath $portableDir -Filter '*.exe' -File | ForEach-Object FullName)
+    foreach ($zip in $d0.Zip, $d1.Zip) {
+      $x = Join-Path $ResultsDir ("iso-" + [Guid]::NewGuid().ToString('N')); Expand-Archive -LiteralPath $zip -DestinationPath $x
+      $files += @(Get-ChildItem -LiteralPath $x -Recurse -File | ForEach-Object FullName)
+    }
+    foreach ($f in $files) {
+      $c = Get-MarkerCount $f $TestInstallerMarker
+      Write-Host "  $f：标记 $c 处"
+      if ($c) { $e += "release 形态产物含测试标记：$f" }
+    }
+    if ((Get-FileHash -LiteralPath $ExitNonzeroInstaller).Hash -in @((Get-FileHash -LiteralPath $d0.Setup).Hash, (Get-FileHash -LiteralPath $d1.Setup).Hash)) { $e += '测试安装程序与真实安装包相同' }
     $e
   }
 
@@ -386,6 +464,71 @@ try {
   # S-6：JSON 声称 v0.3.2，实际提供 0.3.1 安装包（digest / size 与文件一致）
   Invoke-Named 'pe-mismatch' { Invoke-RejectCase '0.3.0' 'v0.3.2' $d1.Setup 'Happy' 'result=error step=download' 'pe_version_mismatch' $true 'latest=0\.3\.2 update_available=true install_kind=nsis one_click=true reason=-$' }
 
+  # 经应用完整路径（下载、校验、持句柄 CreateProcess）启动一个立即以 42 退出的测试安装程序（ProductVersion 0.3.1，
+  # size / digest 为真实值）：核心应在 2 s 观察期内看到非零退出，报 installer_exit_nonzero，清理标记与工作目录，旧进程不退出。
+  Invoke-Named 'installer-exit-nonzero' {
+    $e = @()
+    if (-not (Test-InstalledIs '0.3.0')) { return @("前置条件：应已安装 0.3.0（实际 $(Format-Installed)）") }
+    if (-not $script:AuditOk) { $e += '进程审计不可用，无法证明测试安装程序被创建并以非零码退出' }
+    $inst = Get-Installed
+    $snap0 = Get-DirSnapshot $inst.Dir
+    $srv = Start-Release 'installer-exit-nonzero' 'v0.3.1' $ExitNonzeroInstaller 'Happy'
+    $off = Get-LogLength; $t0 = (Get-Date).AddSeconds(-1); $app = $null
+    try {
+      $app = Start-App $inst.Exe $srv -Auto
+      $oldPid = $app.Id
+      $auto = Wait-LogLine $off '\[update\] e2e auto result=error step=launch'
+      Write-Host "  $auto"
+      if (-not $auto) { $e += '没有 e2e auto result=error step=launch 行' }
+      elseif ($auto -notmatch '退出码 42') { $e += "launch 错误说明里没有退出码 42：$auto" }
+      $lines = Get-LogSince $off
+      $check = @($lines | Where-Object { $_ -match '\[update\] check current=' }) | Select-Object -First 1
+      if ($check -notmatch 'current=0\.3\.0 latest=0\.3\.1 update_available=true install_kind=nsis one_click=true reason=-$') { $e += "check 行不符：$check" }
+      $codes = @($lines | Where-Object { $_ -match '\[update\] error code=' })
+      if ($codes.Count -ne 1 -or $codes[0] -notmatch '\[update\] error code=installer_exit_nonzero ') { $e += "错误码行应恰为一行 installer_exit_nonzero：$($codes -join ' / ')" }
+      if (-not @($lines | Where-Object { $_ -cmatch '\[update\] 安装程序：ExitedErr\(Some\(42\)\)$' }).Count) { $e += '没有「安装程序：ExitedErr(Some(42))」行' }
+      if (@($lines | Where-Object { $_ -match '\[update\] installer launched' }).Count) { $e += '出现了 installer launched 行' }
+      $att = @(Get-LaunchAttempts $lines)
+      if ($att.Count -ne 1) { $e += "launch_attempt 行应恰有 1 行，实际 $($att.Count)" }
+      elseif ($att[0].Pid -ne $oldPid -or $att[0].To -cne '0.3.1') { $e += "launch_attempt 不符：$($att[0].Line)（旧 PID $oldPid）" }
+      # 旧进程保持运行
+      Start-Sleep -Seconds 5; $app.Refresh()
+      if ($app.HasExited) { $e += "旧进程退出了（退出码 $($app.ExitCode)）" } else { Write-Host "  旧进程 PID $oldPid 仍在运行" }
+      # 4688 / 4689：恰好一次创建，父进程 = 旧进程，路径与 launch_attempt 逐字节一致，参数完整；2 s 内以 42 退出
+      Start-Sleep -Seconds 1
+      $runs = @(Get-InstallerRuns $t0)
+      foreach ($r in $runs) { Write-Host "  4688：$($r.Image) [$($r.CommandLine)] 父进程 $($r.ParentPid) PID $($r.Pid)" }
+      if ($runs.Count -ne 1) { $e += "应恰有 1 次安装程序创建，实际 $($runs.Count)" }
+      else {
+        $r = $runs[0]; $img = ConvertTo-LaunchPath $r.Image
+        if ($r.ParentPid -ne $oldPid) { $e += "父进程 $($r.ParentPid) 不是旧进程 $oldPid" }
+        if ($img -cnotmatch ('^' + [regex]::Escape((Join-Path $env:LOCALAPPDATA 'ClashAssist\updates')) + '\\[0-9a-f]{32}\\setup-[0-9a-f]{16}\.exe$')) { $e += "映像不在 updates\<32hex>\ 下：$img" }
+        if ($att.Count -eq 1 -and $img -cne $att[0].Path) { $e += "4688 映像与 launch_attempt 路径不一致：[$img] ≠ [$($att[0].Path)]" }
+        if ($r.CommandLine -cne ('"' + $r.Image + '" /S /UPDATE /R')) { $e += "命令行不符：$($r.CommandLine)" }
+        $term = @(Get-ProcessTerminations $t0 | Where-Object { $_.Pid -eq $r.Pid -and $_.Time -ge $r.Time }) | Select-Object -First 1
+        if (-not $term) { $e += '没有测试安装程序的 4689 终止事件' }
+        else {
+          $dt = ($term.Time - $r.Time).TotalMilliseconds
+          Write-Host "  4689：PID $($term.Pid) 退出码 $($term.Status)，存活 $([int]$dt) ms"
+          if ($term.Status -ne $TestInstallerExitCode) { $e += "4689 退出码 $($term.Status)，应为 $TestInstallerExitCode" }
+          if ($dt -ge 2000) { $e += "测试安装程序存活 $([int]$dt) ms，不在 2 s 观察期内" }
+        }
+      }
+      $gets = @(Get-AssetGets $srv)
+      if ($gets.Count -ne 1 -or $gets[0].status -ne 200 -or [long]$gets[0].bytes -ne $srv.Size) { $e += "安装包下载记录不符：$($gets | ConvertTo-Json -Compress)" }
+      if (Test-Path -LiteralPath $Marker) { $e += "存在 $Marker（失败后应当场删除）" }
+      $wd = @(Get-WorkDirs); if ($wd.Count) { $e += "updates\ 下残留工作目录：$(($wd | ForEach-Object Name) -join ', ')" }
+      if (-not (Test-InstalledIs '0.3.0')) { $e += "版本变了：$(Format-Installed)" } else { Write-Host "  版本未变：$(Format-Installed)" }
+      if ((Get-DirSnapshot $inst.Dir) -cne $snap0) { $e += '安装目录内容被改动了' } else { Write-Host '  安装目录内容未变' }
+    } finally { Show-Log $off 'installer-exit-nonzero'; if ($app) { Stop-Tree $app.Id }; Stop-AllApps; Stop-Release $srv }
+    $e
+  }
+  # 「失败后回落到发布页」：前端 useUpdateFlow 在 relaunch 失败时调用 openReleasePage；无界面触发不经前端，
+  # 核心也没有可从进程外观察的「已回落」状态。按要求不发明接口、不放宽：这里如实记为失败（阻塞项）。
+  Invoke-Named 'installer-exit-nonzero-fallback' {
+    @('阻塞：没有可从进程外安全观察的「回落到发布页」状态（e2e 无界面触发不经前端 useUpdateFlow；核心只写 e2e auto result=error step=launch），需核心 / 前端提供可观察接口后再验收')
+  }
+
   # ----- 正常路径：0.3.0 → 0.3.1，走核心的 check → download_and_verify → CreateProcess(/S /UPDATE /R) -----
   Invoke-Named 'happy' {
     $e = @()
@@ -428,6 +571,7 @@ try {
       if ($gets.Count -ne 1 -or $gets[0].status -ne 200 -or [long]$gets[0].bytes -ne $srv.Size) { $e += "安装包下载记录不符：$($gets | ConvertTo-Json -Compress)" }
       # 4688：安装程序是核心暂存的那个文件，由旧进程直接 CreateProcess，参数 /S /UPDATE /R
       Start-Sleep -Seconds 2
+      $lines = Get-LogSince $off
       $runs = @(Get-InstallerRuns $t0)
       foreach ($r in $runs) { Write-Host "  4688：$($r.Image) [$($r.CommandLine)] 父进程 $($r.ParentPid)" }
       $staged = @($runs | Where-Object { $_.Image -match $StagedInstallerRe })
@@ -435,6 +579,9 @@ try {
       elseif ($staged[0].ParentPid -ne $oldPid) { $e += "安装程序的父进程是 $($staged[0].ParentPid)，不是旧应用进程 $oldPid" }
       elseif ($staged[0].Image -cnotmatch ('^' + [regex]::Escape((Join-Path $env:LOCALAPPDATA 'ClashAssist\updates')) + '\\[0-9a-f]{32}\\setup-[0-9a-f]{16}\.exe$')) { $e += "安装程序映像不在 %LOCALAPPDATA%\ClashAssist\updates\<32hex>\ 下：$($staged[0].Image)" }
       # Rust std 的 CreateProcess 命令行：程序路径加引号，三个参数原样，不多不少
+      elseif (@(Get-LaunchAttempts $lines).Count -ne 1) { $e += "launch_attempt 行应恰有 1 行：$(@(Get-LaunchAttempts $lines).Line -join ' / ')" }
+      elseif (@(Get-LaunchAttempts $lines)[0].Pid -ne $oldPid -or @(Get-LaunchAttempts $lines)[0].To -cne '0.3.1') { $e += "launch_attempt 不符：$(@(Get-LaunchAttempts $lines)[0].Line)（旧 PID $oldPid）" }
+      elseif ((ConvertTo-LaunchPath $staged[0].Image) -cne @(Get-LaunchAttempts $lines)[0].Path) { $e += "4688 映像与 launch_attempt 路径不一致：[$(ConvertTo-LaunchPath $staged[0].Image)] ≠ [$(@(Get-LaunchAttempts $lines)[0].Path)]" }
       elseif ($staged[0].CommandLine -cne ('"' + $staged[0].Image + '" /S /UPDATE /R')) { $e += "安装程序命令行不是 `"<暂存路径>`" /S /UPDATE /R：$($staged[0].CommandLine)" }
       elseif (-not $app.HasExited -or $app.ExitTime -le $staged[0].Time) { $e += "旧进程没有在安装程序启动之后退出（安装程序 $($staged[0].Time.ToString('o'))，旧进程退出 $(if ($app.HasExited) { $app.ExitTime.ToString('o') } else { '未退出' })）" }
       # 证据约定见 docs/windows-updater.md「成功路径的证据」：`installer launched` 行在观察期结束后才写，
