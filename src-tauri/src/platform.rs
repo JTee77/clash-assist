@@ -224,12 +224,32 @@ pub fn verge_sock_candidates(yaml_unix_paths: &[String], extras: &[String]) -> V
     out
 }
 
-#[cfg(target_os = "macos")]
+/// 应用数据根目录（V8）：Windows 为 `%LOCALAPPDATA%\ClashAssist\`（下设 `logs\`、`updates\`、
+/// `update-pending.json`；卸载时勾选「删除应用数据」才删除，见 hooks.nsh）。
+#[cfg(windows)]
+pub fn app_data_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("ClashAssist"))
+}
+
+/// S-4（Ellie PR58）：单测不写真实的用户日志目录，改写到临时目录。
+#[cfg(test)]
+pub fn app_log_dir() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join("clash-assist-test-logs"))
+}
+
+#[cfg(all(not(test), target_os = "macos"))]
 pub fn app_log_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join("Library/Logs/ClashAssist"))
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows（M5）：`%LOCALAPPDATA%\ClashAssist\logs`（与 hooks.nsh 的清理路径一致；M5 之前在
+/// `%APPDATA%\logs\ClashAssist`，旧日志不迁移）。
+#[cfg(all(not(test), windows))]
+pub fn app_log_dir() -> Option<PathBuf> {
+    app_data_dir().map(|d| d.join("logs"))
+}
+
+#[cfg(all(not(test), not(target_os = "macos"), not(windows)))]
 pub fn app_log_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("logs").join("ClashAssist"))
 }

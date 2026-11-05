@@ -45,10 +45,10 @@
 
 ## 依赖这些名称的位置（落地时同步）
 
-- 2.4 更新器：`parse_release_asset`（`WinSetupX64`）、`validate_asset_url`、`install_kind`、`prepare_update_dir`、`pending.rs`
+- 2.4 更新器（M5 已落地，见 [windows-updater.md](windows-updater.md)）：`parse_release_asset`（`AssetKind::WinSetupX64`）、`validate_asset_url`、`update_check/install.rs`（安装形态）、`update_check/windows.rs::prepare_update_dir`、`update_check/pending.rs`
 - 3 `release-windows.yml`：改名、打便携 zip、生成 `SHA256SUMS.txt`
 - 3 `src-tauri/windows/hooks.nsh`：卸载时删除应用数据
-- `platform::app_log_dir()`：Windows 上改为 `%LOCALAPPDATA%\ClashAssist\logs`
+- `platform::app_log_dir()`：Windows 上为 `%LOCALAPPDATA%\ClashAssist\logs`（M5 起；之前在 `%APPDATA%\logs\ClashAssist`）
 - M4 冒烟测试 `scripts/smoke-windows.ps1`、M5 `updater-e2e.yml`
 
 ## 控制器命名管道（M1）

@@ -13,6 +13,7 @@ export const zhHans = {
   "update.fallbackOpened": "已为你打开下载页",
   "update.goPortable": "前往发布页下载",
   "update.pending": "上次更新未完成",
+  "update.succeeded": "已更新到 {v}",
   "update.retry": "重试",
   "update.openRelease": "前往发布页",
   "update.readyWin": "新版本 {v} 已下载好",

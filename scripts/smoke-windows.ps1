@@ -76,7 +76,8 @@ function Stop-Tree([int] $RootPid) {
   Start-Sleep -Seconds 2
 }
 
-$AppLogDir = Join-Path $env:APPDATA 'logs\ClashAssist'   # platform::app_log_dir()（dirs::data_dir() = Roaming）
+$AppLogDir = Join-Path $env:LOCALAPPDATA 'ClashAssist\logs'   # platform::app_log_dir()（M5 起 = %LOCALAPPDATA%\ClashAssist\logs）
+$LegacyAppLogDir = Join-Path $env:APPDATA 'logs\ClashAssist'   # M5 之前的位置（Roaming），诊断时一并收集
 if ($DiagDir) {
   New-Item -ItemType Directory -Force -Path $DiagDir | Out-Null
   $DiagDir = (Resolve-Path -LiteralPath $DiagDir).Path
@@ -232,7 +233,7 @@ try {
 finally {
   Step '清理'
   if ($DiagDir) {
-    foreach ($d in @($AppLogDir, (Join-Path $AppDataDir 'logs'))) {
+    foreach ($d in @($AppLogDir, $LegacyAppLogDir)) {
       if (Test-Path -LiteralPath $d) {
         $dest = Join-Path $DiagDir ('applogs-' + ($d -replace '[:\\]+', '_'))
         Copy-Item -LiteralPath $d -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue

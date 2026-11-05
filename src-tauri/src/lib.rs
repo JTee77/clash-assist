@@ -11,9 +11,6 @@ mod dns;
 mod dns_query;
 #[cfg(windows)]
 mod dns_windows;
-// M5 e2e：测试构建标记（S-R4）；release 构建不启用 updater-e2e，该模块不存在。
-#[cfg(feature = "updater-e2e")]
-mod e2e_marker;
 mod http_body;
 mod mihomo;
 mod platform;
@@ -359,7 +356,8 @@ async fn egress_dns_whoami(req: DnsWhoamiRequest) -> Result<dns::DnsWhoamiResult
     result
 }
 
-/// Append a line to the platform log dir (macOS: ~/Library/Logs/ClashAssist). Best-effort.
+/// Append a line to the platform log dir (macOS: ~/Library/Logs/ClashAssist；Windows：
+/// %LOCALAPPDATA%\ClashAssist\logs；单测：临时目录，S-4). Best-effort.
 fn append_app_log(msg: &str) {
     use std::io::Write;
 
@@ -754,10 +752,12 @@ async fn apply_update(work_dir: String) -> Result<String, String> {
     update_check::apply_staged_update(work_dir).await
 }
 
-/// 应用内自更新阶段 3：用户点击「立即重启」时拉起新版 .app 并退出当前进程。
+/// 应用内自更新阶段 3：用户点击「立即重启」。Mac：拉起新版 .app 并退出当前进程；
+/// Windows（M5）：启动已校验的安装程序（`/S /UPDATE /R`），观察 2 s 后退出（失败则不退出、返回错误）。
+/// async：Windows 的 2 s 观察在阻塞线程池上做，不卡住主线程。
 #[tauri::command]
-fn relaunch_updated_app() -> Result<(), String> {
-    update_check::relaunch_updated_app()
+async fn relaunch_updated_app(app: tauri::AppHandle) -> Result<(), String> {
+    update_check::relaunch_updated_app(app).await
 }
 
 /// `--cli install-shim [--dir D]`
@@ -920,9 +920,9 @@ fn migrate_legacy_identifier_dirs(new_id: &str) {
 }
 
 pub fn run() {
-    #[cfg(feature = "updater-e2e")]
-    e2e_marker::touch();
     install_panic_log_hook();
+    // S-2 / S-R4：扫描用的标记常量（正向对照；e2e 构建另有 e2e 标记）留在 exe 里。
+    update_check::keep_build_markers();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.menu(app_menu::build).on_menu_event(|app, event| {
@@ -948,6 +948,12 @@ pub fn run() {
             append_app_log(&format!(
                 "startup frontend_url={frontend_url} (no data-url navigate)"
             ));
+            // M5（M-5）：上次一键更新的对账（成功 / 未完成 / 过期），结果供 check_update 带给前端。
+            #[cfg(windows)]
+            tauri::async_runtime::spawn_blocking(update_check::pending::startup_outcome);
+            // updater-e2e 构建：CLASH_ASSIST_E2E_AUTO_UPDATE=1 时无界面执行一键更新（生产构建无此代码）。
+            #[cfg(all(windows, feature = "updater-e2e"))]
+            update_check::spawn_e2e_auto_update(app.handle().clone());
 
             // 主窗口在这里创建（tauri.conf.json 里 create:false），以便 CLI 模式单独配置：
             // - visible(false)：一开始就不显示，不再先闪一下再隐藏；

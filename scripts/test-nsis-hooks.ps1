@@ -21,6 +21,12 @@
     5. 同 4，但数据目录本身是目录 symlink（Ellie r3）。建不了 symlink（无权限）时跳过并说明。
   会读写真实的 %LOCALAPPDATA%\ClashAssist（hooks 里写死的路径），所以该目录已存在时拒绝运行。
 
+  M5：另编一个测试安装器（VERSION 固定为 0.3.1），照 installer.nsi 的 Section EarlyChecks 写法执行
+  CA_SILENT_COMPARE_INSTALLED_VERSION 后再做上游的「$R0 = -1 则 Abort」。UNINSTKEY 指向一次性的
+  HKCU\Software\clash-assist-hooktest-<随机> 键，用例写入不同的 DisplayVersion：
+    6. 未安装 / 0.3.0 / 0.3.1：退出码 0，$R0 分别为 1 / 1 / 0；
+    7. 0.3.2 / 0.10.0（按数字比较，不按字符串）：静默降级被拒绝，退出码非 0，后续代码不执行。
+
   用法：pwsh scripts/test-nsis-hooks.ps1 [-HooksFile src-tauri/windows/hooks.nsh] [-MakeNsis <makensis.exe>]
   makensis 查找顺序：-MakeNsis → %LOCALAPPDATA%\tauri\NSIS\makensis.exe（tauri build 下载的版本）→ PATH
   → %ProgramFiles(x86)%\NSIS\makensis.exe（runner 预装）。
@@ -114,6 +120,49 @@ SectionEnd
   $un
 }
 
+# M5：静默降级检查（CA_SILENT_COMPARE_INSTALLED_VERSION + 上游 EarlyChecks 的 Abort）
+function Build-VersionHarness([string]$regKey, [string]$resultFile) {
+  $nsi = Join-Path $work 'version.nsi'
+  $exe = Join-Path $work 'version.exe'
+  $un = Join-Path $work 'version-uninstall.exe'
+  @"
+Unicode true
+!include LogicLib.nsh
+!include WordFunc.nsh
+Name "clash-assist-version-test"
+OutFile "$exe"
+RequestExecutionLevel user
+SilentInstall silent
+SilentUnInstall silent
+!define BUNDLEID "$bundle"
+!define VERSION "0.3.1"
+!define UNINSTKEY "$regKey"
+Var UpdateMode
+Var DeleteAppDataCheckboxState
+!include "$HooksFile"
+Section EarlyChecks
+  ; 与 src-tauri/windows/installer.nsi 的 Section EarlyChecks 相同（scripts/check-nsis-template.py 锁定该位置）
+  !insertmacro CA_SILENT_COMPARE_INSTALLED_VERSION
+  `${If} `$R0 = -1
+    Abort
+  `${EndIf}
+  FileOpen `$0 "$resultFile" w
+  FileWrite `$0 `$R0
+  FileClose `$0
+  WriteUninstaller "$un"
+SectionEnd
+Section Uninstall
+  ; 只为让卸载段与两个变量都被引用（/WX 下未用变量是错误）；本用例不运行卸载器
+  StrCpy `$DeleteAppDataCheckboxState 0
+  StrCpy `$UpdateMode 0
+  !insertmacro NSIS_HOOK_POSTUNINSTALL
+SectionEnd
+"@ | Set-Content -LiteralPath $nsi -Encoding utf8BOM
+  $out = & $MakeNsis /V2 /WX $nsi 2>&1
+  if ($LASTEXITCODE -ne 0) { $out | ForEach-Object { Write-Host "    $_" }; throw "makensis 编译 $nsi 失败（$LASTEXITCODE）" }
+  $exe
+}
+
 function Remove-Link([string]$path) {
   # 只删链接本身（不递归、不跟随）
   if (Test-Path -LiteralPath $path) { [IO.Directory]::Delete($path, $false) }
@@ -198,7 +247,39 @@ try {
     }
     foreach ($t in $targets) { Clear-DataDir $t }
   }
+
+  Write-Host '== M5：静默安装的降级检查（CA_SILENT_COMPARE_INSTALLED_VERSION，安装器版本 0.3.1）'
+  $regRel = "Software\$bundle"
+  $regPath = "HKCU:\$regRel"
+  $result = Join-Path $work 'version-result.txt'
+  $vexe = Build-VersionHarness $regRel $result
+  $vcases = @(
+    @{ Installed = $null; Exit = 0; R0 = '1' }
+    @{ Installed = '0.3.0'; Exit = 0; R0 = '1' }
+    @{ Installed = '0.3.1'; Exit = 0; R0 = '0' }
+    @{ Installed = '0.3.2'; Exit = 'nonzero' }
+    @{ Installed = '0.10.0'; Exit = 'nonzero' }
+  )
+  foreach ($v in $vcases) {
+    if (Test-Path -LiteralPath $regPath) { Remove-Item -LiteralPath $regPath -Recurse -Force }
+    if ($v.Installed) {
+      New-Item -Path $regPath -Force | Out-Null
+      Set-ItemProperty -LiteralPath $regPath -Name DisplayVersion -Value $v.Installed
+    }
+    if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force }
+    $label = if ($v.Installed) { "已装 $($v.Installed)" } else { '未安装' }
+    $p = Start-Process -FilePath $vexe -ArgumentList '/S' -Wait -PassThru
+    if ($v.Exit -eq 0) {
+      Check ($p.ExitCode -eq 0) "$label：静默安装继续（退出码 $($p.ExitCode)）"
+      $r0 = if (Test-Path -LiteralPath $result) { (Get-Content -Raw -LiteralPath $result).Trim() } else { '<无>' }
+      Check ($r0 -eq $v.R0) "$label：`$R0 = $($v.R0)（实际 $r0）"
+    } else {
+      Check ($p.ExitCode -ne 0) "$label：静默降级被拒绝，退出码非 0（实际 $($p.ExitCode)）"
+      Check (-not (Test-Path -LiteralPath $result)) "$label：Abort 之后的代码没有执行"
+    }
+  }
 } finally {
+  if ($regPath -and (Test-Path -LiteralPath $regPath)) { Remove-Item -LiteralPath $regPath -Recurse -Force }
   foreach ($t in $targets) { Clear-DataDir $t }
   if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
 }

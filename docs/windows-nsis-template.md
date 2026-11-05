@@ -8,10 +8,15 @@
 - `installer.nsi` = tauri-cli **v2.11.4** 的上游模板
   （`tauri-apps/tauri` @ `8909f221d1515955fc843808032bdc5d62209c96`，即 tag `tauri-cli-v2.11.4`，
   路径 `crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi`）
-  **加上唯一一段** `; >>> clash-assist M4b` … `; <<< clash-assist M4b`：把「删除应用数据」分支里的两行
-  `RmDir /r "$APPDATA\${BUNDLEID}"` / `RmDir /r "$LOCALAPPDATA\${BUNDLEID}"` 换成
-  `!insertmacro CA_DELETE_TAURI_APP_DATA`（`hooks.nsh`，不跟随 junction）。
-- `check-nsis-template.py` 把这一段换回上游两行后，要求（换行统一为 LF 后）其 SHA-256 等于脚本里固定的上游值，并要求
+  **加上两段**：
+  - `; >>> clash-assist M4b` … `; <<< clash-assist M4b`：把「删除应用数据」分支里的两行
+    `RmDir /r "$APPDATA\${BUNDLEID}"` / `RmDir /r "$LOCALAPPDATA\${BUNDLEID}"` 换成
+    `!insertmacro CA_DELETE_TAURI_APP_DATA`（`hooks.nsh`，不跟随 junction）；
+  - `; >>> clash-assist M5` … `; <<< clash-assist M5`（M5，plan §2.4 第 6 项）：在 `Section EarlyChecks`
+    的 `${If} ${Silent}` 之后、上游 `${If} $R0 = -1` 之前插入 `!insertmacro CA_SILENT_COMPARE_INSTALLED_VERSION`。
+    上游只在 PageReinstall 里给 `$R0` 赋值，静默模式不走这个页面，所以 `/S`、`/S /UPDATE` 会静默降级、退出码为 0；
+    这个宏按已安装的 `DisplayVersion` 先算出 `$R0`，降级时由上游原有的 `Abort` 拒绝（退出码非 0）。
+- `check-nsis-template.py` 把 M4b 段换回上游两行、删掉 M5 段后，要求（换行统一为 LF 后）其 SHA-256 等于脚本里固定的上游值，并要求
   `package.json` 的 `@tauri-apps/cli` 仍是 2.11.4。所以**单独升级 CLI 会让 CI 失败**，这是有意的。
 
 ## 升级步骤
@@ -30,6 +35,9 @@
    `${AndIf} $UpdateMode <> 1`）内、`SetShellVarContext current` 之后，把那两行 `RmDir /r` 换成原来的
    M4b 段（照抄旧文件里的整段）。如果上游改了这两行或这个分支，先停下来评估，并同步改
    `check-nsis-template.py` 里的 `UPSTREAM_LINES` / `CONTEXT`。
+   再放回 M5 段：在 `Section EarlyChecks` 的 `${If} ${Silent}` 与 `; If downgrading` 之间照抄旧文件里的整段。
+   如果上游修好了静默降级检查（自己给 `$R0` 赋值），去掉 M5 段与 `hooks.nsh` 里的宏，并同步改
+   `check-nsis-template.py` 的 `BLOCK_M5` / `M5_BEFORE` / `M5_AFTER`。
 4. 更新 `scripts/check-nsis-template.py`：`UPSTREAM_VERSION`、`UPSTREAM_COMMIT`（完整 SHA）、
    `UPSTREAM_SHA256`（第 2 步的值，LF 换行）。同时升级 `package.json` 的 `@tauri-apps/cli`，
    并检查 `release-windows.yml` 里 `test-nsis-hooks.ps1 -ExpectVersion`（CLI 下载的 makensis 版本）是否要改。

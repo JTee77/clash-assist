@@ -6,4 +6,5 @@
 /.github/workflows/** @JTee77
 /scripts/check-*.py @JTee77
 /scripts/scan-nsis-rmdir.ps1 @JTee77
+/scripts/scan-exe-markers.ps1 @JTee77
 /.github/CODEOWNERS @JTee77

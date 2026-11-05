@@ -30,13 +30,23 @@ describe("in-app staged self-update bridge (0.2.4)", () => {
     };
   });
 
-  it("M5 之前 Windows 不检查更新：不调用 check_update，直接视为无更新", async () => {
-    expect(WINDOWS_UPDATER_ENABLED).toBe(false);
-    expect(updaterSupported(true)).toBe(false);
+  it("M5 起 Windows 也检查更新：调用 check_update，并保留 install_kind / one_click / updated", async () => {
+    expect(WINDOWS_UPDATER_ENABLED).toBe(true);
+    expect(updaterSupported(true)).toBe(true);
     expect(updaterSupported(false)).toBe(true);
-    h.invoke.mockResolvedValue({ current: "0.2.4", latest: "9.9.9", update_available: true, url: "x" });
-    await expect(checkUpdateOnce(true)).resolves.toBeNull();
-    expect(h.invoke).not.toHaveBeenCalled();
+    h.invoke.mockResolvedValue({
+      current: "0.3.1",
+      latest: "0.3.1",
+      update_available: false,
+      url: "x",
+      install_kind: "nsis",
+      one_click: false,
+      updated: { from: "0.3.0", to: "0.3.1" },
+    });
+    const r = await checkUpdateOnce(true);
+    expect(h.invoke).toHaveBeenCalledWith("check_update");
+    expect(r?.install_kind).toBe("nsis");
+    expect(r?.updated).toEqual({ from: "0.3.0", to: "0.3.1" });
   });
 
   it("checkUpdateOnce caches the promise across calls and preserves dmg_url / dmg_sha256", async () => {

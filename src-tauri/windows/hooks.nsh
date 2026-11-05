@@ -14,6 +14,9 @@
 ; CA_DELETE_TAURI_APP_DATA below, via our copy of the template
 ; (src-tauri/windows/installer.nsi, bundle.windows.nsis.template).
 ;
+; M5: CA_SILENT_COMPARE_INSTALLED_VERSION below makes the template's silent
+; downgrade check work (see the macro).
+;
 ; Only NSIS_HOOK_POSTUNINSTALL runs as a hook. It removes our own data dir
 ; %LOCALAPPDATA%\ClashAssist\ (logs\, updates\, update-pending.json), and never
 ; during an update. It must not touch Clash Verge's directories and must not
@@ -96,6 +99,29 @@ FunctionEnd
   ${If} $LOCALAPPDATA != ""
     Push "$LOCALAPPDATA\${BUNDLEID}"
     Call un.CA_RmTreeNoFollow
+  ${EndIf}
+!macroend
+
+; M5 (windows-plan r4 section 2.4 item 6): used by src-tauri/windows/installer.nsi
+; in Section EarlyChecks, inside "${If} ${Silent}", right before the template's
+;   ${If} $R0 = -1 ... Abort
+; Upstream only sets $R0 (same 0 / upgrade 1 / downgrade -1) in PageReinstall,
+; which silent mode skips, so "/S" and "/S /UPDATE" downgraded silently with
+; exit code 0. This sets $R0 the same way from the installed DisplayVersion
+; (SHCTX = HKCU for installMode currentUser); no installed version -> 1.
+; Versions are plain X.Y.Z (scripts/check-version-sync.mjs and the release
+; workflow enforce it), so WordFunc's VersionCompare is exact here.
+; scripts/test-nsis-hooks.ps1 runs this macro against a scratch registry key.
+!macro CA_SILENT_COMPARE_INSTALLED_VERSION
+  ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
+  ${If} $R0 == ""
+    StrCpy $R0 1
+  ${Else}
+    ${VersionCompare} "${VERSION}" "$R0" $R0
+    ; VersionCompare: 0 = same, 1 = this installer is newer, 2 = installed is newer
+    ${If} $R0 = 2
+      StrCpy $R0 -1
+    ${EndIf}
   ${EndIf}
 !macroend
 
