@@ -637,6 +637,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&target);
     }
 
+    /// installer_exit_nonzero 经生产启动路径（`launch_blocking`：semver 复核 → 写标记 → launch_attempt →
+    /// CreateProcess → 2 s 观察）返回的错误，就是 `relaunch_updated_app` 命令 reject 给前端的值：
+    /// `Err(String)` → tauri `InvokeError` → JSON 字符串（前端 `useUpdateFlow` 的 errMsg 按 string 处理）。
+    /// 同时标记与工作目录当场清理。用 `System32\xcopy.exe` 充当「立即以非零码退出的安装程序」：
+    /// `xcopy /S /UPDATE /R` 缺源参数 / 开关无效，xcopy 以非零码退出，不读写任何文件。
+    #[test]
+    fn launch_blocking_nonzero_exit_maps_to_frontend_error_and_cleans_up() {
+        let root = temp_root("exit-nonzero");
+        let dir = prepare_update_dir(&root).unwrap();
+        let exe = PathBuf::from(std::env::var("SystemRoot").unwrap()).join(r"System32\xcopy.exe");
+        let reader = std::fs::File::open(&exe).unwrap();
+        let staged = Staged {
+            dir: dir.clone(),
+            path: exe,
+            reader,
+            version: "999.0.0".into(),
+            sha256: "0".repeat(64),
+        };
+        let err = launch_blocking(staged, &root).unwrap_err();
+        assert!(err.starts_with("安装程序退出码 "), "{err}");
+        assert!(!err.starts_with("安装程序退出码 0"), "{err}");
+        assert!(err.ends_with("未完成更新"), "{err}");
+        let shaped: tauri::ipc::InvokeError = err.clone().into();
+        assert_eq!(shaped.0, serde_json::Value::String(err));
+        assert!(!pending::marker_path(&root).exists(), "标记应当场删除");
+        assert!(!dir.exists(), "工作目录应当场删除");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 测试进程不是从安装目录运行的：一律判为便携版（不会误开一键更新）。
     #[test]
     fn test_binary_is_portable() {

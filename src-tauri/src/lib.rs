@@ -1082,6 +1082,20 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// `relaunch_updated_app` 命令的签名即前端契约：失败时 reject 一个字符串（update_check 的
+/// `relaunch_error_reaches_frontend_as_plain_string` 固定其 JSON 形状）。
+#[cfg(test)]
+mod relaunch_command_shape_tests {
+    #[test]
+    fn relaunch_command_returns_string_error() {
+        fn takes<F: std::future::Future<Output = Result<(), String>>>(
+            _: fn(tauri::AppHandle) -> F,
+        ) {
+        }
+        takes(super::relaunch_updated_app);
+    }
+}
+
 #[cfg(test)]
 mod cli_mode_tests {
     use super::is_cli_mode_args;
