@@ -1,0 +1,57 @@
+[
+  {
+    "id": 500,
+    "tag_name": "v0.3.1",
+    "name": "Clash Assist v0.3.1",
+    "draft": true,
+    "prerelease": false,
+    "immutable": false,
+    "assets": [
+      {
+        "id": 1003,
+        "name": "Clash.Assist_0.3.1_aarch64.dmg",
+        "content_type": "application/x-apple-diskimage",
+        "size": 5700691,
+        "state": "uploaded",
+        "digest": "sha256:5227f9124e654e8a759f8d76d4dbec554c5ceb94131b0ff71251b43f9bb1c159",
+        "label": ""
+      },
+      {
+        "id": 1002,
+        "name": "Clash.Assist_0.3.1_x64-portable.zip",
+        "content_type": "application/zip",
+        "size": 3929784,
+        "state": "uploaded",
+        "digest": "sha256:27f48ba92a5882ff85ce357f5afa3226d1786c7badc862fa95d63fd40f731b88",
+        "label": ""
+      },
+      {
+        "id": 1001,
+        "name": "Clash.Assist_0.3.1_x64-setup.exe",
+        "content_type": "application/octet-stream",
+        "size": 4916879,
+        "state": "uploaded",
+        "digest": "sha256:22f59dca82363454bae15c131e2758505a4e83de23208944c2cf67dccab9cdae",
+        "label": ""
+      },
+      {
+        "id": 1000,
+        "name": "SHA256SUMS.txt",
+        "content_type": "text/plain; charset=utf-8",
+        "size": 201,
+        "state": "uploaded",
+        "digest": "sha256:cdbe4a6518c005e86871af73fd7728ada9c61a442f719146f26dfdf38e843b99",
+        "label": ""
+      }
+    ]
+  },
+  {
+    "id": 442681552,
+    "tag_name": "v0.3.0",
+    "name": "Clash Assist v0.3.0",
+    "draft": false,
+    "prerelease": false,
+    "immutable": true,
+    "assets": []
+  }
+]

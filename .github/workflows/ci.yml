@@ -38,6 +38,9 @@ jobs:
           python3 scripts/check-release-workflow.py
           python3 scripts/check-release-workflow.py --self-test
 
+      - name: 发布前闸门检查脚本自测（fixture：缺 DMG / 两个 DMG / 版本不符 / 未上传完 / 缺 digest / 非 draft / 全部正确）
+        run: python3 scripts/check-release-draft.py --self-test
+
       - name: 自带的 Tauri NSIS 模板只改了删除应用数据那一段（M4b，含自测）
         run: |
           python3 scripts/check-nsis-template.py
