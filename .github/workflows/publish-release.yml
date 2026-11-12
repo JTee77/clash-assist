@@ -9,7 +9,8 @@ name: Publish release (draft → published)
 # --ref 必须就是该 tag：environment `release` 只允许 v* tag 部署（S-R3），且这样检出的检查脚本
 # 就是 tag 上（main 历史里）的代码。
 #
-# 本 workflow 只读 release 与资产、下载 SHA256SUMS.txt 核对，最后一步只发 PATCH draft=false；
+# 本 workflow 只读 release 与资产、下载 SHA256SUMS.txt 核对、按 tag 提交读 release/platforms.json
+# 核对发布说明里的平台改动标记（#71），最后一步只发 PATCH draft=false；
 # 不上传、不删除、不改任何资产，也不重新生成 SHA256SUMS.txt（它已做过 attestation）。
 on:
   workflow_dispatch:
@@ -74,6 +75,18 @@ jobs:
             *) echo "::error::$TAG（$obj）不在 main 的历史上（compare：$status）"; exit 1 ;;
           esac
 
+      # #71：发布说明里的平台改动标记必须与 tag 提交上的 release/platforms.json 一致。
+      # 按提交 SHA 经 API 读取（上一步已确认 tag 指向 GITHUB_SHA）；读不到即失败，不放行。
+      - name: 读取 tag 提交上的 release/platforms.json（API，只读）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/release/platforms.json?ref=$GITHUB_SHA" > "$RUNNER_TEMP/platforms.json"; then
+            echo "::error::tag 提交 $GITHUB_SHA 上读不到 release/platforms.json（平台改动标记的来源，见 #71），拒绝发布"; exit 1
+          fi
+          cat "$RUNNER_TEMP/platforms.json"
+
       - name: 读取 draft 与资产（第一次快照，只读）
         env:
           GH_TOKEN: ${{ github.token }}
@@ -97,7 +110,8 @@ jobs:
         run: |
           python3 scripts/check-release-draft.py --tag "$TAG" \
             --releases "$RUNNER_TEMP/snap1/releases.json" --assets "$RUNNER_TEMP/snap1/assets.json" \
-            --sums "$RUNNER_TEMP/snap1/SHA256SUMS.txt" --summary "$GITHUB_STEP_SUMMARY"
+            --sums "$RUNNER_TEMP/snap1/SHA256SUMS.txt" --platforms "$RUNNER_TEMP/platforms.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
       - name: 发布前复读 draft 与资产（第二次快照，只读）
         env:
@@ -120,7 +134,7 @@ jobs:
         run: |
           python3 scripts/check-release-draft.py --tag "$TAG" \
             --releases "$RUNNER_TEMP/snap2/releases.json" --assets "$RUNNER_TEMP/snap2/assets.json" \
-            --sums "$RUNNER_TEMP/snap2/SHA256SUMS.txt" \
+            --sums "$RUNNER_TEMP/snap2/SHA256SUMS.txt" --platforms "$RUNNER_TEMP/platforms.json" \
             --baseline-releases "$RUNNER_TEMP/snap1/releases.json" --baseline-assets "$RUNNER_TEMP/snap1/assets.json"
 
       # 唯一的写操作：只把 draft 改为 false，不带其他字段

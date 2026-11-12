@@ -43,7 +43,8 @@
         "digest": "sha256:cdbe4a6518c005e86871af73fd7728ada9c61a442f719146f26dfdf38e843b99",
         "label": ""
       }
-    ]
+    ],
+    "body": "## Clash伴侣 0.3.1\n\n<!-- clash-assist:platforms macos=0.3.1 windows=0.3.1 -->\n\n### Windows（x64，Windows 10 / 11）\n\n- `Clash.Assist_0.3.1_x64-setup.exe`：安装版，支持一键更新。\n"
   },
   {
     "id": 442681552,
@@ -52,6 +53,7 @@
     "draft": false,
     "prerelease": false,
     "immutable": true,
-    "assets": []
+    "assets": [],
+    "body": "## Clash伴侣 0.3.0\n"
   }
 ]

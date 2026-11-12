@@ -17,12 +17,16 @@ workflow 用 `gh api` 抓下来的快照文件，全部检查通过才返回 0�
   5. 下载下来的 SHA256SUMS.txt 本身的 sha256 等于其 GitHub digest，且内容恰好两行，
      分别对应 setup.exe 与便携 zip，哈希等于这两个资产的 GitHub digest
      （即 draft 里的 Windows 包就是 attest 过的那两个；不改动 SHA256SUMS.txt）；
-  6. 若给了 --baseline（第一次快照的 assets.json）：release id 与每个资产的
+  6. 平台改动标记（#71，docs/windows-updater.md「某平台无变化时不提示更新」）：draft 的发布说明里
+     恰好一条 `<!-- clash-assist:platforms macos=X.Y.Z windows=X.Y.Z -->`，macos / windows 各一次，
+     值与 tag 提交上的 release/platforms.json（workflow 经 API 按该提交读取）完全一致；
+     值不高于本版、至少一个等于本版；说明里不得残留 `{{` 占位符。缺文件、缺标记、对不上都失败；
+  7. 若给了 --baseline（第一次快照）：release id、发布说明，以及每个资产的
      id / 名字 / 大小 / digest / state 必须与第一次快照完全一致（发布前复读，缩小竞态窗口）。
 
 用法：
   python3 scripts/check-release-draft.py --tag vX.Y.Z --releases R.json --assets A.json --sums SHA256SUMS.txt \
-      [--baseline-releases R0.json --baseline-assets A0.json] [--summary FILE]
+      --platforms platforms.json [--baseline-releases R0.json --baseline-assets A0.json] [--summary FILE]
   python3 scripts/check-release-draft.py --self-test
 R.json / A.json 可以是 `gh api --paginate --slurp` 的分页数组（数组的数组），也可以是平铺数组。
 退出码：0 = 可以发布；1 = 不可发布；2 = 用法错误 / 文件无法读取。
@@ -45,6 +49,8 @@ from pathlib import Path
 TAG_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 SUMS_NAME = "SHA256SUMS.txt"
+MARKER_KEY = "clash-assist:platforms"
+PLATFORMS = ("macos", "windows")
 FIXTURES = Path(__file__).resolve().parent / "tests" / "release-draft"
 
 
@@ -175,6 +181,63 @@ def check_sums(sums_bytes: bytes, found: dict[str, dict], version: str, errs: li
                         f"sha256:{entries[names[key]]} 不一致（draft 里的包不是 attest 过的那个）")
 
 
+def _ver(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.split("."))
+
+
+def check_platform_marker(body, platforms_raw, version: str, errs: list[str]) -> None:
+    """格式与 #71 的 scripts/check-release-notes.mjs（checkMarker / checkPlatforms）一致。"""
+    semver = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+    plat_ok = False
+    if not isinstance(platforms_raw, dict) or set(platforms_raw) != set(PLATFORMS):
+        errs.append(f"release/platforms.json 必须恰好有 macos / windows 两项，实际：{platforms_raw!r}")
+    elif not all(isinstance(platforms_raw[k], str) and semver.fullmatch(platforms_raw[k]) for k in PLATFORMS):
+        errs.append(f"release/platforms.json 的值必须是 X.Y.Z：{platforms_raw!r}")
+    else:
+        plat_ok = True
+
+    if not isinstance(body, str) or not body.strip():
+        errs.append("draft 的发布说明为空，缺少平台改动标记")
+        return
+    if "{{" in body:
+        errs.append("draft 的发布说明里还有未替换的 {{ 占位符")
+    count = body.count(MARKER_KEY)
+    if count != 1:
+        errs.append(f"draft 的发布说明里平台改动标记（{MARKER_KEY}）应恰好一条，实际 {count} 条")
+        return
+    line = next(l for l in body.splitlines() if MARKER_KEY in l).strip()
+    m = re.fullmatch(r"<!--\s*clash-assist:platforms\s+(.*?)\s*-->", line)
+    if not m:
+        errs.append(f"平台改动标记格式不对：{line!r}")
+        return
+    seen: dict[str, str] = {}
+    for tok in m.group(1).split():
+        parts = tok.split("=")
+        if len(parts) != 2 or parts[0] not in PLATFORMS:
+            errs.append(f"平台改动标记里有无法识别的项：{tok!r}")
+        elif parts[0] in seen:
+            errs.append(f"平台改动标记里 {parts[0]} 重复")
+        elif not semver.fullmatch(parts[1]):
+            errs.append(f"平台改动标记里 {parts[0]} 的值不是 X.Y.Z：{parts[1]!r}")
+        else:
+            seen[parts[0]] = parts[1]
+    if any(e.startswith("平台改动标记里") for e in errs):
+        return
+    missing = [k for k in PLATFORMS if k not in seen]
+    if missing:
+        errs.append(f"平台改动标记缺少 {missing}")
+        return
+    for k in PLATFORMS:
+        if _ver(seen[k]) > _ver(version):
+            errs.append(f"平台改动标记里 {k}={seen[k]} 高于本版 {version}")
+    if not any(seen[k] == version for k in PLATFORMS):
+        errs.append(f"平台改动标记里至少一个平台应等于本版 {version}")
+    if plat_ok:
+        for k in PLATFORMS:
+            if seen[k] != platforms_raw[k]:
+                errs.append(f"平台改动标记 {k}={seen[k]} 与 tag 提交上 release/platforms.json 的 {platforms_raw[k]} 不一致")
+
+
 def asset_fingerprint(assets: list) -> list[tuple]:
     return sorted(
         (a.get("id"), a.get("name"), a.get("size"), a.get("digest"), a.get("state"))
@@ -182,7 +245,7 @@ def asset_fingerprint(assets: list) -> list[tuple]:
     )
 
 
-def evaluate(tag: str, releases_raw, assets_raw, sums_bytes: bytes,
+def evaluate(tag: str, releases_raw, assets_raw, sums_bytes: bytes, platforms_raw,
              baseline_releases_raw=None, baseline_assets_raw=None) -> tuple[list[str], dict]:
     """返回 (错误列表, 信息)。错误列表为空才可以发布。"""
     errs: list[str] = []
@@ -203,6 +266,8 @@ def evaluate(tag: str, releases_raw, assets_raw, sums_bytes: bytes,
     found = check_assets(assets, version, errs)
     info["assets"] = {k: {"name": v.get("name"), "digest": v.get("digest"), "size": v.get("size")} for k, v in found.items()}
     check_sums(sums_bytes, found, version, errs)
+    if rel is not None:
+        check_platform_marker(rel.get("body"), platforms_raw, version, errs)
 
     if (baseline_releases_raw is None) != (baseline_assets_raw is None):
         raise UsageError("--baseline-releases 与 --baseline-assets 必须同时给出")
@@ -212,6 +277,8 @@ def evaluate(tag: str, releases_raw, assets_raw, sums_bytes: bytes,
         b_id = b_rel[0].get("id") if len(b_rel) == 1 else None
         if rel is None or b_id != rel.get("id"):
             errs.append(f"复读时 release id 与第一次快照不一致（之前 {b_id!r}，现在 {info.get('release_id')!r}）")
+        elif b_rel[0].get("body") != rel.get("body"):
+            errs.append("复读时发布说明与第一次检查时不一致，拒绝发布")
         if asset_fingerprint(flatten_pages(baseline_assets_raw, "baseline assets")) != asset_fingerprint(assets):
             errs.append("复读时资产（id / 名字 / 大小 / digest / state）与第一次检查时不一致，拒绝发布")
     return errs, info
@@ -246,9 +313,10 @@ def run(args) -> int:
             sums = args.sums.read_bytes()
         except OSError as e:
             raise UsageError(f"无法读取 {args.sums}：{e}") from e
+        plat = load_json(args.platforms, "release/platforms.json")
         b_rel = load_json(args.baseline_releases, "baseline releases") if args.baseline_releases else None
         b_ast = load_json(args.baseline_assets, "baseline assets") if args.baseline_assets else None
-        errs, info = evaluate(args.tag, releases, assets, sums, b_rel, b_ast)
+        errs, info = evaluate(args.tag, releases, assets, sums, plat, b_rel, b_ast)
     except UsageError as e:
         print(f"check-release-draft：{e}", file=sys.stderr)
         return 2
@@ -276,6 +344,7 @@ def self_test() -> int:
     base_releases = load_json(FIXTURES / "releases.json", "fixture releases")
     base_assets = load_json(FIXTURES / "assets.json", "fixture assets")
     base_sums = (FIXTURES / "SHA256SUMS.txt").read_bytes()
+    base_plat = load_json(FIXTURES / "platforms.json", "fixture platforms")
     tag = "v0.3.1"
 
     def page(x):
@@ -289,9 +358,9 @@ def self_test() -> int:
 
     def case(label, mutate=None, *, want_ok=False, want=None, tag_=tag, baseline=None, flat=False):
         nonlocal fail
-        rs, as_, sums = copy.deepcopy(base_releases), copy.deepcopy(base_assets), base_sums
+        rs, as_, sums, plat = copy.deepcopy(base_releases), copy.deepcopy(base_assets), base_sums, copy.deepcopy(base_plat)
         if mutate:
-            r = mutate(rs, as_)
+            r = mutate(rs, as_, plat) if mutate.__code__.co_argcount == 3 else mutate(rs, as_)
             if isinstance(r, bytes):
                 sums = r
         b = None
@@ -300,7 +369,7 @@ def self_test() -> int:
             baseline(b_rs, b_as)
             b = (page(b_rs), page(b_as))
         wrap = (lambda x: x) if flat else page
-        errs, _ = evaluate(tag_, wrap(rs), wrap(as_), sums, *(b or (None, None)))
+        errs, _ = evaluate(tag_, wrap(rs), wrap(as_), sums, plat, *(b or (None, None)))
         ok = (not errs) if want_ok else (bool(errs) and (want is None or any(want in e for e in errs)))
         if ok:
             print(f"ok   {label}" + ("" if want_ok else f"（{errs[0] if len(errs) == 1 else '; '.join(errs)}）"))
@@ -348,12 +417,43 @@ def self_test() -> int:
          want="release id")
     case("release 对象内的资产与资产列表不一致", lambda r, a: rel_of(r)["assets"].pop(), want="不一致")
 
+    def body_sub(a, b):
+        def m(r, _as):
+            rel = rel_of(r)
+            assert a in rel["body"], a
+            rel["body"] = rel["body"].replace(a, b)
+        return m
+    marker = "<!-- clash-assist:platforms macos=0.3.1 windows=0.3.1 -->"
+    case("发布说明缺平台改动标记", body_sub(marker, ""), want="应恰好一条")
+    case("发布说明为空", lambda r, a: rel_of(r).__setitem__("body", ""), want="发布说明为空")
+    case("平台改动标记出现两次", body_sub(marker, marker + "\n" + marker), want="实际 2 条")
+    case("platforms.json 与标记不一致", lambda r, a, p: p.__setitem__("windows", "0.3.0"), want="不一致")
+    case("标记值被手改（macos=0.3.0）", body_sub("macos=0.3.1", "macos=0.3.0"), want="与 tag 提交上")
+    case("标记缺 windows", body_sub(" windows=0.3.1", ""), want="缺少")
+    case("标记 key 重复", body_sub("windows=0.3.1", "macos=0.3.1"), want="重复")
+    case("标记有未知项", body_sub("windows=0.3.1", "windows=0.3.1 linux=0.3.1"), want="无法识别")
+    case("标记值不是 X.Y.Z", body_sub("windows=0.3.1", "windows=latest"), want="不是 X.Y.Z")
+    case("标记不是 HTML 注释", body_sub(marker, "clash-assist:platforms macos=0.3.1 windows=0.3.1"), want="格式不对")
+    case("标记值高于本版", body_sub("windows=0.3.1", "windows=0.3.2"), want="高于本版")
+    case("标记两项都不是本版",
+         lambda r, a, p: (body_sub(marker, "<!-- clash-assist:platforms macos=0.3.0 windows=0.3.0 -->")(r, a),
+                          p.update(macos="0.3.0", windows="0.3.0")), want="至少一个平台应等于本版")
+    case("发布说明残留 {{ 占位符", body_sub("Clash伴侣 0.3.1", "Clash伴侣 {{VERSION}}"), want="占位符")
+    case("platforms.json 缺 windows", lambda r, a, p: p.pop("windows"), want="恰好有 macos / windows")
+    case("platforms.json 值不是 X.Y.Z", lambda r, a, p: p.__setitem__("macos", "v0.3.1"), want="必须是 X.Y.Z")
+    case("platforms.json 为空对象", lambda r, a, p: p.clear(), want="恰好有 macos / windows")
+    case("只改一个平台、标记与文件一致时通过",
+         lambda r, a, p: (body_sub("macos=0.3.1", "macos=0.3.0")(r, a), p.__setitem__("macos", "0.3.0")), want_ok=True)
+    case("复读时发布说明被改", body_sub("macos=0.3.1", "macos=0.3.0"), baseline=lambda r, a: None,
+         want="发布说明与第一次检查时不一致")
+
     # 命令行：退出码与 summary
     with tempfile.TemporaryDirectory(prefix="ca-release-draft-") as tmp:
         td = Path(tmp)
         summary = td / "summary.md"
         argv = ["--tag", tag, "--releases", str(FIXTURES / "releases.json"), "--assets", str(FIXTURES / "assets.json"),
-                "--sums", str(FIXTURES / "SHA256SUMS.txt"), "--summary", str(summary)]
+                "--sums", str(FIXTURES / "SHA256SUMS.txt"), "--platforms", str(FIXTURES / "platforms.json"),
+                "--summary", str(summary)]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             rc_ok = main(argv)
@@ -380,14 +480,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("--releases", type=Path)
     p.add_argument("--assets", type=Path)
     p.add_argument("--sums", type=Path)
+    p.add_argument("--platforms", type=Path, help="tag 提交上的 release/platforms.json")
     p.add_argument("--baseline-releases", type=Path)
     p.add_argument("--baseline-assets", type=Path)
     p.add_argument("--summary", type=Path)
     args = p.parse_args(argv)
     if args.self_test:
         return self_test()
-    if not (args.tag and args.releases and args.assets and args.sums):
-        print("check-release-draft：需要 --tag --releases --assets --sums（或 --self-test）", file=sys.stderr)
+    if not (args.tag and args.releases and args.assets and args.sums and args.platforms):
+        print("check-release-draft：需要 --tag --releases --assets --sums --platforms（或 --self-test）", file=sys.stderr)
         return 2
     if (args.baseline_releases is None) != (args.baseline_assets is None):
         print("check-release-draft：--baseline-releases 与 --baseline-assets 必须同时给出", file=sys.stderr)

@@ -30,7 +30,8 @@
   P3. 所有 uses 固定到 40 位 commit SHA；checkout 必须 persist-credentials: false；不得使用缓存；
   P4. run 里不得出现 ${{ }}（输入一律经 env 传入）；job 级 env 不得带 GH_TOKEN（令牌只给需要的步骤）；
   P5. 先校验 tag 与运行 ref、版本一致性（check-version-sync.mjs --tag）、tag 位于 main；
-      check-release-draft.py 恰好跑两次（第二次带 --baseline-*），这两步不拿令牌；
+      check-release-draft.py 恰好跑两次（第二次带 --baseline-*），两次都带 --platforms，这两步不拿令牌；
+      release/platforms.json 必须按 ref=$GITHUB_SHA 经 API 读取，且排在两次检查之前（#71 平台改动标记）；
   P6. 恰好一个发布步骤（含 draft=false），是最后一步，排在上述所有检查之后；
       整个文件只有这一处 PATCH，且只带 draft=false 一个字段，目标是 releases/$id；
   P7. 不得有上传 / 删除 / 新建 / 编辑资产或 release 的命令（gh release upload/delete/create/edit、
@@ -335,7 +336,14 @@ def check_publish(doc, text):
         reread_gate = [i for i in gates if "--baseline-releases" in runs[i] and "--baseline-assets" in runs[i]]
         if len(gates) != 2 or len(first_gate) != 1 or len(reread_gate) != 1 or first_gate[0] > reread_gate[0]:
             errs.append("P5 check-release-draft.py 必须恰好跑两次：先检查，复读后再带 --baseline-* 检查一次")
+        plat_fetch = idx(lambda r: "contents/release/platforms.json?ref=$GITHUB_SHA" in r)
+        if len(plat_fetch) != 1:
+            errs.append("P5 必须恰好一处按 ref=$GITHUB_SHA 经 API 读取 release/platforms.json")
+        elif gates and plat_fetch[0] > min(gates):
+            errs.append("P5 release/platforms.json 必须在检查之前读取")
         for i in gates:
+            if "--platforms" not in runs[i]:
+                errs.append("P5 检查脚本必须带 --platforms（核对平台改动标记）")
             if _env_has_token(steps[i].get("env")):
                 errs.append("P5 检查脚本步骤不得拿令牌（只读快照文件）")
             if "|| true" in runs[i] or "; true" in runs[i]:
@@ -448,6 +456,10 @@ def self_test_publish(path):
         ("删掉第一次检查", lambda d, t: (steps(d).remove([x for x in steps(d) if "check-release-draft.py" in str(x.get("run", "")) and "--baseline" not in x["run"]][0]), t), "恰好跑两次"),
         ("删掉复读后的检查", lambda d, t: (drop(d, "--baseline-releases"), t), "恰好跑两次"),
         ("复读检查不带 baseline", lambda d, t: (replace_run(step_with(d, "--baseline-releases"), "--baseline-releases", "--x"), t), "恰好跑两次"),
+        ("检查不带 --platforms", lambda d, t: (replace_run(step_with(d, "--baseline-releases"), '--platforms "$RUNNER_TEMP/platforms.json"', ""), t), "--platforms"),
+        ("platforms.json 不按提交读取", lambda d, t: (replace_run(step_with(d, "contents/release/platforms.json"), "?ref=$GITHUB_SHA", "?ref=main"), t), "ref=$GITHUB_SHA"),
+        ("删掉 platforms.json 读取", lambda d, t: (drop(d, "contents/release/platforms.json"), t), "ref=$GITHUB_SHA"),
+        ("platforms.json 读取挪到检查之后", lambda d, t: (steps(d).insert(len(steps(d)) - 1, steps(d).pop(steps(d).index(step_with(d, "contents/release/platforms.json")))), t), "之前读取"),
         ("删掉复读", lambda d, t: (drop(d, "snap2\"; mkdir"), t), "复读"),
         ("发布挪到最前", lambda d, t: (move_pub_first(d), t), "P6 发布步骤"),
         ("发布后再加一步", lambda d, t: (steps(d).append({"name": "x", "run": "echo hi"}), t), "最后一步"),
