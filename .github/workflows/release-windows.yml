@@ -386,7 +386,7 @@ jobs:
             echo "draft 已存在（例如已上传 Mac DMG），追加 Windows 资产；同名资产已存在时上传会失败"
             gh release upload "$TAG" dist/* -R "$REPO"
           else
-            gh release create "$TAG" dist/* -R "$REPO" --draft --verify-tag --title "$TAG" --notes-file notes/release-notes.md
+            gh release create "$TAG" dist/* -R "$REPO" --draft --verify-tag --title "Clash Assist $TAG" --notes-file notes/release-notes.md
           fi
 
       - name: 上传后核对 GitHub digest 与本地哈希一致
