@@ -9,4 +9,5 @@
 /scripts/scan-exe-markers.ps1 @JTee77
 /scripts/test-nsis-hooks.ps1 @JTee77
 /scripts/smoke-windows.ps1 @JTee77
+/release/platforms.json @JTee77
 /.github/CODEOWNERS @JTee77
