@@ -15,7 +15,10 @@
      （M5：FAKE_LATEST 与 updater-e2e 标记出现即失败），不得带 if / continue-on-error；
      任何 run 都不得带 `--features updater-e2e`（M-7）；
   4e. build job 在 tauri build 之后用 check-windows-icons.py 对照应用 exe 与 NSIS 安装器的图标资源
-     （--exe 为 release/clash-assist.exe，--installer 为 x64-setup.exe），不得带 if / continue-on-error；
+     （--exe 为 release/clash-assist.exe，--installer 为 x64-setup.exe），不得带 if / continue-on-error，
+     id 为 icons；win-dist 只能在它之后上传；检查失败时的诊断 artifact 只能叫 icon-check-failed，
+     只由 build job 在它之后、以 if: failure() && steps.icons.outcome == 'failure' 上传，retention-days ≤ 7，
+     任何 job 都不得下载它；
   5. 每个 actions/checkout 都设置 persist-credentials: false（S-R2）；
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
   4c. 冒烟诊断（M4c）：WER LocalDumps 只能在 build job 里配置；名为 smoke-diagnostics 的 artifact
@@ -212,6 +215,50 @@ def check(doc, text):
             errs.append("图标资源检查必须以 exit $LASTEXITCODE 结束")
         if "if" in st or st.get("continue-on-error"):
             errs.append("图标资源检查步骤不得有 if / continue-on-error")
+        if st.get("id") != "icons":
+            errs.append("图标资源检查步骤的 id 必须是 icons（诊断上传按 steps.icons.outcome 判断）")
+        # 发布用的 win-dist 只能在图标检查之后上传：attest / release 只吃通过检查的产物。
+        for i, x in enumerate(build_steps):
+            if not isinstance(x, dict) or not str(x.get("uses", "")).startswith("actions/upload-artifact@"):
+                continue
+            w = x.get("with") or {}
+            if isinstance(w, dict) and w.get("name") == "win-dist" and i < icon_at:
+                errs.append("win-dist 必须在图标资源检查之后上传")
+
+    # 图标检查失败时的诊断上传：只在该检查失败时上传、短期保留、名字不能是 win-dist，且只能在 build job。
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        for i, x in enumerate(job.get("steps") or []):
+            if not isinstance(x, dict):
+                continue
+            w = x.get("with") or {}
+            if not (str(x.get("uses", "")).startswith("actions/upload-artifact@") and isinstance(w, dict)):
+                continue
+            if w.get("name") != "icon-check-failed":
+                continue
+            if name != "build":
+                errs.append(f"job {name}：icon-check-failed 只能由 build job 上传")
+                continue
+            cond = str(x.get("if", "")).replace(" ", "").replace('"', "'")
+            if cond.startswith("${{") and cond.endswith("}}"):
+                cond = cond[3:-2]
+            if cond != "failure()&&steps.icons.outcome=='failure'":
+                errs.append(f"icon-check-failed 只能在图标检查失败时上传（if: failure() && steps.icons.outcome == 'failure'），实际：{x.get('if')!r}")
+            if icon_at is None or i < icon_at:
+                errs.append("icon-check-failed 必须在图标资源检查之后")
+            rd = w.get("retention-days")
+            if not isinstance(rd, int) or not 1 <= rd <= 7:
+                errs.append(f"icon-check-failed 的 retention-days 必须是 1–7 的整数，实际：{rd!r}")
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        for x in job.get("steps") or []:
+            if not isinstance(x, dict):
+                continue
+            w = x.get("with") or {}
+            if str(x.get("uses", "")).startswith("actions/download-artifact@") and isinstance(w, dict) and w.get("name") == "icon-check-failed":
+                errs.append(f"job {name}：不得下载 icon-check-failed（未通过检查的产物不能进入 attest / release）")
 
     # M4c：冒烟诊断只在 build job（contents: read、一次性 runner），诊断 artifact 短期保留。
     for name, job in jobs.items():
@@ -576,6 +623,17 @@ def self_test(path):
     def icon_step(d):
         return next(x for x in d["jobs"]["build"]["steps"] if "check-windows-icons.py" in str(x.get("run", "")))
 
+    def win_dist_upload(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if (x.get("with") or {}).get("name") == "win-dist")
+
+    def icon_diag(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if (x.get("with") or {}).get("name") == "icon-check-failed")
+
+    def move_before_icon(d, st):
+        steps = d["jobs"]["build"]["steps"]
+        steps.remove(st)
+        steps.insert(steps.index(icon_step(d)), st)
+
     def move_icon_first(d):
         st = icon_step(d)
         d["jobs"]["build"]["steps"].remove(st)
@@ -628,6 +686,14 @@ def self_test(path):
         ("图标资源检查 continue-on-error", lambda d, t: (icon_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
         ("图标资源检查加 if", lambda d, t: (icon_step(d).__setitem__("if", "false"), t), "图标资源检查步骤不得有 if"),
         ("图标资源检查挪到 tauri build 之前", lambda d, t: (move_icon_first(d), t), "之后"),
+        ("图标资源检查去掉 id", lambda d, t: (icon_step(d).pop("id"), t), "id 必须是 icons"),
+        ("win-dist 挪到图标检查之前", lambda d, t: (move_before_icon(d, win_dist_upload(d)), t), "win-dist 必须在图标资源检查之后"),
+        ("icon-check-failed 总是上传", lambda d, t: (icon_diag(d).__setitem__("if", "${{ always() }}"), t), "只能在图标检查失败时上传"),
+        ("icon-check-failed 任一步失败就上传", lambda d, t: (icon_diag(d).__setitem__("if", "failure()"), t), "只能在图标检查失败时上传"),
+        ("icon-check-failed 挪到图标检查之前", lambda d, t: (move_before_icon(d, icon_diag(d)), t), "icon-check-failed 必须在图标资源检查之后"),
+        ("icon-check-failed 保留 30 天", lambda d, t: (icon_diag(d)["with"].__setitem__("retention-days", 30), t), "icon-check-failed 的 retention-days"),
+        ("release job 下载 icon-check-failed", lambda d, t: (d["jobs"]["release"]["steps"].insert(0, {"uses": "actions/download-artifact@x", "with": {"name": "icon-check-failed", "path": "dist"}}), t), "不得下载 icon-check-failed"),
+        ("attest job 上传 icon-check-failed", lambda d, t: (d["jobs"]["attest"]["steps"].append(copy.deepcopy(icon_diag(d))), t), "icon-check-failed 只能由 build job"),
         ("smoke-diagnostics 保留 30 天", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", 30), t), "retention-days"),
         ("smoke-diagnostics 保留期是表达式", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", "${{ 3 }}"), t), "retention-days"),
         ("smoke-diagnostics 不排除 .dmp", lambda d, t: (drop_dmp_exclusion(d), t), "不得含内存转储"),
