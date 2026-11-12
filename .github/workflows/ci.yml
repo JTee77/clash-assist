@@ -51,6 +51,9 @@ jobs:
           node scripts/check-release-notes.mjs --self-test
           node scripts/check-release-notes.mjs scripts/release-notes-windows.md src-tauri/windows/portable.txt
 
+      - name: Windows 图标资源检查自测
+        run: python3 scripts/check-windows-icons.py --self-test
+
   test:
     strategy:
       fail-fast: false
@@ -154,6 +157,19 @@ jobs:
           ./scripts/scan-nsis-rmdir.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/scan-exe-markers.ps1 -Exe src-tauri/target/debug/clash-assist.exe -Build Debug
+          exit $LASTEXITCODE
+
+      # CI 不跑 tauri build，没有 NSIS 安装器；此处只对照 cargo 编出的 exe 与 bundle.icon 的 .ico。
+      # 安装器图标在 release-windows.yml 打包后检查：配置了 installerIcon 就必须与该 .ico 一致，未配置则只报告默认图标、不记通过。
+      - name: 图标资源检查（自测 + 真实 exe 对照）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python scripts/check-windows-icons.py --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/check-windows-icons.py --exe src-tauri/target/debug/clash-assist.exe
           exit $LASTEXITCODE
 
       # clippy.toml 的 disallowed-methods（M-2 / S-R1）：两个平台、含测试代码都必须零告警

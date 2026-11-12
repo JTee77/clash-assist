@@ -175,6 +175,17 @@ jobs:
           Get-ChildItem -LiteralPath $dist | Format-Table Name, Length -AutoSize | Out-String | Write-Host
           Get-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt')
 
+      # 对照同一提交的源 .ico：应用 exe 必须与 bundle.icon 的 icon.ico 尺寸集合和图像字节一致。
+      # 若配置了 bundle.windows.nsis.installerIcon，安装器也必须与该文件一致；未配置则只报告默认图标，不记为通过。
+      - name: 检查 exe 与安装器的图标资源
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'win-dist'
+          python scripts/check-windows-icons.py --exe "src-tauri/target/$env:TARGET/release/clash-assist.exe" --installer (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe")
+          exit $LASTEXITCODE
+
       # M4c：冒烟启动崩溃时留下证据。只改这台一次性 runner 的注册表：让 WER 为 clash-assist.exe
       # 写本地 minidump（DumpType 1）到诊断目录。
       - name: 冒烟诊断准备（WER LocalDumps，仅 runner）
@@ -242,11 +253,12 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'release-notes'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $notes = (Get-Content -Raw -LiteralPath scripts/release-notes-windows.md).Replace('{{VERSION}}', $env:VERSION).Replace('{{REPO}}', $env:REPO)
+          $plat = Get-Content -Raw -LiteralPath release/platforms.json | ConvertFrom-Json
+          $notes = (Get-Content -Raw -LiteralPath scripts/release-notes-windows.md).Replace('{{VERSION}}', $env:VERSION).Replace('{{REPO}}', $env:REPO).Replace('{{MACOS_VERSION}}', [string]$plat.macos).Replace('{{WINDOWS_VERSION}}', [string]$plat.windows)
           if ($notes.Contains('{{')) { Write-Error '发布说明中仍有未替换的占位符'; exit 1 }
           $path = Join-Path $out 'release-notes.md'
           [IO.File]::WriteAllText($path, $notes, [Text.UTF8Encoding]::new($false))
-          node scripts/check-release-notes.mjs $path
+          node scripts/check-release-notes.mjs --version $env:VERSION $path
           exit $LASTEXITCODE
 
       - name: 上传 win-dist
