@@ -19,18 +19,14 @@ Ping numbers inside a proxy client often look great on paper, even when a node i
 
 ## Download & Installation
 
-All downloads are on the [Releases](https://github.com/JTee77/clash-assist/releases) page. macOS and Windows share the same version number.
+Download from [Releases](https://github.com/JTee77/clash-assist/releases).
 
 ### Windows
 
 | File | Description |
 |---|---|
-| `Clash.Assist_<version>_x64-setup.exe` | **Installer (recommended)**: installs for the current user, no administrator rights needed; supports in-app **“Update now”**. |
-| `Clash.Assist_<version>_x64-portable.zip` | **Portable**: unzip and run `clash-assist.exe`; it is not registered as an installed app. No in-app update — download new versions from the Releases page. |
-
-- Requirements: Windows 10 / 11 (x64). The UI needs the Microsoft WebView2 runtime: the installer sets it up if missing; the portable build needs it already present (included in Windows 11 and installed on most Windows 10 PCs via Windows Update; otherwise run the installer once or get it from Microsoft).
-- Uninstall: remove Clash Assist from **Settings › Apps**; you can choose to delete app data (including cached results) during uninstall.
-- Each release includes `SHA256SUMS.txt`, and you can run `gh attestation verify <file> -R JTee77/clash-assist --signer-workflow JTee77/clash-assist/.github/workflows/release-windows.yml` to confirm a file was built from this repository.
+| `Clash.Assist_<version>_x64-setup.exe` | **Installer (recommended)**: supports in-app **“Update now”**. |
+| `Clash.Assist_<version>_x64-portable.zip` | **Portable**: unzip and run; no in-app update. |
 
 ### macOS
 
