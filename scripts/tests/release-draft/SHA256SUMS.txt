@@ -1,0 +1,2 @@
+27f48ba92a5882ff85ce357f5afa3226d1786c7badc862fa95d63fd40f731b88  Clash.Assist_0.3.1_x64-portable.zip
+22f59dca82363454bae15c131e2758505a4e83de23208944c2cf67dccab9cdae  Clash.Assist_0.3.1_x64-setup.exe

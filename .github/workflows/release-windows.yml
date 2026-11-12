@@ -426,5 +426,5 @@ jobs:
           {
             echo "### draft release $TAG 已写入"
             echo
-            echo "检查 draft 内容、上传 Mac DMG（如需要）后，由仓库所有者手动发布。发布前确认仓库已开启 immutable releases（C-3）。"
+            echo "下一步：把 Mac DMG（Clash.Assist_<版本>_aarch64.dmg）上传到这个 draft，然后运行 publish-release.yml（gh workflow run publish-release.yml --ref $TAG -f tag=$TAG），检查通过并审批后由它发布。不要在网页上直接点 Publish。发布前确认仓库已开启 immutable releases（C-3）。"
           } >> "$GITHUB_STEP_SUMMARY"
