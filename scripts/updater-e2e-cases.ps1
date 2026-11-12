@@ -658,7 +658,8 @@ try {
       Stop-AllApps
       $off2 = Get-LogLength
       $again = Start-App $exe $null
-      $startup = Wait-LogLine $off2 'startup frontend_url=' 60
+      # release 构建的启动行：startup frontend=embedded version=<版本>（同时确认第三次启动的是 0.3.1）
+      $startup = Wait-LogLine $off2 'startup frontend=embedded version=0\.3\.1$' 60
       Start-Sleep -Seconds 8
       $l2 = Get-LogSince $off2
       Show-Log $off2 'happy 第三次启动'

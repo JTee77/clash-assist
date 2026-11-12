@@ -36,7 +36,7 @@ pub use cancel::{arm_cancel, disarm_cancel, fire_cancel};
 pub use discovery::read_verge_config;
 #[cfg(windows)]
 pub use discovery::read_verge_config_redacted;
-pub use discovery::{discover_controller, discover_for_client};
+pub use discovery::{discover_controller, discover_for_client, discover_mixed_port_quiet};
 pub use nodes::list_nodes_async;
 pub use timed::proxy_timed_transfer_async;
 pub use transport::{http_via_tcp_async, http_via_unix, proxy_fetch_async};

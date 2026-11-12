@@ -285,7 +285,99 @@ fn read_and_parse(path: &Path) -> Option<ParsedControllerYaml> {
 /// Discover Verge controller: merge stale `config.yaml` + fresher `clash-verge.yaml`,
 /// then resolve a working unix sock across service / legacy / TMPDIR / yaml / cmdline.
 pub fn discover_controller() -> DiscoverResult {
-    withhold_secret_on_windows(discover_controller_inner())
+    let d = withhold_secret_on_windows(discover_controller_inner());
+    log_selected(&d);
+    d
+}
+
+// ---- 发现日志：成功一行 + 去重（M6 真机） ------------------------------------------------
+
+/// 同一条日志在这段时间内重复出现时只记一次。只是兜底：更新器已改走不打日志的
+/// [`discover_mixed_port_quiet`]，去重主要防启动竞态与开发构建 StrictMode 双挂载；安全提示不去重。
+const DISCOVER_LOG_DEDUPE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 记住上一条发现日志及其时间；内容相同且未过窗口则跳过。纯逻辑，时间由调用方注入以便单测。
+#[derive(Debug)]
+pub(crate) struct LogDedupe {
+    last: Option<(String, std::time::Instant)>,
+}
+
+impl LogDedupe {
+    pub(crate) const fn new() -> Self {
+        Self { last: None }
+    }
+
+    /// 返回 `true` 表示应当写入日志。
+    pub(crate) fn should_log(&mut self, key: &str, now: std::time::Instant) -> bool {
+        if let Some((k, at)) = &self.last {
+            if k == key && now.saturating_duration_since(*at) < DISCOVER_LOG_DEDUPE {
+                return false;
+            }
+        }
+        self.last = Some((key.to_string(), now));
+        true
+    }
+}
+
+/// 按「通道」分开去重：选中结果与管道失败明细各自一份状态，互不覆盖。
+static SELECTED_LOG: std::sync::Mutex<LogDedupe> = std::sync::Mutex::new(LogDedupe::new());
+#[cfg(windows)]
+static PIPE_PROBE_LOG: std::sync::Mutex<LogDedupe> = std::sync::Mutex::new(LogDedupe::new());
+
+/// 把若干行作为一组写日志；与上一组完全相同且在窗口内则整组跳过。
+fn append_deduped(state: &std::sync::Mutex<LogDedupe>, lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    let key = lines.join("\n");
+    let ok = state
+        .lock()
+        .map(|mut g| g.should_log(&key, std::time::Instant::now()))
+        .unwrap_or(true);
+    if ok {
+        for l in lines {
+            crate::append_app_log(l);
+        }
+    }
+}
+
+/// 发现结论的成功日志行（纯函数）。只用来源标签（路径 / 管道名已百分号编码，控制字符不会进日志）、
+/// 通道类型与端口，**从不包含 secret**。
+pub(crate) fn selected_log_line(d: &DiscoverResult) -> String {
+    let via = match &d.sock_path {
+        Some(_) if cfg!(windows) => "pipe".to_string(),
+        Some(_) => "unix".to_string(),
+        None => format!("tcp:{}", d.port),
+    };
+    format!("[discover] selected source={} via={via}", d.source)
+}
+
+/// 来源标签带安全后缀（管道 DACL 对所有用户开放 / DACL 过宽）时，成功行属于安全提示，**不去重**。
+pub(crate) fn selected_is_security_relevant(source: &str) -> bool {
+    use super::source_label::SuffixKey;
+    [SuffixKey::PipeOpenToAll, SuffixKey::PipeInsecureDacl]
+        .iter()
+        .any(|k| source.contains(&format!(";{}=", k.as_str())))
+}
+
+fn log_selected(d: &DiscoverResult) {
+    let line = selected_log_line(d);
+    if selected_is_security_relevant(&d.source) {
+        crate::append_app_log(&line);
+    } else {
+        append_deduped(&SELECTED_LOG, &[line]);
+    }
+}
+
+/// 只要混合代理端口时用（更新器的代理端口探测，M6 Ellie PR65 M-1）：**不打日志、不探测管道 /
+/// 套接字、不更新 M-3 状态**。Verge 只读 yaml 的 `mixed-port`（与完整发现给出的值相同）；
+/// 其他客户端的发现本身就只读配置文件、不打日志。
+pub fn discover_mixed_port_quiet(client_id: &str) -> u16 {
+    if client_id == "verge" {
+        let (parsed, _) = read_verge_parsed();
+        return parsed.mixed_port.unwrap_or(DEFAULT_MIXED);
+    }
+    discover_for_client_inner(client_id).mixed_port
 }
 
 /// Windows：发现结果里**永远不携带 secret**（方案 §2.1 规则 4，M-3 / C-1 / C-4）。
@@ -552,22 +644,33 @@ pub(super) fn windows_source_label(
     label.suffix(SuffixKey::PipeInsecureDacl, insecure).finish()
 }
 
-/// 生产入口：读 Verge yaml，探测管道候选，并记入 M-3 状态。
+/// 管道探测的日志：候选不可用的明细按组去重（兜底启动竞态 / dev StrictMode 双挂载）；
+/// DACL 过宽的安全提示每次都记。
 #[cfg(windows)]
-pub(crate) fn windows_probe_verge_pipes() -> WinPipeProbe {
-    let (parsed, _) = read_verge_parsed();
-    let policy = super::trust::TrustPolicy::production();
-    let probe = windows_probe_pipes(parsed.pipe_path.as_deref(), &policy);
-    for (c, why) in &probe.tried {
-        crate::append_app_log(&format!("[discover] 管道候选 {c:?} 不可用：{why}"));
-    }
-    super::win_tcp::record_probe_outcome(probe.fallback.clone());
+fn log_pipe_probe(probe: &WinPipeProbe) {
+    let lines: Vec<String> = probe
+        .tried
+        .iter()
+        .map(|(c, why)| format!("[discover] 管道候选 {c:?} 不可用：{why}"))
+        .collect();
+    append_deduped(&PIPE_PROBE_LOG, &lines);
+    // 安全提示（DACL 过宽）每次都记，不参与去重。
     for c in &probe.insecure {
         crate::append_app_log(&format!(
             "[discover] {}（{c}）",
             super::trust::PIPE_INSECURE_DACL_UI
         ));
     }
+}
+
+/// 生产入口：读 Verge yaml，探测管道候选，并记入 M-3 状态。
+#[cfg(windows)]
+pub(crate) fn windows_probe_verge_pipes() -> WinPipeProbe {
+    let (parsed, _) = read_verge_parsed();
+    let policy = super::trust::TrustPolicy::production();
+    let probe = windows_probe_pipes(parsed.pipe_path.as_deref(), &policy);
+    log_pipe_probe(&probe);
+    super::win_tcp::record_probe_outcome(probe.fallback.clone());
     probe
 }
 
@@ -613,16 +716,8 @@ fn discover_controller_inner() -> DiscoverResult {
     let (parsed, source_files) = read_verge_parsed();
     let policy = TrustPolicy::production();
     let probe = windows_probe_pipes(parsed.pipe_path.as_deref(), &policy);
-    for (c, why) in &probe.tried {
-        crate::append_app_log(&format!("[discover] 管道候选 {c:?} 不可用：{why}"));
-    }
+    log_pipe_probe(&probe);
     super::win_tcp::record_probe_outcome(probe.fallback.clone());
-    for c in &probe.insecure {
-        crate::append_app_log(&format!(
-            "[discover] {}（{c}）",
-            super::trust::PIPE_INSECURE_DACL_UI
-        ));
-    }
 
     let mixed = parsed.mixed_port.unwrap_or(DEFAULT_MIXED);
     let (port, tcp_from_yaml) = match parsed.port {
@@ -953,7 +1048,13 @@ pub fn discover_flclash_with_paths(
 }
 
 pub fn discover_for_client(client_id: &str) -> DiscoverResult {
-    withhold_secret_on_windows(discover_for_client_inner(client_id))
+    if client_id == "verge" {
+        // discover_controller 自己记成功日志。
+        return discover_controller();
+    }
+    let d = withhold_secret_on_windows(discover_for_client_inner(client_id));
+    log_selected(&d);
+    d
 }
 
 fn discover_for_client_inner(client_id: &str) -> DiscoverResult {
@@ -991,6 +1092,105 @@ fn discover_for_client_inner(client_id: &str) -> DiscoverResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_result(sock: Option<&str>, port: u16) -> DiscoverResult {
+        DiscoverResult {
+            host: "127.0.0.1".into(),
+            port,
+            secret: "s3cr3t-value".into(),
+            mixed_port: 7897,
+            source: "verge-pipe:\\\\.\\pipe\\verge-mihomo-production-abc".into(),
+            sock_path: sock.map(String::from),
+        }
+    }
+
+    #[test]
+    fn selected_log_line_never_contains_secret() {
+        for d in [sample_result(Some("x"), 9097), sample_result(None, 9097)] {
+            let line = selected_log_line(&d);
+            assert!(
+                line.starts_with("[discover] selected source=verge-pipe:"),
+                "{line}"
+            );
+            assert!(!line.contains("s3cr3t"), "{line}");
+        }
+    }
+
+    #[test]
+    fn selected_log_line_names_transport() {
+        let pipe_or_unix = selected_log_line(&sample_result(Some("x"), 9097));
+        let expect = if cfg!(windows) {
+            "via=pipe"
+        } else {
+            "via=unix"
+        };
+        assert!(pipe_or_unix.ends_with(expect), "{pipe_or_unix}");
+        let tcp = selected_log_line(&sample_result(None, 9090));
+        assert!(tcp.ends_with("via=tcp:9090"), "{tcp}");
+    }
+
+    #[test]
+    fn security_suffixes_bypass_dedupe() {
+        assert!(selected_is_security_relevant(
+            "verge-pipe:a;pipe-open-to-all=a"
+        ));
+        assert!(selected_is_security_relevant(
+            "verge-config:f;pipe-insecure-dacl=x|y"
+        ));
+        assert!(!selected_is_security_relevant("verge-pipe:a"));
+        assert!(!selected_is_security_relevant(
+            "verge-tcp(listener-verified):f"
+        ));
+        // 用真实的标签构造器生成，防止后缀名漂移
+        let label = windows_source_label(
+            Some("p"),
+            &["p".to_string()],
+            &["q".to_string()],
+            &super::super::trust::TcpFallback::VerifiedOnly("x".into()),
+            &[],
+            None,
+            false,
+        );
+        assert!(selected_is_security_relevant(&label), "{label}");
+    }
+
+    #[test]
+    fn mixed_port_quiet_matches_full_discovery_for_other_clients() {
+        // 非 verge 客户端：quiet 版与完整发现读同一份配置，端口一致。
+        for c in ["flclash", "mihomo_party", "no-such-client"] {
+            assert_eq!(
+                discover_mixed_port_quiet(c),
+                discover_for_client_inner(c).mixed_port,
+                "{c}"
+            );
+        }
+    }
+
+    /// Verge：quiet 版只读 yaml，结果与完整发现的 mixed_port 一致（Unix 上完整发现不打管道日志，可直接比）。
+    #[cfg(not(windows))]
+    #[test]
+    fn mixed_port_quiet_matches_full_discovery_for_verge() {
+        assert_eq!(
+            discover_mixed_port_quiet("verge"),
+            discover_controller_inner().mixed_port
+        );
+    }
+
+    #[test]
+    fn log_dedupe_skips_identical_within_window() {
+        let t0 = std::time::Instant::now();
+        let mut d = LogDedupe::new();
+        assert!(d.should_log("a", t0));
+        assert!(!d.should_log("a", t0 + std::time::Duration::from_secs(1)));
+        // 内容变化立即记
+        assert!(d.should_log("b", t0 + std::time::Duration::from_secs(2)));
+        assert!(d.should_log("a", t0 + std::time::Duration::from_secs(3)));
+        // 超过窗口再记一次
+        assert!(d.should_log(
+            "a",
+            t0 + DISCOVER_LOG_DEDUPE + std::time::Duration::from_secs(3)
+        ));
+    }
 
     #[test]
     fn parse_controller_yaml_reads_sample() {
