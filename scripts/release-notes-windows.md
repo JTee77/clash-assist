@@ -1,5 +1,7 @@
 ## Clash伴侣 {{VERSION}}
 
+<!-- clash-assist:platforms macos={{MACOS_VERSION}} windows={{WINDOWS_VERSION}} -->
+
 ### Windows（x64，Windows 10 / 11）
 
 - `Clash.Assist_{{VERSION}}_x64-setup.exe`：安装版，支持一键更新。
