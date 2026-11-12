@@ -111,6 +111,8 @@ def check(template: str, conf: dict, package: dict) -> list:
         errs.append("tauri.windows.conf.json：bundle.windows.nsis.template 必须是 windows/installer.nsi")
     if nsis.get("installerHooks") != "windows/hooks.nsh":
         errs.append("tauri.windows.conf.json：bundle.windows.nsis.installerHooks 必须是 windows/hooks.nsh")
+    if nsis.get("installerIcon") != "icons/icon.ico":
+        errs.append("tauri.windows.conf.json：bundle.windows.nsis.installerIcon 必须是 icons/icon.ico（安装包图标与应用图标一致）")
     return errs
 
 
@@ -164,6 +166,9 @@ def self_test(template: str, conf: dict, package: dict) -> int:
     c2 = copy.deepcopy(conf)
     del c2["bundle"]["windows"]["nsis"]["template"]
     cases.append(("配置没用这份模板", template, c2, package, "template"))
+    c3 = copy.deepcopy(conf)
+    del c3["bundle"]["windows"]["nsis"]["installerIcon"]
+    cases.append(("安装包没设图标", template, c3, package, "installerIcon"))
     upstream = restore_upstream(template)
     up_cases = [
         ("上游比对：一致", template, upstream, None),
