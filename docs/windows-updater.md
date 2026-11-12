@@ -61,6 +61,16 @@
   - `gh release view vX.Y.Z --json isImmutable` 为 `true`；
   - API 返回里 `immutable` 为 `true`。
 
+## 发布：只能走 publish-release workflow
+
+- 发布 release（draft → 正式）**只能**通过 `.github/workflows/publish-release.yml`：
+  1. 推 `vX.Y.Z` tag，等 `release-windows.yml` 生成 draft；
+  2. 把 `Clash.Assist_X.Y.Z_aarch64.dmg` 手动上传到这个 draft；
+  3. 运行 `gh workflow run publish-release.yml --ref vX.Y.Z -f tag=vX.Y.Z`，并在 `release` 环境里审批。
+- 闸门 fail-closed：资产必须恰好是 setup.exe、便携 zip、`SHA256SUMS.txt`、aarch64 DMG 这四件，都已 uploaded 且带 GitHub digest，SHA256SUMS 与 Windows 资产的 digest 一致，发布说明里的平台标记与 tag 提交上的 `release/platforms.json` 一致。任何一项不符就不发布。规则见 `scripts/check-release-draft.py`。
+- **网页上 release 编辑页的 Publish 按钮会绕过这个闸门**，仓库代码无法禁用它。不要在网页上点 Publish，也不要用 `gh release edit --draft=false`。
+- 开启 immutable releases 后，发布了就不能再增删资产。绕过闸门发出的缺 DMG 或多出文件的 release 无法补救，只能另发新版本。
+
 ## e2e 接口约定
 
 `updater-e2e.yml` 和本地服务器脚本属于 #61（Nate）。下面是客户端一侧固定的接口，只在 `--features updater-e2e` 构建中存在。release workflow 不得启用这个 feature，`check-release-workflow.py` 会检查。
