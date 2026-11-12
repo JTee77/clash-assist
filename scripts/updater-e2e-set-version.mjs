@@ -62,6 +62,7 @@ export function setVersion(root, ver) {
 }
 
 function selfTest() {
+  const T = "9.8.7";
   const repo = resolve(here, "..");
   let fail = 0;
   const check = (cond, msg) => {
@@ -77,9 +78,10 @@ function selfTest() {
       cpSync(join(repo, rel), join(tmp, rel));
     }
     const before = Object.fromEntries(files.map((f) => [f, readFileSync(join(tmp, f), "utf8")]));
-    setVersion(tmp, "0.3.1");
-    const sync = spawnSync(process.execPath, [join(here, "check-version-sync.mjs"), "--root", tmp, "--tag", "v0.3.1"], { encoding: "utf8" });
-    check(sync.status === 0, `改写后 check-version-sync --tag v0.3.1 通过（${(sync.stdout + sync.stderr).trim()}）`);
+    // 用一个仓库当前不可能用到的版本号：仓库本身升到 0.3.1 后，改写成 0.3.1 就是 0 行改动
+    setVersion(tmp, T);
+    const sync = spawnSync(process.execPath, [join(here, "check-version-sync.mjs"), "--root", tmp, "--tag", `v${T}`], { encoding: "utf8" });
+    check(sync.status === 0, `改写后 check-version-sync --tag v${T} 通过（${(sync.stdout + sync.stderr).trim()}）`);
     for (const f of files) {
       const a = before[f].split("\n");
       const b = readFileSync(join(tmp, f), "utf8").split("\n");
@@ -87,7 +89,7 @@ function selfTest() {
       check(a.length === b.length && changed === 1, `${f}：只改了 1 行（实际 ${changed} 行）`);
     }
     const lock = readFileSync(join(tmp, "src-tauri/Cargo.lock"), "utf8");
-    check(/name = "clash-assist"\r?\nversion = "0\.3\.1"/.test(lock), "Cargo.lock 中 clash-assist 为 0.3.1");
+    check(lock.includes(`name = "clash-assist"\nversion = "${T}"`) || lock.includes(`name = "clash-assist"\r\nversion = "${T}"`), `Cargo.lock 中 clash-assist 为 ${T}`);
     let threw = false;
     try { setVersion(tmp, "0.3"); } catch { threw = true; }
     check(threw, "拒绝非法版本号 0.3");
