@@ -95,8 +95,16 @@ pub fn extract_token(headers: &HashMap<String, String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// 常量时间比较 token：两边先做 SHA-256 再比（定长 32 字节），耗时不随 token 长度或首个不同字节位置变化。
 pub fn token_matches(headers: &HashMap<String, String>, expected: &str) -> bool {
-    extract_token(headers).is_some_and(|t| t == expected)
+    extract_token(headers).is_some_and(|t| token_eq(&t, expected))
+}
+
+fn token_eq(given: &str, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let a = Sha256::digest(given.as_bytes());
+    let b = Sha256::digest(expected.as_bytes());
+    crate::update_check::ct_eq(&a, &b)
 }
 
 /// 生成 URL-safe 随机 token（/dev/urandom，48 hex 字符）。
@@ -631,6 +639,21 @@ mod tests {
         h.clear();
         h.insert("x-egress-token".into(), "tok".into());
         assert!(token_matches(&h, "tok"));
+    }
+
+    #[test]
+    fn token_eq_constant_time_shape() {
+        assert!(token_eq("secret", "secret"));
+        assert!(!token_eq("secret", "secreT"));
+        assert!(!token_eq("secret", "Secret"));
+        // 长度不同（前缀、多一位、空串）都不匹配
+        assert!(!token_eq("secret", "secre"));
+        assert!(!token_eq("secret", "secrets"));
+        assert!(!token_eq("", "secret"));
+        assert!(token_eq("", ""));
+        let tok = generate_token().unwrap();
+        assert!(token_eq(&tok, &tok.clone()));
+        assert!(!token_eq(&tok, &tok[..tok.len() - 1]));
     }
 
     #[test]

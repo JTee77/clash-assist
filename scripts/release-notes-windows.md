@@ -1,6 +1,6 @@
 ## Clash伴侣 {{VERSION}}
 
-<!-- clash-assist:platforms macos={{VERSION}} windows={{VERSION}} -->
+<!-- clash-assist:platforms macos={{MACOS_VERSION}} windows={{WINDOWS_VERSION}} -->
 
 ### Windows（x64，Windows 10 / 11）
 

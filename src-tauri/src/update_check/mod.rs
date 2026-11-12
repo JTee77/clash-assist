@@ -291,7 +291,11 @@ pub fn validate_release_page_url(url: &str) -> Result<(), String> {
 /// 常量时间比较两个摘要字符串（#60 S-2）：耗时只取决于长度，不随首个不同字节的位置变化。
 /// 长度不同直接返回 false（摘要长度固定为 64，长度本身不是秘密）。
 pub fn digest_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
+    ct_eq(a.as_bytes(), b.as_bytes())
+}
+
+/// 字节串常量时间比较（长度不同直接返回 false）。
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
