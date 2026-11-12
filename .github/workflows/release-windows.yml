@@ -178,6 +178,7 @@ jobs:
       # 对照同一提交的源 .ico：应用 exe 必须与 bundle.icon 的 icon.ico 尺寸集合和图像字节一致。
       # 若配置了 bundle.windows.nsis.installerIcon，安装器也必须与该文件一致；未配置则只报告默认图标，不记为通过。
       - name: 检查 exe 与安装器的图标资源
+        id: icons
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PYTHONIOENCODING: utf-8
@@ -185,6 +186,19 @@ jobs:
           $dist = Join-Path $env:RUNNER_TEMP 'win-dist'
           python scripts/check-windows-icons.py --exe "src-tauri/target/$env:TARGET/release/clash-assist.exe" --installer (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe")
           exit $LASTEXITCODE
+
+      # 图标检查失败时才上传本次的安装器与便携 zip（内含应用 exe），便于离线查资源（只保留 3 天）。名字刻意不是 win-dist：
+      # 这份是「未通过检查」的产物，attest / release 只下载 win-dist，而 win-dist 仍在全部检查通过后才上传。
+      - name: 上传未通过图标检查的产物（仅图标检查失败）
+        if: ${{ failure() && steps.icons.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: icon-check-failed
+          path: |
+            ${{ runner.temp }}/win-dist/*-setup.exe
+            ${{ runner.temp }}/win-dist/*-portable.zip
+          if-no-files-found: ignore
+          retention-days: 3
 
       # M4c：冒烟启动崩溃时留下证据。只改这台一次性 runner 的注册表：让 WER 为 clash-assist.exe
       # 写本地 minidump（DumpType 1）到诊断目录。
