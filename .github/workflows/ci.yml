@@ -161,6 +161,8 @@ jobs:
       - name: 图标资源检查（自测 + 真实 exe 对照）
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python scripts/check-windows-icons.py --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

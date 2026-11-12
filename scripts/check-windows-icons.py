@@ -35,6 +35,18 @@ from pathlib import Path
 RT_ICON = 3
 RT_GROUP_ICON = 14
 
+
+def _ensure_utf8_stdio() -> None:
+    """Windows CI 的控制台默认是 cp1252，直接 print 中文会 UnicodeEncodeError。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError, AttributeError):
+                pass
+
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONF = ROOT / "src-tauri" / "tauri.conf.json"
 DEFAULT_WIN_CONF = ROOT / "src-tauri" / "tauri.windows.conf.json"
@@ -823,6 +835,7 @@ def self_test() -> int:
 
 
 def main(argv: list[str]) -> int:
+    _ensure_utf8_stdio()
     p = argparse.ArgumentParser(description="检查 Windows exe / NSIS 安装器的图标资源")
     p.add_argument("--self-test", action="store_true", help="运行自测后退出")
     p.add_argument("--exe", type=Path, help="应用 exe（clash-assist.exe）")

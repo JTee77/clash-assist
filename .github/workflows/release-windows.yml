@@ -180,6 +180,7 @@ jobs:
       - name: 检查 exe 与安装器的图标资源
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          PYTHONIOENCODING: utf-8
         run: |
           $dist = Join-Path $env:RUNNER_TEMP 'win-dist'
           python scripts/check-windows-icons.py --exe "src-tauri/target/$env:TARGET/release/clash-assist.exe" --installer (Join-Path $dist "Clash.Assist_$($env:VERSION)_x64-setup.exe")
