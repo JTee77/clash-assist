@@ -2,18 +2,13 @@
 
 ### Windows（x64，Windows 10 / 11）
 
-- `Clash.Assist_{{VERSION}}_x64-setup.exe`：安装版，按当前用户安装，不需要管理员权限；支持应用内一键更新。
-- `Clash.Assist_{{VERSION}}_x64-portable.zip`：便携版，解压后直接运行 `clash-assist.exe`；不提供一键更新，新版本请到发布页下载。便携版使用系统自带的 WebView2 运行时（Windows 10 1803 及以后版本、Windows 11 均已自带）。
-- `SHA256SUMS.txt`：以上文件的 SHA-256 校验值。
+- `Clash.Assist_{{VERSION}}_x64-setup.exe`：安装版，支持一键更新。
+- `Clash.Assist_{{VERSION}}_x64-portable.zip`：便携版，解压即用，不支持一键更新。
 
 Windows 版目前只支持 Clash Verge Rev。
 
-可以用 GitHub CLI 核对 Windows 文件的构建来源：
-
-```
-gh attestation verify Clash.Assist_{{VERSION}}_x64-setup.exe -R {{REPO}}
-```
-
 ### macOS
 
-（发布人上传 DMG 后在此补充。）
+- `Clash.Assist_{{VERSION}}_aarch64.dmg`：仅支持 Apple Silicon（M 系列芯片）。
+
+未经苹果公证。首次安装后打开若提示「无法验证」，到 **系统设置 › 隐私与安全性** 点 **「仍要打开」**。已安装旧版的用户直接点顶部 **「一键更新」** 即可。
