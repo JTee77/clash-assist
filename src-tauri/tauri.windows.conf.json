@@ -37,6 +37,7 @@
         ],
         "displayLanguageSelector": false,
         "installerHooks": "windows/hooks.nsh",
+        "installerIcon": "icons/icon.ico",
         "template": "windows/installer.nsi"
       }
     }
