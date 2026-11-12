@@ -358,6 +358,18 @@ async fn egress_dns_whoami(req: DnsWhoamiRequest) -> Result<dns::DnsWhoamiResult
 
 /// Append a line to the platform log dir (macOS: ~/Library/Logs/ClashAssist；Windows：
 /// %LOCALAPPDATA%\ClashAssist\logs；单测：临时目录，S-4). Best-effort.
+/// 启动日志里的前端来源（纯函数）：debug 构建给 dev server 地址；release 构建（`None`）只说明用的是
+/// 内置资源和版本号，不再打印 `tauri.conf.json` 里的 `devUrl`（那只对开发有意义，容易误导排查）。
+fn startup_frontend_log_line(dev_url: Option<&str>) -> String {
+    match dev_url {
+        Some(u) => format!("startup frontend=dev-server url={u}"),
+        None => format!(
+            "startup frontend=embedded version={}",
+            env!("CARGO_PKG_VERSION")
+        ),
+    }
+}
+
 fn append_app_log(msg: &str) {
     use std::io::Write;
 
@@ -938,6 +950,8 @@ pub fn run() {
             use tauri::Manager;
             #[cfg(target_os = "macos")]
             migrate_legacy_identifier_dirs(&app.config().identifier);
+            // 只有 debug 构建才连 dev server；release 用打包进程序的前端资源，不记 dev_url（M6 真机）。
+            #[cfg(debug_assertions)]
             let frontend_url = app
                 .config()
                 .build
@@ -945,9 +959,10 @@ pub fn run() {
                 .as_ref()
                 .map(|u| u.to_string())
                 .unwrap_or_else(|| "http://127.0.0.1:1420".into());
-            append_app_log(&format!(
-                "startup frontend_url={frontend_url} (no data-url navigate)"
-            ));
+            #[cfg(debug_assertions)]
+            append_app_log(&startup_frontend_log_line(Some(&frontend_url)));
+            #[cfg(not(debug_assertions))]
+            append_app_log(&startup_frontend_log_line(None));
             // M5（M-5）：上次一键更新的对账（成功 / 未完成 / 过期），结果供 check_update 带给前端。
             #[cfg(windows)]
             tauri::async_runtime::spawn_blocking(update_check::pending::startup_outcome);
@@ -1177,5 +1192,32 @@ mod panic_log_tests {
         assert_eq!(line.matches('界').count(), PANIC_MSG_MAX);
         let exact = "a".repeat(PANIC_MSG_MAX);
         assert!(!format_panic_line("t", "l", &exact).contains("truncated"));
+    }
+}
+
+#[cfg(test)]
+mod startup_log_tests {
+    use super::startup_frontend_log_line;
+
+    #[test]
+    fn dev_build_logs_dev_server_url() {
+        assert_eq!(
+            startup_frontend_log_line(Some("http://127.0.0.1:1420/")),
+            "startup frontend=dev-server url=http://127.0.0.1:1420/"
+        );
+    }
+
+    #[test]
+    fn release_build_does_not_mention_dev_url() {
+        let line = startup_frontend_log_line(None);
+        assert!(!line.contains("127.0.0.1"), "{line}");
+        assert!(!line.contains("1420"), "{line}");
+        assert_eq!(
+            line,
+            format!(
+                "startup frontend=embedded version={}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 }
