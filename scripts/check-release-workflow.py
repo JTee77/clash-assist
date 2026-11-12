@@ -14,6 +14,8 @@
   4d. build job 在 tauri build 之后用 scan-exe-markers.ps1 扫描 release exe，构建类型必须是 -Build Release
      （M5：FAKE_LATEST 与 updater-e2e 标记出现即失败），不得带 if / continue-on-error；
      任何 run 都不得带 `--features updater-e2e`（M-7）；
+  4e. build job 在 tauri build 之后用 check-windows-icons.py 对照应用 exe 与 NSIS 安装器的图标资源
+     （--exe 为 release/clash-assist.exe，--installer 为 x64-setup.exe），不得带 if / continue-on-error；
   5. 每个 actions/checkout 都设置 persist-credentials: false（S-R2）；
   6. 不使用任何缓存：禁止 actions/cache，禁止 with.cache，setup-node 必须 package-manager-cache: false（S-8 ⑥）；
   4c. 冒烟诊断（M4c）：WER LocalDumps 只能在 build job 里配置；名为 smoke-diagnostics 的 artifact
@@ -175,6 +177,24 @@ def check(doc, text):
     if "updater-e2e" in "\n".join(str(x.get("run", "")) for j in jobs.values() if isinstance(j, dict) for x in (j.get("steps") or []) if isinstance(x, dict)):
         errs.append("发布 workflow 不得启用 updater-e2e feature（M-7）")
 
+    # 图标资源：应用 exe 与安装器必须在 tauri build 之后对照同一提交的源 .ico。
+    icon_at = next((i for i, r in enumerate(runs) if "check-windows-icons.py" in r), None)
+    if icon_at is None:
+        errs.append("build job 缺少图标资源检查步骤（check-windows-icons.py）")
+    else:
+        st = build_steps[icon_at]
+        r = " ".join(runs[icon_at].split())
+        if tauri_at is None or icon_at < tauri_at:
+            errs.append("图标资源检查必须在 tauri build 之后")
+        if "--exe" not in r or "/release/clash-assist.exe" not in r:
+            errs.append("图标资源检查必须带 --exe 并扫 release/clash-assist.exe")
+        if "--installer" not in r or "x64-setup.exe" not in r:
+            errs.append("图标资源检查必须带 --installer 并扫 x64-setup.exe")
+        if "exit $LASTEXITCODE" not in r:
+            errs.append("图标资源检查必须以 exit $LASTEXITCODE 结束")
+        if "if" in st or st.get("continue-on-error"):
+            errs.append("图标资源检查步骤不得有 if / continue-on-error")
+
     # M4c：冒烟诊断只在 build job（contents: read、一次性 runner），诊断 artifact 短期保留。
     for name, job in jobs.items():
         if not isinstance(job, dict):
@@ -284,6 +304,14 @@ def self_test(path):
     def exe_step(d):
         return next(x for x in d["jobs"]["build"]["steps"] if "scan-exe-markers.ps1" in str(x.get("run", "")))
 
+    def icon_step(d):
+        return next(x for x in d["jobs"]["build"]["steps"] if "check-windows-icons.py" in str(x.get("run", "")))
+
+    def move_icon_first(d):
+        st = icon_step(d)
+        d["jobs"]["build"]["steps"].remove(st)
+        d["jobs"]["build"]["steps"].insert(0, st)
+
     def tauri_step(d):
         return next(x for x in d["jobs"]["build"]["steps"] if "tauri build" in str(x.get("run", "")))
 
@@ -326,6 +354,11 @@ def self_test(path):
         ("exe 标记扫描 continue-on-error", lambda d, t: (exe_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
         ("exe 标记扫描加 if", lambda d, t: (exe_step(d).__setitem__("if", "false"), t), "exe 测试标记扫描步骤不得有 if"),
         ("tauri build 启用 updater-e2e", lambda d, t: (tauri_step(d).__setitem__("run", tauri_step(d)["run"].replace("tauri build", "tauri build --features updater-e2e")), t), "updater-e2e"),
+        ("删掉图标资源检查", lambda d, t: (d["jobs"]["build"].__setitem__("steps", [x for x in d["jobs"]["build"]["steps"] if "check-windows-icons.py" not in str(x.get("run", ""))]), t), "缺少图标资源检查"),
+        ("图标资源检查去掉 --installer", lambda d, t: (icon_step(d).__setitem__("run", icon_step(d)["run"].replace(" --installer (Join-Path $dist \"Clash.Assist_$($env:VERSION)_x64-setup.exe\")", "")), t), "--installer"),
+        ("图标资源检查 continue-on-error", lambda d, t: (icon_step(d).__setitem__("continue-on-error", True), t), "continue-on-error"),
+        ("图标资源检查加 if", lambda d, t: (icon_step(d).__setitem__("if", "false"), t), "图标资源检查步骤不得有 if"),
+        ("图标资源检查挪到 tauri build 之前", lambda d, t: (move_icon_first(d), t), "之后"),
         ("smoke-diagnostics 保留 30 天", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", 30), t), "retention-days"),
         ("smoke-diagnostics 保留期是表达式", lambda d, t: (diag_upload(d)["with"].__setitem__("retention-days", "${{ 3 }}"), t), "retention-days"),
         ("smoke-diagnostics 不排除 .dmp", lambda d, t: (drop_dmp_exclusion(d), t), "不得含内存转储"),
