@@ -121,6 +121,8 @@ def _parse_ico(data: bytes, name: str) -> list[dict]:
                 "bpp": infer_bpp(img, bpp),
                 "planes": planes,
                 "colors": colors,
+                # 目录项原样（宽, 高, 颜色数, 保留, planes, 色深, 字节数），供安装器逐字段对照
+                "entry": (w, h, colors, _res, planes, bpp, size),
                 "data": img,
                 "kind": kind_of(img),
             }
@@ -136,18 +138,25 @@ def _rva_to_off(sections, rva: int) -> int:
     raise ValueError(f"RVA {rva:#x} 不在任何节里")
 
 
-def parse_pe_icon_groups(data: bytes, name: str = "exe") -> list[list[dict]]:
+def parse_pe_icon_groups(data: bytes, name: str = "exe", *, nsis_zero_padding: bool = False) -> list[list[dict]]:
     """返回该 PE 里每一个 RT_GROUP_ICON 的帧列表（已把 RT_ICON 图像填上）。
+
+    默认要求 RT_ICON 的长度与组目录声明的字节数完全相等。
+
+    nsis_zero_padding=True 只给 NSIS 安装器用：makensis 让安装器与卸载器图标共用 RT_ICON 槽，
+    槽长取两者中较大的一帧，先 memset 0 再拷入安装器那一帧（NSIS v3.11 Source/icon.cpp
+    get_icon_order 第 248–298 行、set_main_icon 第 349–367 行）。因此允许 RT_ICON 比声明的长，
+    但多出的尾部必须全是 0x00；比声明的短、或尾部有任何非零字节，照样失败。返回的帧数据只取声明的长度。
 
     截断或畸形的 PE（struct.error、资源树过深或成环）一律以 ValueError 报出，
     由调用方记为检查失败，而不是抛出 traceback。"""
     try:
-        return _parse_pe_icon_groups(data, name)
+        return _parse_pe_icon_groups(data, name, nsis_zero_padding)
     except struct.error as e:
         raise ValueError(f"{name}：PE 数据截断或畸形（{e}）") from e
 
 
-def _parse_pe_icon_groups(data: bytes, name: str) -> list[list[dict]]:
+def _parse_pe_icon_groups(data: bytes, name: str, nsis_zero_padding: bool) -> list[list[dict]]:
     if len(data) < 64 or data[:2] != b"MZ":
         raise ValueError(f"{name}：不是 MZ/PE")
     e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
@@ -248,10 +257,22 @@ def _parse_pe_icon_groups(data: bytes, name: str) -> list[list[dict]]:
             img = icons.get(nid)
             if img is None:
                 raise ValueError(f"{name}：RT_GROUP_ICON id={gid} 引用了缺失的 RT_ICON id={nid}")
+            pad = 0
             if len(img) != size:
-                raise ValueError(
-                    f"{name}：RT_ICON id={nid} 大小 {len(img)} 与组目录声明的 {size} 不一致"
-                )
+                if not nsis_zero_padding or len(img) < size:
+                    raise ValueError(
+                        f"{name}：RT_ICON id={nid} 大小 {len(img)} 与组目录声明的 {size} 不一致"
+                    )
+                tail = img[size:]
+                if tail.count(0) != len(tail):
+                    first = next(i for i, b in enumerate(tail) if b)
+                    raise ValueError(
+                        f"{name}：RT_ICON id={nid} 大小 {len(img)} 超出组目录声明的 {size}，"
+                        f"且多出的 {len(tail)} 字节不全是 0（第 {size + first} 字节为 {tail[first]:#04x}；"
+                        "NSIS 共用图标槽只会补 0）"
+                    )
+                pad = len(tail)
+                img = img[:size]
             ww, hh = (w or 256), (h or 256)
             frames.append(
                 {
@@ -262,6 +283,8 @@ def _parse_pe_icon_groups(data: bytes, name: str) -> list[list[dict]]:
                     "colors": colors,
                     "id": nid,
                     "group_id": gid,
+                    "entry": (w, h, colors, _res, planes, bpp, size),
+                    "pad": pad,
                     "data": img,
                     "kind": kind_of(img),
                 }
@@ -306,6 +329,24 @@ def compare_frames(got: list[dict], expected: list[dict], got_name: str, exp_nam
                 f"{got_name} 的 {key[0]}x{key[1]}@{key[2]} 图像字节与 {exp_name} 不一致"
                 f"（产物 {sha16(next(iter(got_map[key])))} / 源 {sha16(next(iter(exp_map[key])))}）"
             )
+    return errs
+
+
+def compare_entries(got: list[dict], expected: list[dict], got_name: str, exp_name: str) -> list[str]:
+    """逐字段对照组目录项（宽、高、颜色数、保留、planes、色深、字节数）与 .ico 目录项，连同图像字节。
+
+    只用于 NSIS 安装器：makensis 把 .ico 的目录项原样 memcpy 进 RT_GROUP_ICON
+    （NSIS v3.11 Source/icon.cpp generate_icon_group 第 323 行），所以必须逐字段相等。
+    应用 exe 由 rc 编译，planes 等字段可能被改写，不走这条。"""
+    g = Counter((f["entry"], f["data"]) for f in got)
+    e = Counter((f["entry"], f["data"]) for f in expected)
+    if g == e:
+        return []
+    errs = []
+    for (entry, data), n in sorted((g - e).items(), key=lambda kv: kv[0][0]):
+        errs.append(f"{got_name} 有 {exp_name} 里没有的目录项 {entry}（{kind_of(data)},{sha16(data)}）×{n}")
+    for (entry, data), n in sorted((e - g).items(), key=lambda kv: kv[0][0]):
+        errs.append(f"{got_name} 缺少 {exp_name} 的目录项 {entry}（{kind_of(data)},{sha16(data)}）×{n}")
     return errs
 
 
@@ -375,7 +416,8 @@ def installer_icon_path(conf: dict, conf_dir: Path) -> Path | None:
 # 检查
 # ---------------------------------------------------------------------------
 
-def check_pe_against_ico(pe_path: Path, ico_path: Path, label: str) -> list[str]:
+def check_pe_against_ico(pe_path: Path, ico_path: Path, label: str, *, nsis: bool = False) -> list[str]:
+    """nsis=True（安装器）：允许 NSIS 共用图标槽留下的全零尾部，同时逐字段对照目录项。"""
     try:
         pe = pe_path.read_bytes()
     except OSError as e:
@@ -385,19 +427,31 @@ def check_pe_against_ico(pe_path: Path, ico_path: Path, label: str) -> list[str]
     except (OSError, ValueError) as e:
         return [str(e)]
     try:
-        groups = parse_pe_icon_groups(pe, str(pe_path))
+        groups = parse_pe_icon_groups(pe, str(pe_path), nsis_zero_padding=nsis)
     except ValueError as e:
         return [str(e)]
     if not groups:
         return [f"{label} {pe_path} 没有 RT_GROUP_ICON"]
     # 应用 / 安装器通常各只有一个图标组；若有多个，任意一组完全匹配即可。
-    errs_per_group = [compare_frames(g, ico, f"{label} 图标组 id={g[0]['group_id']}", str(ico_path)) for g in groups]
+    errs_per_group = []
+    for g in groups:
+        gname = f"{label} 图标组 id={g[0]['group_id']}"
+        errs = compare_frames(g, ico, gname, str(ico_path))
+        if nsis and not errs:
+            errs = compare_entries(g, ico, gname, str(ico_path))
+        errs_per_group.append(errs)
     if any(not e for e in errs_per_group):
         matched = next(g for g, e in zip(groups, errs_per_group) if not e)
         print(
             f"check-windows-icons：{label} 通过，与 {ico_path.relative_to(ROOT) if ROOT in ico_path.parents else ico_path} "
             f"一致（{len(matched)} 帧：{format_frames(matched)}）"
         )
+        padded = [f"id={f['id']} {f['w']}x{f['h']} +{f['pad']}" for f in matched if f["pad"]]
+        if padded:
+            print(
+                "check-windows-icons：  目录项逐字段一致；以下 RT_ICON 槽比声明的长，尾部已核对全为 0"
+                f"（NSIS 安装器/卸载器图标共用槽）：{', '.join(padded)}"
+            )
         return []
     detail = [f"{label} {pe_path} 的 {len(groups)} 个图标组都与 {ico_path} 不一致："]
     for i, (g, errs) in enumerate(zip(groups, errs_per_group)):
@@ -410,7 +464,7 @@ def report_default_installer(pe_path: Path, ico_path: Path) -> int:
     """未配置 installerIcon：报告默认图标，不记为通过，也不因此失败。"""
     try:
         pe = pe_path.read_bytes()
-        groups = parse_pe_icon_groups(pe, str(pe_path))
+        groups = parse_pe_icon_groups(pe, str(pe_path), nsis_zero_padding=True)
     except (OSError, ValueError) as e:
         print(f"check-windows-icons：无法读取安装器以报告默认图标：{e}", file=sys.stderr)
         return 1
@@ -468,7 +522,7 @@ def run_check(exe: Path | None, installer: Path | None, conf_path: Path, win_con
 
     if installer is not None:
         if inst_ico is not None:
-            errs = check_pe_against_ico(installer, inst_ico, "NSIS 安装器")
+            errs = check_pe_against_ico(installer, inst_ico, "NSIS 安装器", nsis=True)
             if errs:
                 rc = 1
                 print(
@@ -529,8 +583,19 @@ def make_ico(frames: list[tuple[int, int, bytes]]) -> bytes:
     return header + entries + images
 
 
-def make_pe_with_icons(frames: list[tuple[int, int, bytes]], *, group_id: int = 1) -> bytes:
-    """构造一个最小 PE32，内含给定 PNG/DIB 帧的 RT_ICON + 一个 RT_GROUP_ICON。"""
+def make_pe_with_icons(
+    frames: list[tuple[int, int, bytes]],
+    *,
+    group_id: int = 1,
+    planes: int = 1,
+    slots: list[bytes] | None = None,
+) -> bytes:
+    """构造一个最小 PE32，内含给定 PNG/DIB 帧的 RT_ICON + 一个 RT_GROUP_ICON。
+
+    组目录项按 frames 的图像长度声明；planes 默认写 1（同 rc），NSIS 风格传 0（原样拷 .ico 目录项）。
+    slots 给出时用作各 RT_ICON 的实际字节（模拟 NSIS 共用槽的尾部填充或被截断的资源）。"""
+    if slots is not None and len(slots) != len(frames):
+        raise ValueError("slots 数量必须与 frames 一致")
     # 先组资源目录（RVA 暂按 0 写，稍后整体加上节 RVA）
     # 布局（全部相对资源节起点）：
     #   root dir + 2 id entries (type 3, 14)
@@ -548,7 +613,7 @@ def make_pe_with_icons(frames: list[tuple[int, int, bytes]], *, group_id: int = 
             0 if h >= 256 else h,
             0,
             0,
-            1,
+            planes,
             32,
             len(img),
             i,
@@ -567,7 +632,9 @@ def make_pe_with_icons(frames: list[tuple[int, int, bytes]], *, group_id: int = 
 
     blobs = []
     cursor = align4(tree_size)
-    for _w, _h, img in frames:
+    for idx, (_w, _h, img) in enumerate(frames):
+        if slots is not None:
+            img = slots[idx]
         blobs.append((cursor, img))
         cursor = align4(cursor + len(img))
     group_off = cursor
@@ -697,6 +764,17 @@ def _rsrc_raw_offset(pe: bytes) -> int:
     return struct.unpack_from("<I", pe, sec + 20)[0]
 
 
+def _git_show_bytes(spec: str) -> bytes | None:
+    """自测用：读仓库里某个版本的文件；不在 git 仓库或没有该 tag 时返回 None（只影响本地附加对照）。"""
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", "-C", str(ROOT), "show", spec], capture_output=True, check=False)
+    except OSError:
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout else None
+
+
 def write_temp(dirpath: Path, name: str, data: bytes) -> Path:
     p = dirpath / name
     p.write_bytes(data)
@@ -754,9 +832,13 @@ def self_test() -> int:
     real_exe = Path("/tmp/ca-031-assets/portable/clash-assist.exe")
     real_setup = Path("/tmp/ca-031-assets/Clash.Assist_0.3.0_x64-setup.exe")
     real_ico = ROOT / "src-tauri" / "icons" / "icon.ico"
-    if real_exe.is_file() and real_ico.is_file():
-        errs = check_pe_against_ico(real_exe, real_ico, "自测真实 exe")
-        expect(not errs, "真实 v0.3.0 clash-assist.exe 与当前 icon.ico 一致", "\n".join(errs))
+    real_ico_030 = _git_show_bytes("v0.3.0:src-tauri/icons/icon.ico")
+    if real_exe.is_file() and real_ico_030 is not None:
+        # 0.3.1 原位替换了 icon.ico，所以真实 v0.3.0 exe 要对照 v0.3.0 那份 .ico
+        with tempfile.TemporaryDirectory(prefix="ca-icon-030-") as t030:
+            ico030 = write_temp(Path(t030), "icon.ico", real_ico_030)
+            errs = check_pe_against_ico(real_exe, ico030, "自测真实 exe")
+        expect(not errs, "真实 v0.3.0 clash-assist.exe 与 v0.3.0 的 icon.ico 一致", "\n".join(errs))
     else:
         print("skip 真实 clash-assist.exe 对照（本地没有该产物，CI 自测不依赖它）")
 
@@ -780,6 +862,9 @@ def self_test() -> int:
             "missing.exe",
             make_pe_with_icons([(16, 16, png16)], group_id=1),
         )
+        # NSIS 风格安装器：目录项原样取自 .ico（planes=0），组 id 103（NSIS IDI_ICON2）
+        nsis_frames = [(16, 16, png16), (32, 32, png32)]
+        nsis_pe = write_temp(td, "nsis-setup.exe", make_pe_with_icons(nsis_frames, group_id=103, planes=0))
 
         # 1) exe 对照通过
         conf, win = write_conf(td, installer_icon=None)
@@ -804,7 +889,7 @@ def self_test() -> int:
 
         # 5) 配置了 installerIcon，安装器匹配 → 通过
         conf2, win2 = write_conf(td, installer_icon="icons/icon.ico")
-        rc = run_quiet(pe_path, pe_path, conf2, win2)
+        rc = run_quiet(pe_path, nsis_pe, conf2, win2)
         expect(rc == 0, "配置了 installerIcon 且安装器与其一致时通过")
 
         # 6) 配置了 installerIcon，安装器是默认图标 → 失败
@@ -830,8 +915,60 @@ def self_test() -> int:
         )
         rc = run_quiet(pe_path, other_pe, conf4, win4)
         expect(rc == 1, "installerIcon 只写在 windows 配置且产物不对时失败")
-        rc = run_quiet(pe_path, pe_path, conf4, win4)
+        rc = run_quiet(pe_path, nsis_pe, conf4, win4)
         expect(rc == 0, "installerIcon 只写在 windows 配置且产物一致时通过")
+
+        # 8b) NSIS 共用图标槽（Source/icon.cpp set_main_icon）：槽长取安装器 / 卸载器两帧的较大者，
+        #     先 memset 0 再拷安装器那帧，所以 RT_ICON 可以比组目录声明的长，但尾部只能是 0。
+        def nsis_variant(fname: str, slot16: bytes) -> Path:
+            return write_temp(
+                td, fname, make_pe_with_icons(nsis_frames, group_id=103, planes=0, slots=[slot16, png32])
+            )
+
+        def inst_errs(pe_file: Path, *, nsis: bool = True) -> str:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                return "\n".join(check_pe_against_ico(pe_file, td / "icons" / "icon.ico", "安装器", nsis=nsis))
+
+        zero_pad = nsis_variant("nsis-zero-pad.exe", png16 + b"\0" * 344)
+        rc = run_quiet(pe_path, zero_pad, conf4, win4)
+        expect(rc == 0, "安装器 RT_ICON 尾部全零填充（NSIS 共用槽）时通过")
+        frames = parse_pe_icon_groups(zero_pad.read_bytes(), "zero-pad", nsis_zero_padding=True)[0]
+        expect(
+            [f["pad"] for f in frames] == [344, 0] and frames[0]["data"] == png16,
+            "全零填充只截掉尾部、帧数据就是声明长度的原图",
+        )
+        rc = run_quiet(zero_pad, None, conf4, win4)
+        e = inst_errs(zero_pad, nsis=False)
+        expect(rc == 1 and "与组目录声明的 82 不一致" in e, "应用 exe 的 RT_ICON 带同样的全零尾部时仍失败（应用 exe 不放宽）", e)
+
+        garbage_pad = nsis_variant("nsis-garbage-pad.exe", png16 + b"\0" * 343 + b"\x01")
+        rc = run_quiet(pe_path, garbage_pad, conf4, win4)
+        e = inst_errs(garbage_pad)
+        expect(rc == 1 and "不全是 0" in e, "安装器 RT_ICON 尾部有非零字节时失败", e)
+        leftover_pad = nsis_variant("nsis-leftover-pad.exe", png16 + png24[:344])
+        rc = run_quiet(pe_path, leftover_pad, conf4, win4)
+        e = inst_errs(leftover_pad)
+        expect(rc == 1 and "不全是 0" in e, "安装器 RT_ICON 尾部是另一帧残留字节时失败", e)
+        truncated = nsis_variant("nsis-truncated.exe", png16[:-1])
+        rc = run_quiet(pe_path, truncated, conf4, win4)
+        e = inst_errs(truncated)
+        expect(rc == 1 and "大小 81 与组目录声明的 82 不一致" in e, "安装器 RT_ICON 比声明的短时失败", e)
+
+        # 8c) 安装器的组目录项必须与 .ico 逐字段一致（NSIS 原样拷目录项）；rc 风格 planes=1 也要拒绝
+        rc = run_quiet(pe_path, pe_path, conf4, win4)
+        e = inst_errs(pe_path)
+        expect(rc == 1 and "目录项 (16, 16, 0, 0, 1, 32, 82)" in e, "安装器组目录项 planes 与 .ico 不一致时失败", e)
+        extra_pe = write_temp(
+            td,
+            "nsis-extra.exe",
+            make_pe_with_icons(nsis_frames + [(24, 24, png24)], group_id=103, planes=0),
+        )
+        rc = run_quiet(pe_path, extra_pe, conf4, win4)
+        expect(rc == 1 and "尺寸集合" in inst_errs(extra_pe), "安装器多出一帧时失败")
+        nsis_missing = write_temp(td, "nsis-missing.exe", make_pe_with_icons(nsis_frames[:1], group_id=103, planes=0))
+        rc = run_quiet(pe_path, nsis_missing, conf4, win4)
+        expect(rc == 1 and "尺寸集合" in inst_errs(nsis_missing), "安装器少一帧时失败")
 
         # 9) 不是 PE 的文件
         junk = write_temp(td, "junk.exe", b"not a pe")
@@ -892,11 +1029,16 @@ def self_test() -> int:
         rc = run_quiet(deep_path, None, conf, win)
         expect(rc == 1, "应用 exe 资源目录过深时失败")
 
-        # 10) 真实 v0.3.0 安装器：当前 main 未配置 installerIcon，报告默认且不失败
+        # 10) 真实 v0.3.0 安装器（未配置 installerIcon 时构建）：未配置时只报告默认且不失败
         if real_setup.is_file():
-            conf_real, win_real = DEFAULT_CONF, DEFAULT_WIN_CONF
-            # 用仓库真实配置（无 installerIcon）跑安装器报告
-            rc = run_quiet(None, real_setup, conf_real, win_real)
+            # 用不含 installerIcon 的临时配置（仓库配置从 0.3.1 起已配置 installerIcon；
+            # td 下的 tauri.conf.json 已被第 7 步改写，这里另建目录）
+            tdn = td / "noinst"
+            tdn.mkdir()
+            (tdn / "icons").mkdir()
+            write_temp(tdn / "icons", "icon.ico", ico)
+            conf_n, win_n = write_conf(tdn, installer_icon=None)
+            rc = run_quiet(None, real_setup, conf_n, win_n)
             expect(rc == 0, "真实 v0.3.0 setup.exe 在未配置 installerIcon 时只报告默认、不失败")
             # 若伪造「已配置」，对照当前 icon.ico 必须失败（默认 NSIS 图标对不上）
             conf_fake = td / "fake-base.json"
