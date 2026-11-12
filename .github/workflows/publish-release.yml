@@ -1,0 +1,162 @@
+name: Publish release (draft → published)
+
+# 0.3.1 起的发布前闸门（Ellie PR70 评审 §6 / S-4）：Windows draft 由 release-windows.yml 写入，
+# DMG 由人工上传到同一 draft；发布只能走本 workflow，全部检查通过后才把 draft 改为已发布。
+# 不在网页上直接点 Publish。
+#
+# 用法（tag 必须已推送、Windows draft 已写好、DMG 已上传）：
+#   gh workflow run publish-release.yml --ref vX.Y.Z -f tag=vX.Y.Z
+# --ref 必须就是该 tag：environment `release` 只允许 v* tag 部署（S-R3），且这样检出的检查脚本
+# 就是 tag 上（main 历史里）的代码。
+#
+# 本 workflow 只读 release 与资产、下载 SHA256SUMS.txt 核对、按 tag 提交读 release/platforms.json
+# 核对发布说明里的平台改动标记（#71），最后一步只发 PATCH draft=false；
+# 不上传、不删除、不改任何资产，也不重新生成 SHA256SUMS.txt（它已做过 attestation）。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 tag（vX.Y.Z）；Run workflow 时 ref 也须选这个 tag
+        type: string
+        required: true
+
+# 默认无任何权限；只有 publish job 拿 contents: write（draft 只有写权限才能看到，发布也需要）。
+permissions: {}
+
+concurrency:
+  group: publish-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # 需用户在 environment `release` 上审批（该 environment 需由仓库所有者先创建）
+    environment: release
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag }}
+      REPO: ${{ github.repository }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 输入检查（tag 格式、运行 ref 必须就是该 tag）
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::tag 必须严格形如 vX.Y.Z（semver，无前导零），实际：$TAG"; exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::运行 ref 是 $GITHUB_REF，必须是 refs/tags/$TAG（gh workflow run publish-release.yml --ref $TAG -f tag=$TAG）"; exit 1
+          fi
+          echo "tag $TAG（$GITHUB_SHA）"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 版本一致性（tag 与 package.json / Cargo.toml / tauri.conf.json）
+        run: node scripts/check-version-sync.mjs --tag "$TAG"
+
+      - name: tag 指向 main 上的提交（API）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ref="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')"
+          type="${ref%% *}"; obj="${ref#* }"
+          if [ "$type" = tag ]; then obj="$(gh api "repos/$REPO/git/tags/$obj" --jq '.object.sha')"; fi
+          [ "$obj" = "$GITHUB_SHA" ] || { echo "::error::tag $TAG 当前指向 $obj，与本次运行的 $GITHUB_SHA 不一致"; exit 1; }
+          status="$(gh api "repos/$REPO/compare/main...$obj" --jq '.status')"
+          case "$status" in
+            identical|behind) echo "$TAG（$obj）位于 main 的历史上（compare：$status）" ;;
+            *) echo "::error::$TAG（$obj）不在 main 的历史上（compare：$status）"; exit 1 ;;
+          esac
+
+      # #71：发布说明里的平台改动标记必须与 tag 提交上的 release/platforms.json 一致。
+      # 按提交 SHA 经 API 读取（上一步已确认 tag 指向 GITHUB_SHA）；读不到即失败，不放行。
+      - name: 读取 tag 提交上的 release/platforms.json（API，只读）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/release/platforms.json?ref=$GITHUB_SHA" > "$RUNNER_TEMP/platforms.json"; then
+            echo "::error::tag 提交 $GITHUB_SHA 上读不到 release/platforms.json（平台改动标记的来源，见 #71），拒绝发布"; exit 1
+          fi
+          cat "$RUNNER_TEMP/platforms.json"
+
+      - name: 读取 draft 与资产（第一次快照，只读）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/snap1"; mkdir -p "$dir"
+          gh api --paginate --slurp "repos/$REPO/releases?per_page=100" > "$dir/releases.json"
+          ids="$(jq -r --arg t "$TAG" '[.[][] | select(.tag_name == $t) | .id] | map(tostring) | join(" ")' "$dir/releases.json")"
+          echo '[]' > "$dir/assets.json"; : > "$dir/SHA256SUMS.txt"
+          if [[ "$ids" =~ ^[0-9]+$ ]]; then
+            gh api --paginate --slurp "repos/$REPO/releases/$ids/assets?per_page=100" > "$dir/assets.json"
+            sid="$(jq -r '[.[][] | select(.name == "SHA256SUMS.txt") | .id] | map(tostring) | join(" ")' "$dir/assets.json")"
+            if [[ "$sid" =~ ^[0-9]+$ ]]; then
+              gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$sid" > "$dir/SHA256SUMS.txt"
+            fi
+          fi
+          jq -r '.[][] | [.name, .state, .size, (.digest // "")] | @tsv' "$dir/assets.json"
+
+      # 检查脚本只读快照文件，不拿令牌
+      - name: 发布前检查（fail-closed）
+        run: |
+          python3 scripts/check-release-draft.py --tag "$TAG" \
+            --releases "$RUNNER_TEMP/snap1/releases.json" --assets "$RUNNER_TEMP/snap1/assets.json" \
+            --sums "$RUNNER_TEMP/snap1/SHA256SUMS.txt" --platforms "$RUNNER_TEMP/platforms.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: 发布前复读 draft 与资产（第二次快照，只读）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/snap2"; mkdir -p "$dir"
+          gh api --paginate --slurp "repos/$REPO/releases?per_page=100" > "$dir/releases.json"
+          ids="$(jq -r --arg t "$TAG" '[.[][] | select(.tag_name == $t) | .id] | map(tostring) | join(" ")' "$dir/releases.json")"
+          echo '[]' > "$dir/assets.json"; : > "$dir/SHA256SUMS.txt"
+          if [[ "$ids" =~ ^[0-9]+$ ]]; then
+            gh api --paginate --slurp "repos/$REPO/releases/$ids/assets?per_page=100" > "$dir/assets.json"
+            sid="$(jq -r '[.[][] | select(.name == "SHA256SUMS.txt") | .id] | map(tostring) | join(" ")' "$dir/assets.json")"
+            if [[ "$sid" =~ ^[0-9]+$ ]]; then
+              gh api -H 'Accept: application/octet-stream' "repos/$REPO/releases/assets/$sid" > "$dir/SHA256SUMS.txt"
+            fi
+          fi
+
+      - name: 复读后再次检查，并与第一次快照比对
+        run: |
+          python3 scripts/check-release-draft.py --tag "$TAG" \
+            --releases "$RUNNER_TEMP/snap2/releases.json" --assets "$RUNNER_TEMP/snap2/assets.json" \
+            --sums "$RUNNER_TEMP/snap2/SHA256SUMS.txt" --platforms "$RUNNER_TEMP/platforms.json" \
+            --baseline-releases "$RUNNER_TEMP/snap1/releases.json" --baseline-assets "$RUNNER_TEMP/snap1/assets.json"
+
+      # 唯一的写操作：只把 draft 改为 false，不带其他字段
+      - name: 发布（draft=false）并核对结果
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          id="$(jq -r --arg t "$TAG" '[.[][] | select(.tag_name == $t) | .id] | if length == 1 then .[0] | tostring else "" end' "$RUNNER_TEMP/snap2/releases.json")"
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::无法确定 release id"; exit 1; }
+          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false --jq '{tag_name, draft, html_url}'
+          state="$(gh api "repos/$REPO/releases/$id" --jq '[.tag_name, (.draft | tostring), (.immutable | tostring)] | @tsv')"
+          IFS=$'\t' read -r t d im <<< "$state"
+          echo "已发布：tag=$t draft=$d immutable=$im"
+          [ "$t" = "$TAG" ] && [ "$d" = false ] || { echo "::error::发布后状态不对：tag=$t draft=$d"; exit 1; }
+          {
+            echo
+            echo "### 已发布 $TAG（release id $id）"
+            echo
+            echo "immutable=$im"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$im" != true ]; then
+            echo "::error::$TAG 已发布，但 immutable=$im：仓库没开 immutable releases，Windows 客户端会拒绝这次一键更新（C-3）。开启后需另发新版本。"
+            exit 1
+          fi
