@@ -19,18 +19,14 @@
 
 ## 下载与安装
 
-所有安装包都在 [Releases 页面](https://github.com/JTee77/clash-assist/releases)，Mac 和 Windows 版本号同步。
+从 [Releases 页面](https://github.com/JTee77/clash-assist/releases) 下载。
 
 ### Windows
 
 | 文件 | 说明 |
 |---|---|
-| `Clash.Assist_<版本>_x64-setup.exe` | **安装版（推荐）**：按当前用户安装，不需要管理员权限；支持应用内「一键更新」。 |
-| `Clash.Assist_<版本>_x64-portable.zip` | **便携版**：解压后直接运行 `clash-assist.exe`，不在系统里注册安装；不支持一键更新，新版本需到发布页重新下载。 |
-
-- 系统要求：Windows 10 / 11（x64）。界面依赖微软 WebView2 运行时：安装版会在缺少时自动安装；便携版需要系统里已有（Windows 11 自带，Windows 10 多数已通过系统更新装好，没有的话可先运行一次安装版或从微软官网安装）。
-- 卸载：在「设置 › 应用」里卸载 Clash Assist 即可，卸载时可选择同时删除应用数据（包括检测结果缓存）。
-- 每个版本附带 `SHA256SUMS.txt`，也可以用 `gh attestation verify <文件名> -R JTee77/clash-assist --signer-workflow JTee77/clash-assist/.github/workflows/release-windows.yml` 核对文件确实由本仓库构建。
+| `Clash.Assist_<版本>_x64-setup.exe` | **安装版（推荐）**：支持应用内「一键更新」。 |
+| `Clash.Assist_<版本>_x64-portable.zip` | **便携版**：解压即用，不支持一键更新。 |
 
 ### macOS
 
