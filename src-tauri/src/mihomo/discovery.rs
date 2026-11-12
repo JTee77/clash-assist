@@ -292,7 +292,8 @@ pub fn discover_controller() -> DiscoverResult {
 
 // ---- 发现日志：成功一行 + 去重（M6 真机） ------------------------------------------------
 
-/// 同一条日志在这段时间内重复出现时只记一次（一次刷新里可能连着做两轮发现）。
+/// 同一条日志在这段时间内重复出现时只记一次。只是兜底：更新器已改走不打日志的
+/// [`discover_mixed_port_quiet`]，去重主要防启动竞态与开发构建 StrictMode 双挂载；安全提示不去重。
 const DISCOVER_LOG_DEDUPE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 记住上一条发现日志及其时间；内容相同且未过窗口则跳过。纯逻辑，时间由调用方注入以便单测。
@@ -351,8 +352,32 @@ pub(crate) fn selected_log_line(d: &DiscoverResult) -> String {
     format!("[discover] selected source={} via={via}", d.source)
 }
 
+/// 来源标签带安全后缀（管道 DACL 对所有用户开放 / DACL 过宽）时，成功行属于安全提示，**不去重**。
+pub(crate) fn selected_is_security_relevant(source: &str) -> bool {
+    use super::source_label::SuffixKey;
+    [SuffixKey::PipeOpenToAll, SuffixKey::PipeInsecureDacl]
+        .iter()
+        .any(|k| source.contains(&format!(";{}=", k.as_str())))
+}
+
 fn log_selected(d: &DiscoverResult) {
-    append_deduped(&SELECTED_LOG, &[selected_log_line(d)]);
+    let line = selected_log_line(d);
+    if selected_is_security_relevant(&d.source) {
+        crate::append_app_log(&line);
+    } else {
+        append_deduped(&SELECTED_LOG, &[line]);
+    }
+}
+
+/// 只要混合代理端口时用（更新器的代理端口探测，M6 Ellie PR65 M-1）：**不打日志、不探测管道 /
+/// 套接字、不更新 M-3 状态**。Verge 只读 yaml 的 `mixed-port`（与完整发现给出的值相同）；
+/// 其他客户端的发现本身就只读配置文件、不打日志。
+pub fn discover_mixed_port_quiet(client_id: &str) -> u16 {
+    if client_id == "verge" {
+        let (parsed, _) = read_verge_parsed();
+        return parsed.mixed_port.unwrap_or(DEFAULT_MIXED);
+    }
+    discover_for_client_inner(client_id).mixed_port
 }
 
 /// Windows：发现结果里**永远不携带 secret**（方案 §2.1 规则 4，M-3 / C-1 / C-4）。
@@ -619,21 +644,23 @@ pub(super) fn windows_source_label(
     label.suffix(SuffixKey::PipeInsecureDacl, insecure).finish()
 }
 
-/// 管道探测的失败明细（候选不可用、DACL 过宽）：两处入口共用，并按组去重。
+/// 管道探测的日志：候选不可用的明细按组去重（兜底启动竞态 / dev StrictMode 双挂载）；
+/// DACL 过宽的安全提示每次都记。
 #[cfg(windows)]
 fn log_pipe_probe(probe: &WinPipeProbe) {
-    let mut lines: Vec<String> = probe
+    let lines: Vec<String> = probe
         .tried
         .iter()
         .map(|(c, why)| format!("[discover] 管道候选 {c:?} 不可用：{why}"))
         .collect();
-    lines.extend(
-        probe
-            .insecure
-            .iter()
-            .map(|c| format!("[discover] {}（{c}）", super::trust::PIPE_INSECURE_DACL_UI)),
-    );
     append_deduped(&PIPE_PROBE_LOG, &lines);
+    // 安全提示（DACL 过宽）每次都记，不参与去重。
+    for c in &probe.insecure {
+        crate::append_app_log(&format!(
+            "[discover] {}（{c}）",
+            super::trust::PIPE_INSECURE_DACL_UI
+        ));
+    }
 }
 
 /// 生产入口：读 Verge yaml，探测管道候选，并记入 M-3 状态。
@@ -1100,6 +1127,53 @@ mod tests {
         assert!(pipe_or_unix.ends_with(expect), "{pipe_or_unix}");
         let tcp = selected_log_line(&sample_result(None, 9090));
         assert!(tcp.ends_with("via=tcp:9090"), "{tcp}");
+    }
+
+    #[test]
+    fn security_suffixes_bypass_dedupe() {
+        assert!(selected_is_security_relevant(
+            "verge-pipe:a;pipe-open-to-all=a"
+        ));
+        assert!(selected_is_security_relevant(
+            "verge-config:f;pipe-insecure-dacl=x|y"
+        ));
+        assert!(!selected_is_security_relevant("verge-pipe:a"));
+        assert!(!selected_is_security_relevant(
+            "verge-tcp(listener-verified):f"
+        ));
+        // 用真实的标签构造器生成，防止后缀名漂移
+        let label = windows_source_label(
+            Some("p"),
+            &["p".to_string()],
+            &["q".to_string()],
+            &super::super::trust::TcpFallback::VerifiedOnly("x".into()),
+            &[],
+            None,
+            false,
+        );
+        assert!(selected_is_security_relevant(&label), "{label}");
+    }
+
+    #[test]
+    fn mixed_port_quiet_matches_full_discovery_for_other_clients() {
+        // 非 verge 客户端：quiet 版与完整发现读同一份配置，端口一致。
+        for c in ["flclash", "mihomo_party", "no-such-client"] {
+            assert_eq!(
+                discover_mixed_port_quiet(c),
+                discover_for_client_inner(c).mixed_port,
+                "{c}"
+            );
+        }
+    }
+
+    /// Verge：quiet 版只读 yaml，结果与完整发现的 mixed_port 一致（Unix 上完整发现不打管道日志，可直接比）。
+    #[cfg(not(windows))]
+    #[test]
+    fn mixed_port_quiet_matches_full_discovery_for_verge() {
+        assert_eq!(
+            discover_mixed_port_quiet("verge"),
+            discover_controller_inner().mixed_port
+        );
     }
 
     #[test]

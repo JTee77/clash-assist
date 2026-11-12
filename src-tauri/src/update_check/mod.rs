@@ -550,7 +550,8 @@ fn active_local_proxy_port() -> Option<u16> {
     use std::net::{SocketAddr, TcpStream};
     probe_local_proxy_port(
         Instant::now() + PROXY_PORT_PROBE_BUDGET,
-        |client| crate::mihomo::discover_for_client(client).mixed_port,
+        // 只要 mixed-port：走不打日志、不探测管道的入口（PR65 M-1：否则启动时与界面自动嗅探各做一轮完整发现）。
+        crate::mihomo::discover_mixed_port_quiet,
         |port| {
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             TcpStream::connect_timeout(&addr, Duration::from_millis(40)).is_ok()
