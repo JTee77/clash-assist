@@ -34,6 +34,9 @@ from pathlib import Path
 
 RT_ICON = 3
 RT_GROUP_ICON = 14
+# 资源树正常只有三层目录：类型 / 名称或 id / 语言，叶子是 IMAGE_RESOURCE_DATA_ENTRY。
+# 更深的子目录或指回已访问目录（成环）都视为畸形 PE，直接失败，避免递归失控。
+MAX_RESOURCE_DIR_DEPTH = 3
 
 
 def _ensure_utf8_stdio() -> None:
@@ -88,6 +91,14 @@ def infer_bpp(img: bytes, directory_bpp: int) -> int:
 
 
 def parse_ico(data: bytes, name: str = "ico") -> list[dict]:
+    """解析 ICO；截断等畸形输入一律以 ValueError 报出（不让 struct.error 冒出去）。"""
+    try:
+        return _parse_ico(data, name)
+    except struct.error as e:
+        raise ValueError(f"{name}：ICO 数据截断或畸形（{e}）") from e
+
+
+def _parse_ico(data: bytes, name: str) -> list[dict]:
     if len(data) < 6:
         raise ValueError(f"{name}：文件太短，不是 ICO")
     reserved, typ, count = struct.unpack_from("<HHH", data, 0)
@@ -126,7 +137,17 @@ def _rva_to_off(sections, rva: int) -> int:
 
 
 def parse_pe_icon_groups(data: bytes, name: str = "exe") -> list[list[dict]]:
-    """返回该 PE 里每一个 RT_GROUP_ICON 的帧列表（已把 RT_ICON 图像填上）。"""
+    """返回该 PE 里每一个 RT_GROUP_ICON 的帧列表（已把 RT_ICON 图像填上）。
+
+    截断或畸形的 PE（struct.error、资源树过深或成环）一律以 ValueError 报出，
+    由调用方记为检查失败，而不是抛出 traceback。"""
+    try:
+        return _parse_pe_icon_groups(data, name)
+    except struct.error as e:
+        raise ValueError(f"{name}：PE 数据截断或畸形（{e}）") from e
+
+
+def _parse_pe_icon_groups(data: bytes, name: str) -> list[list[dict]]:
     if len(data) < 64 or data[:2] != b"MZ":
         raise ValueError(f"{name}：不是 MZ/PE")
     e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
@@ -168,7 +189,16 @@ def parse_pe_icon_groups(data: bytes, name: str = "exe") -> list[list[dict]]:
             raise ValueError(f"{name}：资源读取越界 RVA {rva:#x}+{n}")
         return data[off : off + n]
 
+    visited: set[int] = set()
+
     def parse_dir(rva: int, path: tuple = ()):
+        if len(path) >= MAX_RESOURCE_DIR_DEPTH:
+            raise ValueError(
+                f"{name}：资源目录嵌套超过 {MAX_RESOURCE_DIR_DEPTH} 层（路径 {path!r}），视为畸形 PE"
+            )
+        if rva in visited:
+            raise ValueError(f"{name}：资源目录成环（RVA {rva:#x} 被重复引用），视为畸形 PE")
+        visited.add(rva)
         buf = read(rva, 16)
         named, idcnt = struct.unpack_from("<HH", buf, 12)
         total = named + idcnt
@@ -384,7 +414,11 @@ def report_default_installer(pe_path: Path, ico_path: Path) -> int:
     except (OSError, ValueError) as e:
         print(f"check-windows-icons：无法读取安装器以报告默认图标：{e}", file=sys.stderr)
         return 1
-    ico_frames = parse_ico(ico_path.read_bytes(), str(ico_path)) if ico_path.is_file() else []
+    try:
+        ico_frames = parse_ico(ico_path.read_bytes(), str(ico_path)) if ico_path.is_file() else []
+    except (OSError, ValueError) as e:
+        print(f"check-windows-icons：无法读取 {ico_path}：{e}", file=sys.stderr)
+        return 1
     print("check-windows-icons：bundle.windows.nsis.installerIcon 未配置。")
     print("  此项不记为通过；配置该项后，安装器必须与所引用的 .ico 严格对照。")
     if not groups:
@@ -409,12 +443,13 @@ def run_check(exe: Path | None, installer: Path | None, conf_path: Path, win_con
         conf, conf_dir = load_merged_config(conf_path, win_conf_path)
         app_ico = bundle_ico_path(conf, conf_dir)
         inst_ico = installer_icon_path(conf, conf_dir)
-    except ValueError as e:
+        app_ico_frames = parse_ico(app_ico.read_bytes(), str(app_ico))
+    except (OSError, ValueError) as e:
         print(f"check-windows-icons：{e}", file=sys.stderr)
         return 1
 
     rel_app = app_ico.relative_to(ROOT) if ROOT in app_ico.parents else app_ico
-    print(f"check-windows-icons：应用图标源 {rel_app}（{len(parse_ico(app_ico.read_bytes(), str(app_ico)))} 帧）")
+    print(f"check-windows-icons：应用图标源 {rel_app}（{len(app_ico_frames)} 帧）")
     if inst_ico is not None:
         rel_inst = inst_ico.relative_to(ROOT) if ROOT in inst_ico.parents else inst_ico
         print(f"check-windows-icons：installerIcon = {rel_inst}")
@@ -654,6 +689,14 @@ def make_pe_with_icons(frames: list[tuple[int, int, bytes]], *, group_id: int = 
     return bytes(pe)
 
 
+def _rsrc_raw_offset(pe: bytes) -> int:
+    """自测用：取 make_pe_with_icons 生成的 PE 里 .rsrc 节的文件偏移（单节）。"""
+    e_lfanew = struct.unpack_from("<I", pe, 0x3C)[0]
+    optsz = struct.unpack_from("<H", pe, e_lfanew + 4 + 16)[0]
+    sec = e_lfanew + 4 + 20 + optsz
+    return struct.unpack_from("<I", pe, sec + 20)[0]
+
+
 def write_temp(dirpath: Path, name: str, data: bytes) -> Path:
     p = dirpath / name
     p.write_bytes(data)
@@ -794,6 +837,60 @@ def self_test() -> int:
         junk = write_temp(td, "junk.exe", b"not a pe")
         rc = run_quiet(junk, None, conf, win)
         expect(rc == 1, "应用 exe 不是 PE 时失败")
+
+        # 9b) 截断的 PE（COFF 头不完整）：struct.error 必须收成检查失败，而不是 traceback
+        trunc_pe = write_temp(td, "trunc.exe", pe[: 0x80 + 4 + 10])
+        try:
+            parse_pe_icon_groups(trunc_pe.read_bytes(), "trunc")
+            expect(False, "截断 PE 解析应抛 ValueError")
+        except ValueError:
+            expect(True, "截断 PE（COFF 头不完整）解析抛 ValueError 而不是 struct.error")
+        except Exception as e:  # noqa: BLE001 - 自测要看清具体异常类型
+            expect(False, "截断 PE 解析应抛 ValueError", f"{type(e).__name__}: {e}")
+        rc = run_quiet(trunc_pe, None, conf, win)
+        expect(rc == 1, "应用 exe 是截断 PE 时失败（退出码 1）")
+        rc = run_quiet(pe_path, trunc_pe, conf, win)
+        expect(rc == 1, "未配置 installerIcon、安装器是截断 PE 时报告失败（退出码 1）")
+        trunc_opt = write_temp(td, "trunc-opt.exe", pe[: 0x80 + 4 + 20 + 50])
+        rc = run_quiet(trunc_opt, None, conf, win)
+        expect(rc == 1, "可选头被截断（数据目录读不到）时失败")
+
+        # 9c) 截断的 ICO（目录项不完整）：同样记为失败
+        tdi = td / "truncico"
+        (tdi / "icons").mkdir(parents=True)
+        write_temp(tdi / "icons", "icon.ico", ico[:10])
+        conf_t, win_t = write_conf(tdi, installer_icon=None)
+        rc = run_quiet(pe_path, None, conf_t, win_t)
+        expect(rc == 1, "icon.ico 截断时失败")
+
+        # 9d) 资源目录成环：根目录的子目录指回根目录
+        rsrc_off = _rsrc_raw_offset(pe)
+        loop_pe = bytearray(pe)
+        struct.pack_into("<I", loop_pe, rsrc_off + 16 + 4, 0x80000000 | 0)
+        loop_path = write_temp(td, "loop.exe", bytes(loop_pe))
+        try:
+            parse_pe_icon_groups(bytes(loop_pe), "loop")
+            expect(False, "资源目录成环应被拒绝")
+        except ValueError as e:
+            expect("成环" in str(e) or "嵌套" in str(e), "资源目录成环被拒绝（ValueError）", str(e))
+        except RecursionError:
+            expect(False, "资源目录成环应被拒绝", "RecursionError")
+        rc = run_quiet(loop_path, None, conf, win)
+        expect(rc == 1, "应用 exe 资源目录成环时失败")
+
+        # 9e) 资源目录过深（无环）：语言目录的项再指向另一个语言目录
+        n_frames = 2
+        off_langs = (16 + 8 * 2) + (16 + 8 * n_frames) + (16 + 8)
+        deep_pe = bytearray(pe)
+        struct.pack_into("<I", deep_pe, rsrc_off + off_langs + 16 + 4, 0x80000000 | (off_langs + 24))
+        deep_path = write_temp(td, "deep.exe", bytes(deep_pe))
+        try:
+            parse_pe_icon_groups(bytes(deep_pe), "deep")
+            expect(False, "资源目录过深应被拒绝")
+        except ValueError as e:
+            expect("嵌套" in str(e), "资源目录超过 3 层被拒绝（ValueError）", str(e))
+        rc = run_quiet(deep_path, None, conf, win)
+        expect(rc == 1, "应用 exe 资源目录过深时失败")
 
         # 10) 真实 v0.3.0 安装器：当前 main 未配置 installerIcon，报告默认且不失败
         if real_setup.is_file():
