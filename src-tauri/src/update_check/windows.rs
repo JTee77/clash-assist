@@ -352,7 +352,7 @@ pub(crate) async fn fetch_and_verify(
     tauri::async_runtime::spawn_blocking(move || {
         let mut r = open_read_shared_with_retry(&read_path)?;
         let digest = sha256_of_reader(&mut r).map_err(|e| format!("读取安装包失败：{e}"))?;
-        if digest != expected {
+        if !super::digest_eq(&digest, &expected) {
             return Err(coded(
                 code::DIGEST_MISMATCH,
                 format!("安装包 SHA-256 校验不匹配（期望 {expected}，实际 {digest}）"),

@@ -8,6 +8,7 @@
 //! - `install.rs`：Windows 安装链中的纯逻辑（安装类型判定、PE 版本比对、启动后观察），
 //!   Windows 与各平台单测都编译。
 //! - `pending.rs`：「更新待完成」标记与启动对账（Windows 使用）。
+//! - `platform_marker.rs`：发布说明里的「各平台最近改动版本」标记（文档 46，本平台无变化不提示）。
 //! - `e2e.rs`：`updater-e2e` feature 专用开关；非 e2e 构建中这些环境变量与标记都不存在。
 //!
 //! 入口（lib.rs 的命令）：`check` → `download_to_staging` →（Mac）`apply_staged_update` →
@@ -21,6 +22,7 @@ pub(crate) mod e2e;
 #[cfg(any(windows, test))]
 pub(crate) mod install;
 pub mod pending;
+pub mod platform_marker;
 
 #[cfg(not(windows))]
 mod macos;
@@ -47,6 +49,8 @@ pub mod code {
     pub const ASSET_DIGEST_INVALID: &str = "asset_digest_invalid";
     pub const ASSET_URL_REJECTED: &str = "asset_url_rejected";
     pub const UP_TO_DATE: &str = "up_to_date";
+    /// 文档 46：发布说明标记表明本平台自当前版本以来没有变化，不提示更新（不是错误）。
+    pub const PLATFORM_UNCHANGED: &str = "platform_unchanged";
     pub const PORTABLE: &str = "portable";
     pub const NOT_NEWER: &str = "not_newer";
     pub const DOWNLOAD_FAILED: &str = "download_failed";
@@ -284,6 +288,21 @@ pub fn validate_release_page_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// 常量时间比较两个摘要字符串（#60 S-2）：耗时只取决于长度，不随首个不同字节的位置变化。
+/// 长度不同直接返回 false（摘要长度固定为 64，长度本身不是秘密）。
+pub fn digest_eq(a: &str, b: &str) -> bool {
+    ct_eq(a.as_bytes(), b.as_bytes())
+}
+
+/// 字节串常量时间比较（长度不同直接返回 false）。
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
 #[cfg_attr(windows, allow(dead_code))] // Mac 的 verify_sha256_file 使用
 /// 规范化 SHA-256 摘要：接受 `sha256:<64 位十六进制>`（或裸 64 位十六进制），返回小写十六进制。
 pub fn normalize_sha256_digest(raw: &str) -> Option<String> {
@@ -324,6 +343,14 @@ impl AssetKind {
         match self {
             AssetKind::MacDmgAarch64 => format!("Clash.Assist_{version}_aarch64.dmg"),
             AssetKind::WinSetupX64 => format!("Clash.Assist_{version}_x64-setup.exe"),
+        }
+    }
+
+    /// 本资产对应的平台（文档 46 标记的键）。
+    pub fn platform(self) -> platform_marker::Platform {
+        match self {
+            AssetKind::MacDmgAarch64 => platform_marker::Platform::MacOs,
+            AssetKind::WinSetupX64 => platform_marker::Platform::Windows,
         }
     }
 
@@ -473,8 +500,8 @@ pub fn info_from_release(
         .filter(|u| validate_release_page_url(u).is_ok())
         .map(str::to_string)
         .unwrap_or_else(|| format!("{RELEASES_PAGE}/tag/{tag}"));
-    let update_available = is_newer(&latest, current);
-    let (asset, mut no_one_click) = if update_available {
+    let mut update_available = is_newer(&latest, current);
+    let (mut asset, mut no_one_click) = if update_available {
         match parse_release_asset(v, kind) {
             Ok(a) => (Some(a), None),
             Err(e) => {
@@ -485,6 +512,27 @@ pub fn info_from_release(
     } else {
         (None, Some(code::UP_TO_DATE))
     };
+    // 文档 46：只在 release 通过全部校验（含 immutable）时采信发布说明里的平台标记；
+    // 标记缺失 / 解析失败 / 不适用一律照常提示（fail open）。
+    let mut latest = latest;
+    if asset.is_some()
+        && platform_marker::body_says_unchanged(
+            v["body"].as_str(),
+            kind.platform(),
+            current,
+            &latest,
+        )
+    {
+        crate::append_app_log(&format!(
+            "[update] code={} latest={latest} current={current}：本平台无变化，不提示更新",
+            code::PLATFORM_UNCHANGED
+        ));
+        update_available = false;
+        asset = None;
+        no_one_click = Some(code::PLATFORM_UNCHANGED);
+        // 对用户而言当前版本就是本平台最新版（CLI / 界面不出现「最新 0.3.2，已是最新」的矛盾）
+        latest = normalize(current);
+    }
     if asset.is_some() && install_kind == InstallKind::Portable {
         no_one_click = Some(code::PORTABLE);
     }
@@ -1747,6 +1795,71 @@ mod tests {
         // 原样的 mihomo JSON：资产名、URL 都不属于本项目 → 拒绝
         let raw: serde_json::Value = serde_json::from_str(FIXTURE_MIHOMO).unwrap();
         assert!(parse_release_asset(&raw, AssetKind::WinSetupX64).is_err());
+    }
+
+    #[test]
+    fn digest_eq_is_exact() {
+        assert!(digest_eq(GOOD_HEX, GOOD_HEX));
+        assert!(digest_eq("", ""));
+        let mut last = GOOD_HEX.to_string();
+        last.replace_range(63.., "0");
+        assert!(!digest_eq(GOOD_HEX, &last));
+        let mut first = GOOD_HEX.to_string();
+        first.replace_range(..1, "0");
+        assert!(!digest_eq(GOOD_HEX, &first));
+        assert!(!digest_eq(GOOD_HEX, &GOOD_HEX[..63]));
+        assert!(!digest_eq(GOOD_HEX, &GOOD_HEX.to_uppercase()));
+    }
+
+    /// 文档 46：发布说明标记表明本平台无变化 → 不提示；缺失 / 解析失败 / release 未通过校验 → 照常提示。
+    #[test]
+    fn info_from_release_platform_unchanged_marker() {
+        let mut v = release("0.3.2");
+        v["body"] =
+            "## Clash伴侣 0.3.2\r\n<!-- clash-assist:platforms macos=0.3.1 windows=0.3.2 -->\r\n"
+                .into();
+        // Mac 0.3.1：本平台无变化 → 不提示，latest 显示为当前版本
+        let mac =
+            info_from_release(&v, "0.3.1", AssetKind::MacDmgAarch64, InstallKind::Dmg).unwrap();
+        assert!(!mac.update_available && !mac.one_click);
+        assert_eq!(mac.latest, "0.3.1");
+        assert_eq!(mac.no_one_click, Some(code::PLATFORM_UNCHANGED));
+        assert!(mac.dmg_url.is_none() && mac.asset.is_none());
+        assert!(resolve_download_target(&mac).is_err());
+        // Mac 0.3.0：错过了 0.3.1 的改动 → 照常提示
+        let old =
+            info_from_release(&v, "0.3.0", AssetKind::MacDmgAarch64, InstallKind::Dmg).unwrap();
+        assert!(old.update_available && old.one_click);
+        assert_eq!(old.latest, "0.3.2");
+        // Windows 本版有改动 → 照常提示（安装版、便携版）
+        let win =
+            info_from_release(&v, "0.3.1", AssetKind::WinSetupX64, InstallKind::Nsis).unwrap();
+        assert!(win.update_available && win.one_click);
+        let port =
+            info_from_release(&v, "0.3.1", AssetKind::WinSetupX64, InstallKind::Portable).unwrap();
+        assert!(port.update_available);
+        // Windows 无变化（含便携版）
+        v["body"] = "<!-- clash-assist:platforms macos=0.3.2 windows=0.3.1 -->".into();
+        for k in [InstallKind::Nsis, InstallKind::Portable] {
+            let w = info_from_release(&v, "0.3.1", AssetKind::WinSetupX64, k).unwrap();
+            assert!(!w.update_available && !w.one_click, "{k:?}");
+        }
+        // 标记缺失 / 格式错误 / body 为 null → 照常提示
+        for body in [
+            serde_json::Value::Null,
+            "".into(),
+            "<!-- clash-assist:platforms windows=0.3.1 macos=bad -->".into(),
+        ] {
+            v["body"] = body;
+            let w =
+                info_from_release(&v, "0.3.1", AssetKind::WinSetupX64, InstallKind::Nsis).unwrap();
+            assert!(w.update_available && w.one_click);
+        }
+        // release 未通过校验（非 immutable）时不采信标记 → 照常提示（只给发布页）
+        v["body"] = "<!-- clash-assist:platforms macos=0.3.1 windows=0.3.1 -->".into();
+        v["immutable"] = false.into();
+        let w = info_from_release(&v, "0.3.1", AssetKind::WinSetupX64, InstallKind::Nsis).unwrap();
+        assert!(w.update_available && !w.one_click);
     }
 
     #[test]

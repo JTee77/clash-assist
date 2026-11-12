@@ -267,11 +267,12 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'release-notes'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $notes = (Get-Content -Raw -LiteralPath scripts/release-notes-windows.md).Replace('{{VERSION}}', $env:VERSION).Replace('{{REPO}}', $env:REPO)
+          $plat = Get-Content -Raw -LiteralPath release/platforms.json | ConvertFrom-Json
+          $notes = (Get-Content -Raw -LiteralPath scripts/release-notes-windows.md).Replace('{{VERSION}}', $env:VERSION).Replace('{{REPO}}', $env:REPO).Replace('{{MACOS_VERSION}}', [string]$plat.macos).Replace('{{WINDOWS_VERSION}}', [string]$plat.windows)
           if ($notes.Contains('{{')) { Write-Error '发布说明中仍有未替换的占位符'; exit 1 }
           $path = Join-Path $out 'release-notes.md'
           [IO.File]::WriteAllText($path, $notes, [Text.UTF8Encoding]::new($false))
-          node scripts/check-release-notes.mjs $path
+          node scripts/check-release-notes.mjs --version $env:VERSION $path
           exit $LASTEXITCODE
 
       - name: 上传 win-dist
