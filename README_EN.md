@@ -51,7 +51,7 @@ The first time you run **Environment leak check**, macOS may ask for **Local Net
 
 ## How to Use
 
-1. Open **Clash Verge** or **FlClash** and connect to a node as usual.
+1. Open **Clash Verge** or **FlClash** and connect to a node as usual. On Windows, use **Clash Verge Rev**.
    - *If you use **FlClash** (macOS only), first enable **“External Controller”** in FlClash under **Settings → General → Inbound**.*
 2. Open **Clash Assist** — it automatically detects the client you're running and loads your nodes. If detection fails, choose your client under “Which app do you use?” at the top, then click **“Refresh nodes”**.
 3. From there, you can:
@@ -80,6 +80,8 @@ See [docs/CLI.md](./docs/CLI.md) for full documentation (and [docs/AGENTS-CLI.md
 - **For reference only**: Unlock and leak checks are based on real-time sample probes and may vary as target services update their rules.
 
 ## Contributing & License
+
+For usage questions and ideas, go to [Discussions](https://github.com/JTee77/clash-assist/discussions). Only after confirming it is a program defect, file an Issue using the [template](https://github.com/JTee77/clash-assist/issues/new/choose). Do not paste subscription URLs, API secrets, or unsanitized connection logs.
 
 Issues and PRs are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for developer notes.  
 Licensed under the [GNU GPL-3.0](./LICENSE).

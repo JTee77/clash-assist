@@ -51,7 +51,7 @@
 
 ## 怎么使用？
 
-1. 先打开你的 **Clash Verge** 或 **FlClash**，正常连上一个节点。
+1. 先打开你的 **Clash Verge** 或 **FlClash**，正常连上一个节点。在 Windows 上请使用 **Clash Verge Rev**。
    - *如果你用的是 **FlClash**（仅 Mac），请先在 FlClash 的「设置 → 常规 → 入站」里把「外部控制器」开关打开。*
 2. 打开 **Clash伴侣**，软件会自动识别你正在用的客户端并直接拉取节点列表。如果没识别到，再在顶部「你在用哪款软件？」里手动选择，然后点 **「刷新节点」**。
 3. 你可以：
@@ -80,6 +80,8 @@ clash-assist --cli help
 - **检测结果仅供参考**：网站解锁与防泄漏检查基于实时抽样探测，受目标网站风控策略变化影响，结果供日常选节点参考。
 
 ## 贡献 & 开源协议
+
+使用上的问题和想法，请到 [Discussions](https://github.com/JTee77/clash-assist/discussions)。确认是程序缺陷之后，再用[模板](https://github.com/JTee77/clash-assist/issues/new/choose)提交 Issue。请不要粘贴订阅地址、控制器密钥或未脱敏的连接日志。
 
 欢迎提交 Issue 或 PR，开发者说明见 [CONTRIBUTING.md](./CONTRIBUTING.md)。  
 本项目采用 [GNU GPL-3.0](./LICENSE) 开源协议。
