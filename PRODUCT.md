@@ -1,7 +1,7 @@
 # Clash伴侣 / Clash Assist — 产品说明（v0.3.1）
 
 ## 定位
-**Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
+**Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）与 Windows 10 / 11（x64）的桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
 
 一句话：**看看你的代理会不会漏 DNS、关心的服务能不能用、实际够不够快。**
 
@@ -10,18 +10,20 @@
 许可证：**GPL-3.0**（GNU 通用公共许可证第 3 版；可商用，分发改版须同样开源）。
 
 ## 受众
-- 已在用 Clash Verge / Clash Verge Rev 或 FlClash 的 Mac 用户
+- 已在 macOS 或 Windows 上使用 Clash Verge / Clash Verge Rev 的用户，以及使用 FlClash 的 Mac 用户
 - 需要比「能开 Google」更深的检查
-- 普通用户可直接用 GUI；进阶用户可用 CLI 拿 JSON
+- 普通用户使用 GUI；进阶用户可在 Mac 上使用 CLI
 
 ## 平台
-- **仅 macOS Apple Silicon（arm64）**（v1 不做 Intel）
-- Windows / 移动端不在当前范围
-- 分发：GitHub Releases（`.dmg` / `.app`），不强制上架 App Store
+- **macOS**：仅 Apple Silicon（arm64），未经公证（v1 不做 Intel）
+- **Windows**：Windows 10 / 11 x64。安装版支持应用内一键更新，便携版不支持。目前只支持 Clash Verge Rev
+- **FlClash** 与命令行工具目前仅 macOS
+- Intel Mac 与移动端不在范围内
+- 分发：GitHub Releases（macOS `.dmg`，Windows 安装包 `.exe` 与便携 zip）
 
 ## 架构（两层）
 1. **通用出口诊断** — 测当前系统出口（系统代理 / TUN 开启时）
-2. **Mihomo 适配** — 本地 `external-controller` / secret / Unix 套接字：节点列表、延迟、切换、深测
+2. **Mihomo 适配** — 本地 `external-controller` / secret / Unix 套接字（Windows 上经命名管道连接）：节点列表、延迟、切换、深测
 
 文案统一称：**「Mihomo / Clash Meta 兼容客户端」**。
 

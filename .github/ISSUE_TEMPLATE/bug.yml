@@ -1,0 +1,65 @@
+name: 缺陷报告
+description: 确认是程序缺陷后再填写。也欢迎用英文提交。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **请不要粘贴订阅地址、控制器密钥或未脱敏的连接日志。**
+
+        使用上的问题请到 [Discussions](https://github.com/JTee77/clash-assist/discussions) 讨论。功能建议请发到 [Ideas](https://github.com/JTee77/clash-assist/discussions/categories/ideas)，不要开 Issue。也欢迎用英文填写（English submissions are welcome）。
+  - type: input
+    id: version
+    attributes:
+      label: Clash伴侣版本
+      description: 例如 0.3.1。可在应用标题栏或关于信息里查看。
+      placeholder: "0.3.1"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 系统
+      description: 填写 macOS 版本，或 Windows 10 / Windows 11。
+      placeholder: "macOS 15.1，或 Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: 客户端及客户端版本
+      description: 例如 Clash Verge Rev 2.4.x。FlClash 目前仅 macOS；Windows 上请填写 Clash Verge Rev。
+      placeholder: "Clash Verge Rev 2.4.2"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 实际发生了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+      description: 你期望发生什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 怎样可以稳定重现。
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 可粘贴已脱敏的日志，或直接拖入截图。不要包含订阅地址、控制器密钥或未脱敏的连接日志。
+    validations:
+      required: false

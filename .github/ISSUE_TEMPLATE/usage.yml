@@ -1,0 +1,48 @@
+name: 使用与安装问题
+description: 装不上、打不开、识别不到客户端、测不了节点、更新失败等。也欢迎用英文提交。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **请不要粘贴订阅地址、控制器密钥或未脱敏的连接日志。**
+
+        如果还不能确定是不是程序缺陷，也可以先到 [Discussions](https://github.com/JTee77/clash-assist/discussions) 提问。也欢迎用英文填写（English submissions are welcome）。
+  - type: input
+    id: version
+    attributes:
+      label: Clash伴侣版本
+      description: 例如 0.3.1。还没能打开软件时，填写安装包文件名上的版本。
+      placeholder: "0.3.1"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 系统
+      description: 填写 macOS 版本，或 Windows 10 / Windows 11。
+      placeholder: "macOS 15.1，或 Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: 客户端及客户端版本
+      description: 例如 Clash Verge Rev 2.4.x。FlClash 目前仅 macOS；Windows 上请填写 Clash Verge Rev。
+      placeholder: "Clash Verge Rev 2.4.2"
+    validations:
+      required: true
+  - type: textarea
+    id: stuck
+    attributes:
+      label: 卡在哪一步
+      description: 例如装不上、打不开、识别不到客户端、测不了节点、更新失败。
+      placeholder: "安装版更新失败，点了一键更新后没有反应"
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: 已经试过的办法
+      description: 已经尝试过什么，结果如何。还没试过别的可以写「还没试过」。
+    validations:
+      required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 提问与讨论
+    url: https://github.com/JTee77/clash-assist/discussions
+    about: 使用上的问题和讨论请发到 Discussions，不要开 Issue。
+  - name: 功能建议
+    url: https://github.com/JTee77/clash-assist/discussions/categories/ideas
+    about: 功能建议请发到 Discussions 的 Ideas，不要使用 Issue。
