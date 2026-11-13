@@ -90,10 +90,13 @@ export function DiagnosticsNotices({
   sources,
   busy,
   onRecheck,
+  onSendReport,
 }: {
   sources: readonly string[];
   busy?: boolean;
   onRecheck: () => void;
+  /** 出错提示旁边的「发送这份错误报告」。说明类提示不放。 */
+  onSendReport?: () => void;
 }) {
   const { t } = useI18n();
   const [openFailed, setOpenFailed] = useState(false);
@@ -128,6 +131,11 @@ export function DiagnosticsNotices({
                 </button>
               ) : null}
               {noticeHasRecheck(n) ? recheck : null}
+              {onSendReport && view.level !== "info" ? (
+                <button type="button" className="btn btn-sm" onClick={onSendReport}>
+                  {t("report.send")}
+                </button>
+              ) : null}
               {n.kind === "insecure-dacl" && openFailed ? (
                 <span className="ws-error" role="alert">
                   {t("diag.openVergeFailed")}

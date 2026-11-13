@@ -11,6 +11,7 @@ mod dns;
 mod dns_query;
 #[cfg(windows)]
 mod dns_windows;
+mod feedback;
 mod http_body;
 mod mihomo;
 mod platform;
@@ -734,6 +735,40 @@ fn set_ui_language(app: tauri::AppHandle, lang: String) -> Result<(), String> {
     }
 }
 
+/// 诊断报告里的系统与架构（macos / windows，aarch64 / x86_64）。
+#[tauri::command]
+fn report_host_info() -> feedback::ReportHostInfo {
+    feedback::host_info()
+}
+
+/// 向反馈接口 POST 一次 JSON。不跟随重定向：302 原样返回，由前端用同一份正文再 POST。
+#[tauri::command]
+async fn feedback_post(url: String, body: String) -> Result<feedback::FeedbackExchange, String> {
+    feedback::post_feedback(&url, &body).await
+}
+
+/// 系统保存对话框，把诊断报告写成 Markdown 或纯文本。用户取消时返回 null。
+#[tauri::command]
+fn save_text_document(
+    app: tauri::AppHandle,
+    default_name: String,
+    content: String,
+    extension: String,
+) -> Result<Option<String>, String> {
+    feedback::save_text_document(&app, &default_name, &content, &extension)
+}
+
+/// 系统保存对话框，写入分享 PNG，并在旁边写同名文字摘要。用户取消时返回 null。
+#[tauri::command]
+fn save_png_document(
+    app: tauri::AppHandle,
+    default_name: String,
+    png_base64: String,
+    sidecar_text: String,
+) -> Result<Option<String>, String> {
+    feedback::save_png_document(&app, &default_name, &png_base64, &sidecar_text)
+}
+
 /// 用默认浏览器打开 release 页面（只接受本项目 GitHub releases 下的 URL）。
 #[tauri::command]
 fn open_release_page(url: String) -> Result<(), String> {
@@ -1091,7 +1126,11 @@ pub fn run() {
             apply_update,
             relaunch_updated_app,
             system_locale,
-            set_ui_language
+            set_ui_language,
+            report_host_info,
+            feedback_post,
+            save_text_document,
+            save_png_document
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,16 +4,20 @@ import { ThemeToggle } from "../components/ThemeToggle";
 import { LanguageToggle } from "../components/LanguageToggle";
 import { useI18n } from "../i18n";
 import { NodeCard } from "../components/NodeCard";
-import { DiagnosticsNotices } from "../components/DiagnosticsNotices";
+import { DiagnosticsNotices, noticeView } from "../components/DiagnosticsNotices";
+import { SendReportButton, useReportActions } from "../components/ReportBar";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CLIENT_OPTIONS,
   normalizeClientId,
   shortRegionName,
+  sourceNoticesOf,
   type ClientId,
   type ConnectionState,
   type ProxyNode,
+  type SourceNotice,
 } from "../lib/mihomo";
+import { assembleInput, reportHostInfo } from "../lib/report";
 import { useNodeFilter } from "../hooks/useNodeFilter";
 import {
   splitProgressDisplay,
@@ -44,6 +48,7 @@ export function HomePage({
 }) {
   const { t, td } = useI18n();
   const [copiedDonate, setCopiedDonate] = useState(false);
+  const [host, setHost] = useState({ os: "unknown", arch: "unknown" });
 
   const clientUnset = !clientId;
 
@@ -131,6 +136,64 @@ export function HomePage({
     }
   }, [t]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    void reportHostInfo().then(
+      (info) => setHost({ os: info.os || "unknown", arch: info.arch || "unknown" }),
+      () => {},
+    );
+  }, []);
+
+  const errors: { code: string; message: string }[] = [];
+  if (gate && !gate.ok) {
+    const code =
+      connection.status === "unauthorized"
+        ? "unauthorized"
+        : connection.status === "unreachable"
+          ? "unreachable"
+          : "gate_failed";
+    errors.push({
+      code,
+      message: [td(gate.message), gate.process ? td(gate.process) : ""].filter(Boolean).join("\n"),
+    });
+  }
+  if (restoreError) errors.push({ code: "restore_failed", message: td(restoreError) });
+  else if (switchHint) errors.push({ code: "switch_failed", message: td(switchHint) });
+  for (const notice of sourceNoticesOf(discoverySources)) {
+    const view = noticeView(notice);
+    if (view.level === "info") continue;
+    errors.push({ code: noticeErrorCode(notice), message: t(view.message, view.vars) });
+  }
+  const tested = orderedNodes
+    .filter((n) => scoreByName.has(n.name))
+    .map((n) => ({
+      name: n.name,
+      cards: (scoreByName.get(n.name)?.cards ?? []).map((c) => ({
+        name: c.title,
+        level: c.level,
+        message: c.conclusion ?? c.summary ?? "",
+      })),
+    }));
+  const report = useReportActions(
+    assembleInput({
+      version: __APP_VERSION__,
+      os: host.os,
+      arch: host.arch,
+      client: clientId ?? "unknown",
+      nodeNames: orderedNodes.map((n) => n.name),
+      tested,
+      envCards: envCards.map((c) => ({
+        name: c.title,
+        level: c.level,
+        message: c.conclusion ?? c.summary ?? "",
+      })),
+      errors,
+      restoreSucceeded: restoreError ? false : nodeTestOk ? true : null,
+      nodeLabel: (n) => t("report.nodeLabel", { n }),
+    }),
+    tested.length > 0 || envCards.some((c) => c.level !== "unknown" && c.level !== "running"),
+  );
+
   return (
     <div className="home-page">
       <header className="home-topbar">
@@ -185,8 +248,11 @@ export function HomePage({
                   <span className="status-fail-mark">✗</span>
                   {t("home.failed")}
                 </span>
-                <span className="fetch-fail-msg" role="status">
-                  {td(gate.message)}
+                <span className="report-inline">
+                  <span className="fetch-fail-msg" role="status">
+                    {td(gate.message)}
+                  </span>
+                  <SendReportButton onClick={report.openSend} />
                 </span>
               </>
             ) : null)}
@@ -199,10 +265,13 @@ export function HomePage({
         </div>
       </header>
 
+      {report.bar}
+
       <DiagnosticsNotices
         sources={discoverySources}
         busy={!!busy || refreshing || running}
         onRecheck={() => void refreshAndGate()}
+        onSendReport={report.openSend}
       />
 
       {gate?.ok && orderedNodes.length > 0 ? (
@@ -284,8 +353,11 @@ export function HomePage({
                     </span>
                   ) : null}
                   {restoreError ? (
-                    <span className="ws-restore-error" role="alert">
-                      {td(restoreError)}
+                    <span className="report-inline">
+                      <span className="ws-restore-error" role="alert">
+                        {td(restoreError)}
+                      </span>
+                      <SendReportButton onClick={report.openSend} />
                     </span>
                   ) : null}
                 </div>
@@ -370,8 +442,9 @@ export function HomePage({
                   </div>
                 ) : null}
                 {switchHint && !restoreError ? (
-                  <span className="ws-error" role="alert">
-                    {td(switchHint)}
+                  <span className="report-inline ws-error" role="alert">
+                    <span>{td(switchHint)}</span>
+                    <SendReportButton onClick={report.openSend} />
                   </span>
                 ) : null}
                 <button
@@ -598,6 +671,14 @@ export function HomePage({
           </span>
         </div>
       </details>
+      {report.dialogs}
     </div>
   );
+}
+
+function noticeErrorCode(notice: SourceNotice): string {
+  if (notice.kind === "tcp-rejected") {
+    return `tcp_rejected_${notice.code}`.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
+  }
+  return notice.kind.replace(/-/g, "_");
 }
