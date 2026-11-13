@@ -230,6 +230,7 @@ fn pick_save_path(
     file_name: &str,
     ext: &str,
 ) -> Result<Option<PathBuf>, String> {
+    use tauri::Manager;
     let label = match ext {
         "md" => "Markdown",
         "png" => "PNG",
