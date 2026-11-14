@@ -174,6 +174,7 @@ export const zhHans = {
   "report.errors": "错误",
   "report.moreNodes": "其余 {n} 个未列出",
   "report.shareSaved": "已保存图片和文字摘要",
+  "report.shareSavedImageOnly": "已保存图片。同名文字摘要已存在，未覆盖。",
   "report.cancel": "取消",
 } as const;
 

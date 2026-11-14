@@ -26,12 +26,18 @@ export function saveTextDocument(
   return invoke<string | null>("save_text_document", { defaultName, content, extension });
 }
 
+export type SavedPng = {
+  path: string;
+  /** `written` 已写入文字摘要；`kept` 同名摘要已存在，用户选择不覆盖。 */
+  sidecar: "written" | "kept";
+};
+
 export function savePngDocument(
   defaultName: string,
   pngBase64: string,
   sidecarText: string,
-): Promise<string | null> {
-  return invoke<string | null>("save_png_document", {
+): Promise<SavedPng | null> {
+  return invoke<SavedPng | null>("save_png_document", {
     defaultName,
     pngBase64,
     sidecarText,

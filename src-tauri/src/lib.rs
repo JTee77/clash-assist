@@ -758,14 +758,15 @@ fn save_text_document(
     feedback::save_text_document(&app, &default_name, &content, &extension)
 }
 
-/// 系统保存对话框，写入分享 PNG，并在旁边写同名文字摘要。用户取消时返回 null。
+/// 系统保存对话框，写入分享 PNG，并在旁边写同名文字摘要。
+/// 摘要文件已存在时先询问；用户拒绝则保留原文件，PNG 仍然保存。用户取消保存对话框时返回 null。
 #[tauri::command]
 fn save_png_document(
     app: tauri::AppHandle,
     default_name: String,
     png_base64: String,
     sidecar_text: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<feedback::SavedShareFiles>, String> {
     feedback::save_png_document(&app, &default_name, &png_base64, &sidecar_text)
 }
 

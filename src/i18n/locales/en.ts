@@ -176,5 +176,6 @@ export const en: Messages = {
   "report.errors": "Errors",
   "report.moreNodes": "{n} more not listed",
   "report.shareSaved": "Saved the image and the text summary",
+  "report.shareSavedImageOnly": "Saved the image. An existing text summary was left unchanged.",
   "report.cancel": "Cancel",
 };

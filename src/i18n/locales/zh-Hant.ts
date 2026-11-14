@@ -176,5 +176,6 @@ export const zhHant: Messages = {
   "report.errors": "錯誤",
   "report.moreNodes": "其餘 {n} 個未列出",
   "report.shareSaved": "已儲存圖片與文字摘要",
+  "report.shareSavedImageOnly": "已儲存圖片。同名文字摘要已存在，未覆蓋。",
   "report.cancel": "取消",
 };

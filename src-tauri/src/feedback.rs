@@ -151,6 +151,63 @@ pub fn text_sidecar(png: &Path) -> PathBuf {
     png.with_extension("txt")
 }
 
+/// 分享图保存结果。`sidecar` 为 `written` 或 `kept`（同名摘要已存在且未覆盖）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SavedShareFiles {
+    pub path: String,
+    pub sidecar: &'static str,
+}
+
+fn write_share_files(
+    path: &Path,
+    png: &[u8],
+    sidecar_text: &str,
+    confirm_overwrite: impl FnOnce(&Path) -> bool,
+) -> Result<SavedShareFiles, String> {
+    write_bytes(path, png)?;
+    let side = text_sidecar(path);
+    if crate::safe_fs::is_file(&side) && !confirm_overwrite(&side) {
+        return Ok(SavedShareFiles {
+            path: path.display().to_string(),
+            sidecar: "kept",
+        });
+    }
+    if let Err(e) = write_bytes(&side, sidecar_text.as_bytes()) {
+        return Err(format!("text summary was not saved: {e}"));
+    }
+    Ok(SavedShareFiles {
+        path: path.display().to_string(),
+        sidecar: "written",
+    })
+}
+
+/// 同名 `.txt` 已存在时询问是否覆盖。只有明确选「是」才覆盖；关闭对话框不算同意。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn confirm_sidecar_overwrite(app: &tauri::AppHandle, side: &Path) -> bool {
+    use tauri::Manager;
+    let name = side
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("summary.txt");
+    let mut dialog = rfd::MessageDialog::new()
+        .set_title("Clash Assist")
+        .set_description(format!(
+            "「{name}」已存在。要覆盖这份文字摘要吗？\n\"{name}\" already exists. Overwrite this text summary?"
+        ))
+        .set_level(rfd::MessageLevel::Warning)
+        .set_buttons(rfd::MessageButtons::YesNo);
+    if let Some(win) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&win);
+    }
+    dialog.show() == rfd::MessageDialogResult::Yes
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn confirm_sidecar_overwrite(_app: &tauri::AppHandle, _side: &Path) -> bool {
+    // 这个平台没有保存对话框，正常走不到这里。拒绝覆盖，避免静默截断已有摘要。
+    false
+}
+
 fn normalize_text_ext(ext: &str) -> Result<&'static str, String> {
     match ext {
         "md" | "markdown" => Ok("md"),
@@ -279,7 +336,7 @@ pub fn save_png_document(
     default_name: &str,
     png_base64: &str,
     sidecar_text: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<SavedShareFiles>, String> {
     if sidecar_text.len() > MAX_TEXT {
         return Err("summary too large".into());
     }
@@ -288,12 +345,11 @@ pub fn save_png_document(
     let Some(path) = pick_save_path(app, &name, "png")? else {
         return Ok(None);
     };
-    write_bytes(&path, &bytes)?;
-    let side = text_sidecar(&path);
-    if let Err(e) = write_bytes(&side, sidecar_text.as_bytes()) {
-        return Err(format!("text summary was not saved: {e}"));
-    }
-    Ok(Some(path.display().to_string()))
+    // PNG 由保存对话框确认。旁边的同名摘要如果已经存在，再问一次，避免静默覆盖。
+    write_share_files(&path, &bytes, sidecar_text, |side| {
+        confirm_sidecar_overwrite(app, side)
+    })
+    .map(Some)
 }
 
 #[cfg(test)]
@@ -383,6 +439,49 @@ mod tests {
         assert_eq!(crate::safe_fs::read_to_string(&path).unwrap(), "hello");
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn sidecar_is_not_overwritten_without_confirmation() {
+        let dir = std::env::temp_dir().join(format!("ca-sidecar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("result.png");
+        let txt = text_sidecar(&png);
+        write_bytes(&txt, b"keep-me").unwrap();
+
+        let mut asked = false;
+        let kept = write_share_files(&png, b"PNG", "new-summary", |side| {
+            asked = true;
+            assert_eq!(side, &txt);
+            false
+        })
+        .unwrap();
+        assert!(asked);
+        assert_eq!(kept.sidecar, "kept");
+        assert_eq!(kept.path, png.display().to_string());
+        assert_eq!(crate::safe_fs::read_to_string(&txt).unwrap(), "keep-me");
+        assert_eq!(crate::safe_fs::read_to_string(&png).unwrap(), "PNG");
+
+        let replaced = write_share_files(&png, b"PNG2", "new-summary", |_| true).unwrap();
+        assert_eq!(replaced.sidecar, "written");
+        assert_eq!(crate::safe_fs::read_to_string(&txt).unwrap(), "new-summary");
+        assert_eq!(crate::safe_fs::read_to_string(&png).unwrap(), "PNG2");
+
+        let fresh = dir.join("fresh.png");
+        let mut asked_fresh = false;
+        let created = write_share_files(&fresh, b"PNG", "summary", |_| {
+            asked_fresh = true;
+            false
+        })
+        .unwrap();
+        assert!(!asked_fresh);
+        assert_eq!(created.sidecar, "written");
+        assert_eq!(
+            crate::safe_fs::read_to_string(&text_sidecar(&fresh)).unwrap(),
+            "summary"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
