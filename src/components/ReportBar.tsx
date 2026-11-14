@@ -115,7 +115,10 @@ export function useReportActions(input: DiagnosticInput, canShare: boolean) {
     }
     void savePngDocument("Clash-Assist-result.png", png, text)
       .then((saved) => {
-        if (saved) setNotice(t("report.shareSaved"));
+        if (!saved) return;
+        setNotice(
+          saved.sidecar === "kept" ? t("report.shareSavedImageOnly") : t("report.shareSaved"),
+        );
       })
       .catch((err: unknown) => {
         setSendError(t("report.saveFailed", { error: errText(err) }));

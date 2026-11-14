@@ -32,3 +32,4 @@ export {
   savePngDocument,
   saveTextDocument,
 } from "./transport";
+export type { SavedPng } from "./transport";
