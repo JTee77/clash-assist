@@ -5,6 +5,9 @@ import { ENV_CARD_IDS, runEnvDiagnostics } from "../egress";
 import { ENV_PLACEHOLDERS, asRunning } from "./placeholders";
 import type { RunEnvContext, RunnerHooks } from "./types";
 
+/** 环境检查自己抛错时写在卡片上的结论。正常检测失败不会用这句。 */
+export const ENV_RUNNER_FAILURE = "环境检查失败";
+
 export async function runEnv(
   ctx: RunEnvContext,
   hooks: RunnerHooks,
@@ -29,7 +32,7 @@ export async function runEnv(
       ENV_PLACEHOLDERS.map((c) => ({
         ...c,
         level: "fail" as const,
-        conclusion: "环境检查失败",
+        conclusion: ENV_RUNNER_FAILURE,
         process: msg,
       })),
     );

@@ -2186,16 +2186,7 @@ html[data-platform="macos"] .titlebar {
   margin-top: 10px;
 }
 
-/* 诊断导出 / 分享 / 发送。按钮沿用 .btn，窄窗下整行折行，不另做一套主按钮。 */
-.home-report-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 var(--tray-gap);
-  padding: 0 var(--content-inset-x);
-  min-width: 0;
-}
+/* 发送错误报告。按钮沿用 .btn / .btn-sm，窄窗下整行折行，不另做一套主按钮。 */
 .report-inline {
   display: inline-flex;
   flex-wrap: wrap;
@@ -2207,12 +2198,6 @@ html[data-platform="macos"] .titlebar {
 .ws-error.report-inline {
   display: inline-flex;
   flex-wrap: wrap;
-}
-.report-notice {
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.4;
-  min-width: 0;
 }
 .report-panel {
   max-width: 560px;

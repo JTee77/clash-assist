@@ -1,17 +1,14 @@
-//! 诊断报告的保存对话框，以及发往反馈接口的单次 POST。
+//! 发往反馈接口的单次 POST / GET。
 //!
-//! Apps Script 的 exec URL 会 302 到 `script.googleusercontent.com`。reqwest 的默认
-//! 重定向会把 301/302/303 的 POST 改成 GET 并丢掉正文，发送就会失败。这里用
-//! `redirect::Policy::none()`，把状态码和 Location 交回前端；前端用同一份 JSON 再 POST。
+//! Apps Script 的 exec URL 会 302/303 到 `script.googleusercontent.com/macros/echo`。
+//! 那次 POST 已经提交报告。echo 地址只允许 GET/HEAD，再 POST 同一份 JSON 会得到 405。
+//! 这里用 `redirect::Policy::none()`，把状态码和 Location 交回前端；前端对 echo 改用 GET，不带正文。
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
 
 const MAX_TEXT: usize = 256 * 1024;
-const MAX_PNG: usize = 4 * 1024 * 1024;
 const MAX_RESP: usize = 64 * 1024;
 
 const FEEDBACK_HOSTS_EXEC: &str = "script.google.com";
@@ -38,6 +35,7 @@ pub fn host_info() -> ReportHostInfo {
 }
 
 /// 只允许官方 exec 地址，以及它跳过去的 `script.googleusercontent.com`。
+/// GET 与 POST 用同一份名单，不新增主机，也不放行 exec 以外的 `script.google.com` 路径。
 pub fn allow_feedback_url(raw: &str) -> Result<(), String> {
     let u = url::Url::parse(raw).map_err(|_| "url not allowed".to_string())?;
     // `Url::port()` 会把 https 的默认 443 吞掉，显式写上的 `:443` 也要拒绝。
@@ -77,6 +75,7 @@ fn explicit_port(raw: &str) -> bool {
 pub fn feedback_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        // 不记 cookie。echo 的 GET 不需要 cookie。
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(20))
         .user_agent(format!("clash-assist/{}", env!("CARGO_PKG_VERSION")))
@@ -84,7 +83,22 @@ pub fn feedback_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("http client: {e}"))
 }
 
-/// 发一次 POST，不跟随重定向。调用方看到 302 时必须自己用同一份 body 再 POST。
+async fn read_exchange(resp: reqwest::Response) -> Result<FeedbackExchange, String> {
+    let status = resp.status().as_u16();
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let bytes = crate::http_body::read_body_capped(resp, MAX_RESP).await?;
+    Ok(FeedbackExchange {
+        status,
+        location,
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+    })
+}
+
+/// 发一次 POST，不跟随重定向。正文原样送出。
 pub async fn exchange_once(
     client: &reqwest::Client,
     url: &str,
@@ -100,18 +114,18 @@ pub async fn exchange_once(
         .send()
         .await
         .map_err(|e| format!("send: {e}"))?;
-    let status = resp.status().as_u16();
-    let location = resp
-        .headers()
-        .get(reqwest::header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let bytes = crate::http_body::read_body_capped(resp, MAX_RESP).await?;
-    Ok(FeedbackExchange {
-        status,
-        location,
-        body: String::from_utf8_lossy(&bytes).into_owned(),
-    })
+    read_exchange(resp).await
+}
+
+/// 发一次 GET，不跟随重定向，不带正文。
+/// 用于读取 echo 上的 `{"ok":true}` / `{"ok":false}`。
+pub async fn exchange_get(client: &reqwest::Client, url: &str) -> Result<FeedbackExchange, String> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("send: {e}"))?;
+    read_exchange(resp).await
 }
 
 pub async fn post_feedback(url: &str, body: &str) -> Result<FeedbackExchange, String> {
@@ -120,236 +134,10 @@ pub async fn post_feedback(url: &str, body: &str) -> Result<FeedbackExchange, St
     exchange_once(&client, url, body).await
 }
 
-pub fn safe_file_name(name: &str, ext: &str) -> String {
-    let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
-    let base = base.trim_matches('.').trim();
-    let mut cleaned: String = base
-        .chars()
-        .filter(|c| !c.is_control() && *c != '/' && *c != '\\')
-        .take(80)
-        .collect();
-    if cleaned.is_empty() {
-        cleaned = "clash-assist".into();
-    }
-    let suffix = format!(".{ext}");
-    if cleaned.to_ascii_lowercase().ends_with(&suffix) {
-        cleaned
-    } else {
-        format!("{cleaned}{suffix}")
-    }
-}
-
-#[cfg(any(test, target_os = "macos", target_os = "windows"))]
-pub fn ensure_ext(path: PathBuf, ext: &str) -> PathBuf {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(got) if got.eq_ignore_ascii_case(ext) => path,
-        _ => path.with_extension(ext),
-    }
-}
-
-pub fn text_sidecar(png: &Path) -> PathBuf {
-    png.with_extension("txt")
-}
-
-/// 分享图保存结果。`sidecar` 为 `written` 或 `kept`（同名摘要已存在且未覆盖）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SavedShareFiles {
-    pub path: String,
-    pub sidecar: &'static str,
-}
-
-fn write_share_files(
-    path: &Path,
-    png: &[u8],
-    sidecar_text: &str,
-    confirm_overwrite: impl FnOnce(&Path) -> bool,
-) -> Result<SavedShareFiles, String> {
-    write_bytes(path, png)?;
-    let side = text_sidecar(path);
-    if crate::safe_fs::is_file(&side) && !confirm_overwrite(&side) {
-        return Ok(SavedShareFiles {
-            path: path.display().to_string(),
-            sidecar: "kept",
-        });
-    }
-    if let Err(e) = write_bytes(&side, sidecar_text.as_bytes()) {
-        return Err(format!("text summary was not saved: {e}"));
-    }
-    Ok(SavedShareFiles {
-        path: path.display().to_string(),
-        sidecar: "written",
-    })
-}
-
-/// 同名 `.txt` 已存在时询问是否覆盖。只有明确选「是」才覆盖；关闭对话框不算同意。
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn confirm_sidecar_overwrite(app: &tauri::AppHandle, side: &Path) -> bool {
-    use tauri::Manager;
-    let name = side
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("summary.txt");
-    let mut dialog = rfd::MessageDialog::new()
-        .set_title("Clash Assist")
-        .set_description(format!(
-            "「{name}」已存在。要覆盖这份文字摘要吗？\n\"{name}\" already exists. Overwrite this text summary?"
-        ))
-        .set_level(rfd::MessageLevel::Warning)
-        .set_buttons(rfd::MessageButtons::YesNo);
-    if let Some(win) = app.get_webview_window("main") {
-        dialog = dialog.set_parent(&win);
-    }
-    dialog.show() == rfd::MessageDialogResult::Yes
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn confirm_sidecar_overwrite(_app: &tauri::AppHandle, _side: &Path) -> bool {
-    // 这个平台没有保存对话框，正常走不到这里。拒绝覆盖，避免静默截断已有摘要。
-    false
-}
-
-fn normalize_text_ext(ext: &str) -> Result<&'static str, String> {
-    match ext {
-        "md" | "markdown" => Ok("md"),
-        "txt" => Ok("txt"),
-        _ => Err("unsupported file type".into()),
-    }
-}
-
-pub fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut file = crate::safe_fs::create_truncate(path).map_err(|e| format!("save: {e}"))?;
-    file.write_all(bytes).map_err(|e| format!("save: {e}"))?;
-    file.flush().map_err(|e| format!("save: {e}"))?;
-    Ok(())
-}
-
-fn decode_b64_char(c: u8) -> Result<u8, String> {
-    match c {
-        b'A'..=b'Z' => Ok(c - b'A'),
-        b'a'..=b'z' => Ok(c - b'a' + 26),
-        b'0'..=b'9' => Ok(c - b'0' + 52),
-        b'+' => Ok(62),
-        b'/' => Ok(63),
-        _ => Err("bad base64".into()),
-    }
-}
-
-pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
-        return Err("bad base64".into());
-    }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for chunk in bytes.chunks(4) {
-        let pad = chunk.iter().rev().take_while(|c| **c == b'=').count();
-        if pad > 2 {
-            return Err("bad base64".into());
-        }
-        let mut n = 0u32;
-        for (i, c) in chunk.iter().enumerate() {
-            if *c == b'=' {
-                if i < 4 - pad {
-                    return Err("bad base64".into());
-                }
-                continue;
-            }
-            if i >= 4 - pad {
-                return Err("bad base64".into());
-            }
-            n = (n << 6) | u32::from(decode_b64_char(*c)?);
-        }
-        n <<= 6 * pad as u32;
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Ok(out)
-}
-
-pub fn decode_png_base64(input: &str) -> Result<Vec<u8>, String> {
-    let bytes = decode_base64(input)?;
-    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
-        return Err("not a png".into());
-    }
-    if bytes.len() > MAX_PNG {
-        return Err("png too large".into());
-    }
-    Ok(bytes)
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn pick_save_path(
-    app: &tauri::AppHandle,
-    file_name: &str,
-    ext: &str,
-) -> Result<Option<PathBuf>, String> {
-    use tauri::Manager;
-    let label = match ext {
-        "md" => "Markdown",
-        "png" => "PNG",
-        _ => "Text",
-    };
-    let mut dialog = rfd::FileDialog::new()
-        .set_title("Clash Assist")
-        .set_file_name(file_name)
-        .add_filter(label, &[ext]);
-    if let Some(win) = app.get_webview_window("main") {
-        dialog = dialog.set_parent(&win);
-    }
-    Ok(dialog.save_file().map(|path| ensure_ext(path, ext)))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn pick_save_path(
-    app: &tauri::AppHandle,
-    file_name: &str,
-    ext: &str,
-) -> Result<Option<PathBuf>, String> {
-    let _ = (app, file_name, ext);
-    Err("save dialog is unavailable".into())
-}
-
-pub fn save_text_document(
-    app: &tauri::AppHandle,
-    default_name: &str,
-    content: &str,
-    extension: &str,
-) -> Result<Option<String>, String> {
-    if content.len() > MAX_TEXT {
-        return Err("report too large".into());
-    }
-    let ext = normalize_text_ext(extension)?;
-    let name = safe_file_name(default_name, ext);
-    let Some(path) = pick_save_path(app, &name, ext)? else {
-        return Ok(None);
-    };
-    write_bytes(&path, content.as_bytes())?;
-    Ok(Some(path.display().to_string()))
-}
-
-pub fn save_png_document(
-    app: &tauri::AppHandle,
-    default_name: &str,
-    png_base64: &str,
-    sidecar_text: &str,
-) -> Result<Option<SavedShareFiles>, String> {
-    if sidecar_text.len() > MAX_TEXT {
-        return Err("summary too large".into());
-    }
-    let bytes = decode_png_base64(png_base64)?;
-    let name = safe_file_name(default_name, "png");
-    let Some(path) = pick_save_path(app, &name, "png")? else {
-        return Ok(None);
-    };
-    // PNG 由保存对话框确认。旁边的同名摘要如果已经存在，再问一次，避免静默覆盖。
-    write_share_files(&path, &bytes, sidecar_text, |side| {
-        confirm_sidecar_overwrite(app, side)
-    })
-    .map(Some)
+pub async fn get_feedback(url: &str) -> Result<FeedbackExchange, String> {
+    allow_feedback_url(url)?;
+    let client = feedback_client()?;
+    exchange_get(&client, url).await
 }
 
 #[cfg(test)]
@@ -360,7 +148,10 @@ mod tests {
     fn feedback_url_allowlist() {
         let ok = "https://script.google.com/macros/s/AKfycbypPAXzah4RI1px9Wybr9maQI0pJUqhIYuPFeNkJjmy1waiLS9rOrBudcfpysBAqs10rA/exec";
         assert!(allow_feedback_url(ok).is_ok());
-        assert!(allow_feedback_url("https://script.googleusercontent.com/macros/echo?x=1").is_ok());
+        assert!(allow_feedback_url(
+            "https://script.googleusercontent.com/macros/echo?user_content_key=abc&lib=xyz"
+        )
+        .is_ok());
         for bad in [
             "http://script.google.com/macros/s/abc/exec",
             "https://script.google.com/macros/s/abc/exec?x=1",
@@ -368,120 +159,26 @@ mod tests {
             "https://script.google.com:443/macros/s/abc/exec",
             "https://evil.example/macros/s/abc/exec",
             "https://script.google.com/other",
+            "https://script.google.com/macros/echo?x=1",
             "https://script.google.com.evil.example/macros/s/abc/exec",
+            "https://evil.example/macros/echo",
         ] {
             assert!(allow_feedback_url(bad).is_err(), "{bad}");
         }
     }
 
     #[test]
-    fn file_name_drops_directories_and_keeps_extension() {
-        assert_eq!(safe_file_name("../../etc/passwd", "md"), "passwd.md");
-        assert_eq!(
-            safe_file_name("Clash-Assist-diagnostic.md", "md"),
-            "Clash-Assist-diagnostic.md"
-        );
-        assert_eq!(safe_file_name("..", "txt"), "clash-assist.txt");
-        let png = PathBuf::from("/tmp/result.png");
-        assert_eq!(text_sidecar(&png), PathBuf::from("/tmp/result.txt"));
-        assert_eq!(
-            ensure_ext(PathBuf::from("a"), "png"),
-            PathBuf::from("a.png")
-        );
-    }
-
-    #[test]
-    fn base64_and_png_magic() {
-        assert_eq!(decode_base64("aGk=").unwrap(), b"hi");
-        assert!(decode_png_base64("aGk=").is_err());
-        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-        png.extend_from_slice(&[0, 1, 2, 3]);
-        let b64 = base64_encode(&png);
-        assert_eq!(decode_png_base64(&b64).unwrap(), png);
-    }
-
-    fn base64_encode(bytes: &[u8]) -> String {
-        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        let mut i = 0;
-        while i + 3 <= bytes.len() {
-            let n = (u32::from(bytes[i]) << 16)
-                | (u32::from(bytes[i + 1]) << 8)
-                | u32::from(bytes[i + 2]);
-            out.push(T[((n >> 18) & 63) as usize] as char);
-            out.push(T[((n >> 12) & 63) as usize] as char);
-            out.push(T[((n >> 6) & 63) as usize] as char);
-            out.push(T[(n & 63) as usize] as char);
-            i += 3;
-        }
-        if bytes.len() - i == 1 {
-            let n = u32::from(bytes[i]) << 16;
-            out.push(T[((n >> 18) & 63) as usize] as char);
-            out.push(T[((n >> 12) & 63) as usize] as char);
-            out.push('=');
-            out.push('=');
-        } else if bytes.len() - i == 2 {
-            let n = (u32::from(bytes[i]) << 16) | (u32::from(bytes[i + 1]) << 8);
-            out.push(T[((n >> 18) & 63) as usize] as char);
-            out.push(T[((n >> 12) & 63) as usize] as char);
-            out.push(T[((n >> 6) & 63) as usize] as char);
-            out.push('=');
-        }
-        out
-    }
-
-    #[test]
-    fn write_bytes_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("ca-feedback-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("note.md");
-        write_bytes(&path, "hello".as_bytes()).unwrap();
-        assert_eq!(crate::safe_fs::read_to_string(&path).unwrap(), "hello");
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn sidecar_is_not_overwritten_without_confirmation() {
-        let dir = std::env::temp_dir().join(format!("ca-sidecar-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let png = dir.join("result.png");
-        let txt = text_sidecar(&png);
-        write_bytes(&txt, b"keep-me").unwrap();
-
-        let mut asked = false;
-        let kept = write_share_files(&png, b"PNG", "new-summary", |side| {
-            asked = true;
-            assert_eq!(side, &txt);
-            false
-        })
-        .unwrap();
-        assert!(asked);
-        assert_eq!(kept.sidecar, "kept");
-        assert_eq!(kept.path, png.display().to_string());
-        assert_eq!(crate::safe_fs::read_to_string(&txt).unwrap(), "keep-me");
-        assert_eq!(crate::safe_fs::read_to_string(&png).unwrap(), "PNG");
-
-        let replaced = write_share_files(&png, b"PNG2", "new-summary", |_| true).unwrap();
-        assert_eq!(replaced.sidecar, "written");
-        assert_eq!(crate::safe_fs::read_to_string(&txt).unwrap(), "new-summary");
-        assert_eq!(crate::safe_fs::read_to_string(&png).unwrap(), "PNG2");
-
-        let fresh = dir.join("fresh.png");
-        let mut asked_fresh = false;
-        let created = write_share_files(&fresh, b"PNG", "summary", |_| {
-            asked_fresh = true;
-            false
-        })
-        .unwrap();
-        assert!(!asked_fresh);
-        assert_eq!(created.sidecar, "written");
-        assert_eq!(
-            crate::safe_fs::read_to_string(&text_sidecar(&fresh)).unwrap(),
-            "summary"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
+    fn get_uses_the_same_allowlist() {
+        let err = tauri::async_runtime::block_on(get_feedback(
+            "https://evil.example/macros/echo?user_content_key=abc",
+        ))
+        .unwrap_err();
+        assert!(err.contains("not allowed"), "{err}");
+        let err = tauri::async_runtime::block_on(get_feedback(
+            "https://script.google.com/macros/echo?x=1",
+        ))
+        .unwrap_err();
+        assert!(err.contains("not allowed"), "{err}");
     }
 
     #[test]
@@ -490,7 +187,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let body =
-            r#"{"version":"0.3.2","os":"macos aarch64","client":"verge","report":"keep-me"}"#;
+            r#"{"version":"0.3.3","os":"macos aarch64","client":"verge","report":"keep-me"}"#;
         let handle = std::thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
             sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
@@ -553,5 +250,71 @@ mod tests {
             Some("https://script.googleusercontent.com/macros/echo?x=1")
         );
         assert_eq!(got.body, "should-not-follow");
+    }
+
+    #[test]
+    fn echo_result_is_a_get_without_the_json_body() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 2048];
+            loop {
+                match sock.read(&mut tmp) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&tmp[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let req = String::from_utf8_lossy(&buf).into_owned();
+            let payload = br#"{"ok":true}"#;
+            let resp = if req.starts_with("POST ") {
+                "HTTP/1.1 405 Method Not Allowed\r\nAllow: HEAD, GET\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_string()
+            } else {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    payload.len()
+                )
+            };
+            let _ = sock.write_all(resp.as_bytes());
+            if !req.starts_with("POST ") {
+                let _ = sock.write_all(payload);
+            }
+            let _ = sock.flush();
+            req
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let got = tauri::async_runtime::block_on(exchange_get(
+            &client,
+            &format!("http://127.0.0.1:{port}/macros/echo?user_content_key=abc&lib=xyz"),
+        ))
+        .unwrap();
+        let req = handle.join().unwrap();
+        assert!(
+            req.starts_with("GET /macros/echo?user_content_key=abc&lib=xyz "),
+            "{req}"
+        );
+        assert!(!req.contains("keep-me"), "{req}");
+        assert!(
+            !req.to_lowercase()
+                .contains("content-type: application/json"),
+            "{req}"
+        );
+        assert_eq!(got.status, 200);
+        assert_eq!(got.body, r#"{"ok":true}"#);
     }
 }
