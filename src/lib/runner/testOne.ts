@@ -4,7 +4,10 @@
  */
 import { runNodeDiagnostics } from "../egress";
 import {
+  confirmTrafficLeaf,
   findSelectorGroup,
+  nodeTestBlockReason,
+  refreshClashMode,
   resolveSelectorSnapshot,
   restoreProxy,
   switchProxy,
@@ -31,8 +34,24 @@ export async function testOne(
     hooks.onGate?.(g);
     if (!g.ok) return false;
 
+    const realSwitch = !!config && !connection.usingMock && !forceMock;
+    if (realSwitch && config) {
+      await refreshClashMode(config, { force: true });
+      const blocked = nodeTestBlockReason(config.mode);
+      if (blocked) {
+        hooks.onGate?.({ ok: false, message: blocked });
+        hooks.onHint?.(blocked);
+        return false;
+      }
+    }
+
     const isCurrent = node.name === connection.currentProxy;
-    if (!isCurrent && config && !connection.usingMock && !forceMock) {
+    // 「使用中」必须就是流量组的有效叶子。对不上就照样切换，不能把另一个出口的结果记在这个节点上。
+    const alreadyThere =
+      isCurrent && realSwitch && config
+        ? await confirmTrafficLeaf(config, node.name)
+        : false;
+    if (realSwitch && config && !alreadyThere) {
       hooks.onProgress({
         text: `正在切换到 ${node.name}…`,
         testingNode: node.name,
@@ -45,12 +64,12 @@ export async function testOne(
         hooks.onHint?.("找不到可切换的策略组，没法单独测这个节点。");
         return false;
       }
+      didSwitch = true;
       const ok = await switchProxy(config, group, node.name);
       if (!ok) {
         hooks.onHint?.("切换失败，没法测这个节点。");
         return false;
       }
-      didSwitch = true;
       await new Promise((r) => setTimeout(r, 250));
     }
 

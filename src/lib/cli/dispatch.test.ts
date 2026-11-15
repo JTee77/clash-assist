@@ -179,6 +179,28 @@ describe("discover", () => {
   });
 });
 
+describe("直连模式", () => {
+  it("check current / node / all 都不切换、不把直连出口记成节点结果", async () => {
+    h.discoverAndProbe.mockResolvedValue({
+      ...connected,
+      config: { ...connected.config!, mode: "direct" },
+    });
+    for (const argv of [
+      ["check", "current", "-c", "verge"],
+      ["check", "node", "B", "-c", "verge"],
+      ["check", "all", "-c", "verge"],
+    ]) {
+      h.runNodeDiagnostics.mockClear();
+      h.switchProxy.mockClear();
+      const env = await run(argv);
+      expect(env.ok, argv.join(" ")).toBe(false);
+      expect(env.error?.message, argv.join(" ")).toMatch(/直连模式/);
+      expect(h.switchProxy, argv.join(" ")).not.toHaveBeenCalled();
+      expect(h.runNodeDiagnostics, argv.join(" ")).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("check current（--mock）", () => {
   it("ok + target current", async () => {
     const env = await run(["check", "current", "--mock"]);

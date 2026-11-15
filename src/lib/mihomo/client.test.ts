@@ -71,6 +71,7 @@ describe("0.2.3 FlClash client & live mixed-port sync", () => {
     expect(state.message).toBe("已连上 FlClash");
     // Live mixed-port (7899) from GET /configs overrides static 7890
     expect(state.config?.mixedPort).toBe(7899);
+    expect(state.config?.mode).toBe("rule");
     expect(state.config?.sockPath).toBeNull();
   });
 

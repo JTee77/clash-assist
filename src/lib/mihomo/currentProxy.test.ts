@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { planRestore } from "../runner/restore";
 import {
+  nodeTestBlockReason,
   resolveCurrentProxy,
   resolveSelectorSnapshotFromMap,
   resolveSwitchPlanFromMap,
+  switchedLeafMatches,
 } from "./currentProxy";
 import type { ProxyInfo } from "./types";
 
@@ -40,9 +43,13 @@ describe("resolveCurrentProxy", () => {
       REJECT: leaf("REJECT", "Reject"),
     };
     expect(resolveCurrentProxy(proxies)).toBe("HK17");
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).toBe("HK17");
+    expect(resolveSelectorSnapshotFromMap(proxies, "HK17", { mode: "rule" })?.group).toBe(
+      "节点选择",
+    );
   });
 
-  it("全局模式：GLOBAL 指向真实叶子时优先取它", () => {
+  it("全局模式：mode=global 时 GLOBAL 指向真实叶子优先取它", () => {
     const proxies: Record<string, ProxyInfo> = {
       GLOBAL: group("GLOBAL", "jp-2", ["jp-2", "hk-1"]),
       节点选择: group("节点选择", "hk-1", ["jp-2", "hk-1"]),
@@ -50,7 +57,40 @@ describe("resolveCurrentProxy", () => {
       "hk-1": leaf("hk-1", "Vmess"),
       DIRECT: leaf("DIRECT", "Direct"),
     };
-    expect(resolveCurrentProxy(proxies)).toBe("jp-2");
+    expect(resolveCurrentProxy(proxies, { mode: "global" })).toBe("jp-2");
+    expect(resolveSelectorSnapshotFromMap(proxies, "hk-1", { mode: "global" })?.group).toBe(
+      "GLOBAL",
+    );
+  });
+
+  it("规则模式：GLOBAL 停在真实叶子时仍取主选择组，不取 GLOBAL", () => {
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "jp-2", ["jp-2", "hk-1"]),
+      节点选择: group("节点选择", "hk-1", ["jp-2", "hk-1"]),
+      "jp-2": leaf("jp-2", "Shadowsocks"),
+      "hk-1": leaf("hk-1", "Vmess"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).toBe("hk-1");
+    expect(resolveCurrentProxy(proxies, { mode: "script" })).toBe("hk-1");
+    // 没读到 mode 时也不能退回「GLOBAL 优先」——那就是这次的线上 bug。
+    expect(resolveCurrentProxy(proxies)).toBe("hk-1");
+  });
+
+  it("直连模式：不把任何 Selector 的叶子当成当前节点", () => {
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "hk-1", ["hk-1"]),
+      节点选择: group("节点选择", "hk-1", ["hk-1"]),
+      "hk-1": leaf("hk-1", "Vmess"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    expect(resolveCurrentProxy(proxies, { mode: "direct" })).toBeNull();
+    expect(resolveSelectorSnapshotFromMap(proxies, "hk-1", { mode: "direct" })).toBeNull();
+    expect(resolveSwitchPlanFromMap(proxies, "hk-1", "节点选择", { mode: "direct" })).toEqual(
+      [],
+    );
+    expect(nodeTestBlockReason("direct")).toMatch(/直连模式/);
+    expect(nodeTestBlockReason("rule")).toBeNull();
   });
 
   it("无主组名且多子组并列 → null（诚实显示 —，不瞎猜）", () => {
@@ -302,5 +342,136 @@ describe("resolveSelectorSnapshotFromMap & resolveSwitchPlanFromMap", () => {
         { group: "AI", now: "N2" },
       ],
     });
+  });
+
+  it("规则模式：emoji「🚀 节点选择」在 GLOBAL 停在别的叶子时仍是主组", () => {
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "US-1", ["DIRECT", "HK-1", "US-1"]),
+      "🚀 节点选择": group("🚀 节点选择", "HK-1", ["HK-1", "US-1", "DIRECT"]),
+      NETFLIX: group("NETFLIX", "US-1", ["US-1", "HK-1"]),
+      "HK-1": leaf("HK-1", "Vmess"),
+      "US-1": leaf("US-1", "Vmess"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).toBe("HK-1");
+    const snap = resolveSelectorSnapshotFromMap(proxies, "HK-1", { mode: "rule" });
+    expect(snap?.group).toBe("🚀 节点选择");
+    expect(resolveSwitchPlanFromMap(proxies, "US-1", "GLOBAL", { mode: "rule" })).toEqual([
+      { group: "🚀 节点选择", name: "US-1" },
+    ]);
+  });
+
+  it("规则模式：嵌套子组切换仍然走主选择组，不切 GLOBAL", () => {
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "HK-1", ["DIRECT", "HK-1", "US-2"]),
+      "🚀 节点选择": group("🚀 节点选择", "🇭🇰 香港节点", [
+        "🇭🇰 香港节点",
+        "🇺🇸 美国节点",
+      ]),
+      "🇭🇰 香港节点": group("🇭🇰 香港节点", "HK-1", ["HK-1", "HK-2"]),
+      "🇺🇸 美国节点": group("🇺🇸 美国节点", "US-1", ["US-1", "US-2"]),
+      "HK-1": leaf("HK-1", "Vmess"),
+      "HK-2": leaf("HK-2", "Vmess"),
+      "US-1": leaf("US-1", "Vmess"),
+      "US-2": leaf("US-2", "Vmess"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).toBe("HK-1");
+    const steps = resolveSwitchPlanFromMap(proxies, "US-2", "GLOBAL", { mode: "rule" });
+    expect(steps).toEqual([
+      { group: "🇺🇸 美国节点", name: "US-2" },
+      { group: "🚀 节点选择", name: "🇺🇸 美国节点" },
+    ]);
+    expect(steps.some((s) => s.group === "GLOBAL")).toBe(false);
+  });
+
+  it("策略组 now 是叶子时，也不能抢走主选择组", () => {
+    const proxies: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "HK-1", ["HK-1", "US-1", "SG-1"]),
+      "😣 节点选择": group("😣 节点选择", "SG-1", ["HK-1", "US-1", "SG-1"]),
+      NETFLIX: group("NETFLIX", "US-1", ["US-1", "HK-1"]),
+      AI: group("AI", "HK-1", ["HK-1"]),
+      Telegram: group("Telegram", "US-1", ["US-1", "SG-1"]),
+      "HK-1": leaf("HK-1", "Vmess"),
+      "US-1": leaf("US-1", "Vmess"),
+      "SG-1": leaf("SG-1", "Vmess"),
+    };
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).toBe("SG-1");
+    expect(resolveSelectorSnapshotFromMap(proxies, "US-1", { mode: "rule" })?.group).toBe(
+      "😣 节点选择",
+    );
+  });
+});
+
+describe("线上 Verge 规则模式：GLOBAL 与 😣 节点选择 停在不同叶子", () => {
+  const HK21 = "香港高速3-HK21";
+  const HK17 = "香港高速3-HK17";
+  const US82 = "香港高速3-美国82 gemini";
+  const MAIN = "😣 节点选择";
+
+  function vergeProxies(nowMain = HK17, nowGlobal = HK21): Record<string, ProxyInfo> {
+    return {
+      GLOBAL: group("GLOBAL", nowGlobal, ["DIRECT", HK21, HK17, US82]),
+      [MAIN]: group(MAIN, nowMain, [US82, HK17, HK21]),
+      [HK21]: leaf(HK21, "Hysteria2"),
+      [HK17]: leaf(HK17, "Hysteria2"),
+      [US82]: leaf(US82, "Hysteria2"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+  }
+
+  it("当前叶子是 HK17，要切的组是 😣 节点选择，不是 GLOBAL", () => {
+    const proxies = vergeProxies();
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).toBe(HK17);
+    expect(resolveCurrentProxy(proxies, { mode: "rule" })).not.toBe(HK21);
+    // 漏传 mode 也必须是主选择组，不能再让 GLOBAL 的叶子赢。
+    expect(resolveCurrentProxy(proxies)).toBe(HK17);
+
+    const snap = resolveSelectorSnapshotFromMap(proxies, HK17, { mode: "rule" });
+    expect(snap?.group).toBe(MAIN);
+    expect(snap?.now).toBe(HK17);
+    expect(snap?.group).not.toBe("GLOBAL");
+
+    expect(resolveSwitchPlanFromMap(proxies, US82, snap?.group, { mode: "rule" })).toEqual([
+      { group: MAIN, name: US82 },
+    ]);
+    // testAll 若仍把快照组错记成 GLOBAL，计划也不能跟着切 GLOBAL。
+    expect(resolveSwitchPlanFromMap(proxies, US82, "GLOBAL", { mode: "rule" })).toEqual([
+      { group: MAIN, name: US82 },
+    ]);
+  });
+
+  it("切到 US82 之后，流量组有效叶子必须是 US82；只切 GLOBAL 不算测过", () => {
+    const before = vergeProxies();
+    expect(switchedLeafMatches(before, US82, { mode: "rule" })).toBe(false);
+
+    const onlyGlobal = vergeProxies(HK17, US82);
+    expect(switchedLeafMatches(onlyGlobal, US82, { mode: "rule" })).toBe(false);
+    expect(resolveCurrentProxy(onlyGlobal, { mode: "rule" })).toBe(HK17);
+
+    const switched = vergeProxies(US82, HK21);
+    expect(switchedLeafMatches(switched, US82, { mode: "rule" })).toBe(true);
+    expect(switchedLeafMatches(switched, HK17, { mode: "rule" })).toBe(false);
+  });
+
+  it("恢复链把 节点选择 切回 HK17，不依赖测试结束时还停在 HK17", () => {
+    const snap = resolveSelectorSnapshotFromMap(vergeProxies(), HK17, { mode: "rule" });
+    const plan = planRestore(true, snap);
+    expect(plan).toEqual({ kind: "restore", group: MAIN, now: HK17 });
+    if (plan.kind === "restore") {
+      expect(plan.group).toContain("节点选择");
+      expect(plan.group).not.toBe("GLOBAL");
+      expect(plan.now).toBe(HK17);
+    }
+  });
+
+  it("mode=global 时同一份字典仍以 GLOBAL 为准", () => {
+    const proxies = vergeProxies();
+    expect(resolveCurrentProxy(proxies, { mode: "global" })).toBe(HK21);
+    expect(resolveSwitchPlanFromMap(proxies, US82, MAIN, { mode: "global" })).toEqual([
+      { group: "GLOBAL", name: US82 },
+    ]);
+    const switchedGlobal = vergeProxies(HK17, US82);
+    expect(switchedLeafMatches(switchedGlobal, US82, { mode: "global" })).toBe(true);
   });
 });

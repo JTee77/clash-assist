@@ -11,6 +11,13 @@ export interface ControllerConfig {
   inboundAuth?: boolean;
   /** True when GET /configs explicitly reports mixed-port=0 and port=0 */
   mixedPortDisabled?: boolean;
+  /**
+   * Clash/mihomo running mode from GET /configs (`rule`, `global`, `direct`, …).
+   * 「使用中」 and temporary node switches follow the group that actually carries
+   * mixed-port traffic in this mode. Absent means not global: do not treat GLOBAL
+   * as that group when a real main picker exists.
+   */
+  mode?: string;
 }
 
 /**
