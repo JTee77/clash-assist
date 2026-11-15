@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assembleInput,
-  buildReport,
-  REPO_URL,
-  type ReportPhrases,
-} from "./diagnostic";
+import { assembleInput, buildReport, type ReportPhrases } from "./diagnostic";
 import { cleanContact, sanitizeText } from "./sanitize";
 
 const phrases: ReportPhrases = {
@@ -19,11 +14,9 @@ const phrases: ReportPhrases = {
   restoreNotRun: "未进行切回",
   checks: "检查项",
   errors: "错误",
-  disclaimer: "非官方诊断结果，与 Clash 或任何机场、VPN 服务无关。",
   nodeLabel: (n) => `节点 ${n}`,
   levelLabel: (level) =>
     level === "pass" ? "通过" : level === "fail" ? "失败" : level === "warn" ? "警告" : "未知",
-  moreNodes: (n) => `其余 ${n} 个未列出`,
 };
 
 const SUB = "https://sub.example.com/api/v1/client/subscribe?token=abcdef0123456789abcdef0123456789";
@@ -234,19 +227,16 @@ describe("buildReport", () => {
     expect(report.markdown).toContain("未能切回原节点");
   });
 
-  it("does not leak secrets, and the share text uses indexes plus the disclaimer and repo URL", () => {
+  it("does not leak secrets, and the report uses node indexes without the disclaimer or repo URL", () => {
     const report = buildReport(dirty(), phrases);
-    const blob = `${report.markdown}\n${report.shareLines.join("\n")}`;
+    const blob = report.markdown;
     for (const leak of [NODE, "未测节点", SUB, SECRET, IP, HOST, "alice", "evil.example", "vmess://", "/Users/"]) {
       expect(blob, leak).not.toContain(leak);
     }
-    expect(report.shareLines.some((l) => l.startsWith("节点 1:"))).toBe(true);
-    expect(report.shareLines.some((l) => l.startsWith("节点 2:"))).toBe(true);
-    expect(report.shareLines.some((l) => l.includes("出口 IP:") && l.includes(IP))).toBe(false);
-    expect(report.shareLines).toContain(phrases.disclaimer);
-    expect(report.shareLines[report.shareLines.length - 1]).toBe(REPO_URL);
-    expect(report.markdown).toContain(phrases.disclaimer);
-    expect(report.markdown).toContain(REPO_URL);
+    expect(report.markdown).toContain("节点 1");
+    expect(report.markdown).toContain("节点 2");
+    expect(report.markdown).not.toContain("非官方诊断结果，与 Clash 或任何机场、VPN 服务无关。");
+    expect(report.markdown).not.toContain("https://github.com/JTee77/clash-assist");
   });
 
   it("records a successful restore and drops placeholder checks", () => {
@@ -271,7 +261,7 @@ describe("buildReport", () => {
     expect(report.markdown).toContain("已切回原节点");
   });
 
-  it("sanitizes realistic check copy and keeps explanations off the share card", () => {
+  it("sanitizes realistic check copy and keeps node indexes in the report", () => {
     const win = "C:\\Users\\Alice Smith\\AppData\\Roaming\\clash\\config.yaml";
     const mac = "/Users/Alice Smith/Library/Application Support/clash/config.yaml";
     const uuid = "550e8400-e29b-41d4-a716-446655440000";
@@ -318,7 +308,7 @@ describe("buildReport", () => {
       nodeLabel: (n) => `节点 ${n}`,
     });
     const report = buildReport(input, phrases);
-    const blob = `${report.markdown}\n${report.shareLines.join("\n")}`;
+    const blob = report.markdown;
     for (const leak of [
       NODE,
       "Alice",
@@ -341,22 +331,14 @@ describe("buildReport", () => {
     expect(report.markdown).toContain("CN");
     expect(report.markdown).toContain("节点 1");
     expect(report.markdown).toContain("未能切回原节点");
-    const share = report.shareLines.join("\n");
-    expect(share).toContain("节点 1:");
-    expect(share).toContain("DNS 解析器:");
-    expect(share).not.toContain("[ip]");
-    expect(share).not.toContain("[path]");
-    expect(share).not.toContain("[secret]");
-    expect(share).not.toContain("疑似 DNS");
-    expect(share).not.toContain("可能泄漏");
-    expect(share).not.toContain("住宅");
-    expect(report.shareLines).toContain(phrases.disclaimer);
-    expect(report.shareLines[report.shareLines.length - 1]).toBe(REPO_URL);
+    expect(report.markdown).toContain("DNS 解析器");
+    expect(report.markdown).not.toContain("非官方诊断结果，与 Clash 或任何机场、VPN 服务无关。");
+    expect(report.markdown).not.toContain("https://github.com/JTee77/clash-assist");
 
     const english = buildReport(input, { ...phrases, nodeLabel: (n) => `Node ${n}` });
-    expect(english.shareLines.some((l) => l.startsWith("Node 1:"))).toBe(true);
+    expect(english.markdown).toContain("Node 1");
     expect(english.markdown).not.toContain(NODE);
-    expect(english.shareLines.join("\n")).not.toContain("可能泄漏");
+    expect(english.markdown).not.toContain("https://github.com/JTee77/clash-assist");
   });
 });
 

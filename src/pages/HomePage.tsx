@@ -17,7 +17,8 @@ import {
   type ProxyNode,
   type SourceNotice,
 } from "../lib/mihomo";
-import { assembleInput, reportHostInfo } from "../lib/report";
+import { assembleInput, distinctMessages, reportHostInfo, shouldOfferErrorReport } from "../lib/report";
+import { ENV_RUNNER_FAILURE } from "../lib/runner";
 import { useNodeFilter } from "../hooks/useNodeFilter";
 import {
   splitProgressDisplay,
@@ -154,7 +155,7 @@ export function HomePage({
           : "gate_failed";
     errors.push({
       code,
-      message: [td(gate.message), gate.process ? td(gate.process) : ""].filter(Boolean).join("\n"),
+      message: distinctMessages([td(gate.message), gate.process ? td(gate.process) : ""]),
     });
   }
   if (restoreError) errors.push({ code: "restore_failed", message: td(restoreError) });
@@ -185,14 +186,30 @@ export function HomePage({
       envCards: envCards.map((c) => ({
         name: c.title,
         level: c.level,
-        message: c.conclusion ?? c.summary ?? "",
+        message:
+          c.conclusion === ENV_RUNNER_FAILURE
+            ? distinctMessages([c.conclusion, c.process ?? ""])
+            : (c.conclusion ?? c.summary ?? ""),
       })),
       errors,
       restoreSucceeded: restoreError ? false : nodeTestOk ? true : null,
       nodeLabel: (n) => t("report.nodeLabel", { n }),
     }),
-    tested.length > 0 || envCards.some((c) => c.level !== "unknown" && c.level !== "running"),
   );
+  const showFetchReport =
+    !!gate &&
+    !gate.ok &&
+    shouldOfferErrorReport({ surface: "fetch", status: connection.status, message: gate.message });
+  const showRestoreReport =
+    !!restoreError && shouldOfferErrorReport({ surface: "restore", message: restoreError });
+  const showSwitchReport =
+    !!switchHint &&
+    !restoreError &&
+    shouldOfferErrorReport({ surface: "switch", message: switchHint });
+  const envCrash = envCards.find((c) => c.conclusion === ENV_RUNNER_FAILURE);
+  const showEnvReport =
+    !!envCrash &&
+    shouldOfferErrorReport({ surface: "runner", message: envCrash.process || envCrash.conclusion });
 
   return (
     <div className="home-page">
@@ -252,7 +269,7 @@ export function HomePage({
                   <span className="fetch-fail-msg" role="status">
                     {td(gate.message)}
                   </span>
-                  <SendReportButton onClick={report.openSend} />
+                  {showFetchReport ? <SendReportButton onClick={report.openSend} /> : null}
                 </span>
               </>
             ) : null)}
@@ -264,8 +281,6 @@ export function HomePage({
           <ThemeToggle />
         </div>
       </header>
-
-      {report.bar}
 
       <DiagnosticsNotices
         sources={discoverySources}
@@ -307,6 +322,11 @@ export function HomePage({
                 ) : null}
               </div>
             </div>
+            {showEnvReport ? (
+              <div className="report-inline env-tray-note">
+                <SendReportButton onClick={report.openSend} />
+              </div>
+            ) : null}
             {envOpen ? (
               <>
                 {mixedPortNum == null || mixedPortNum <= 0 ? (
@@ -357,7 +377,7 @@ export function HomePage({
                       <span className="ws-restore-error" role="alert">
                         {td(restoreError)}
                       </span>
-                      <SendReportButton onClick={report.openSend} />
+                      {showRestoreReport ? <SendReportButton onClick={report.openSend} /> : null}
                     </span>
                   ) : null}
                 </div>
@@ -444,7 +464,7 @@ export function HomePage({
                 {switchHint && !restoreError ? (
                   <span className="report-inline ws-error" role="alert">
                     <span>{td(switchHint)}</span>
-                    <SendReportButton onClick={report.openSend} />
+                    {showSwitchReport ? <SendReportButton onClick={report.openSend} /> : null}
                   </span>
                 ) : null}
                 <button

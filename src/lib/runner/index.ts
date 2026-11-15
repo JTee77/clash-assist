@@ -9,7 +9,7 @@ export type {
 } from "./types";
 export { testAll } from "./testAll";
 export { testOne } from "./testOne";
-export { runEnv } from "./env";
+export { ENV_RUNNER_FAILURE, runEnv } from "./env";
 export {
   planRestore,
   restoreErrorFor,

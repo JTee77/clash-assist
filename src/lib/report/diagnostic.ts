@@ -1,5 +1,5 @@
 /**
- * 把一次界面上的检测状态收成可保存、可发送的诊断报告。
+ * 把一次界面上的检测状态收成可发送的错误报告。
  * 自由文本全部经过 sanitize.ts；节点只以索引出现。
  */
 
@@ -9,8 +9,6 @@ import {
   sanitizeText,
   type NameRedaction,
 } from "./sanitize";
-
-export const REPO_URL = "https://github.com/JTee77/clash-assist";
 
 export type CheckLevel = "pass" | "fail" | "warn" | "unknown";
 export type RestoreOutcome = "succeeded" | "failed" | "not_run";
@@ -27,10 +25,8 @@ export type ReportPhrases = {
   restoreNotRun: string;
   checks: string;
   errors: string;
-  disclaimer: string;
   nodeLabel: (n: number) => string;
   levelLabel: (level: CheckLevel) => string;
-  moreNodes: (n: number) => string;
 };
 
 export type DiagnosticCheckInput = {
@@ -69,8 +65,6 @@ export type SanitizedReport = {
   checks: SanitizedCheck[];
   errors: { code: string; message: string }[];
   markdown: string;
-  /** 分享图片和旁边的短文字用同一组行，不含节点名和 IP。 */
-  shareLines: string[];
 };
 
 const LEVELS = new Set<CheckLevel>(["pass", "fail", "warn", "unknown"]);
@@ -121,16 +115,6 @@ function phraseFor(restore: RestoreOutcome, phrases: ReportPhrases): string {
   return phrases.restoreNotRun;
 }
 
-const RANK: Record<CheckLevel, number> = { fail: 3, warn: 2, unknown: 1, pass: 0 };
-
-function worse(a: CheckLevel | undefined, b: CheckLevel): CheckLevel {
-  if (!a) return b;
-  return RANK[b] > RANK[a] ? b : a;
-}
-
-/** 分享卡上每个节点只留一行索引 + 最差结论，不展开检查过程。 */
-export const SHARE_NODE_LIMIT = 12;
-
 export function buildReport(input: DiagnosticInput, phrases: ReportPhrases): SanitizedReport {
   const version = keepSemver(input.version);
   const os = keepToken(input.os);
@@ -171,10 +155,8 @@ export function buildReport(input: DiagnosticInput, phrases: ReportPhrases): San
     checks,
     errors,
     markdown: "",
-    shareLines: [],
   };
   report.markdown = renderMarkdown(report, phrases);
-  report.shareLines = renderShareLines(report, phrases);
   return report;
 }
 
@@ -210,34 +192,8 @@ export function renderMarkdown(report: SanitizedReport, phrases: ReportPhrases):
       lines.push(error.message ? `- ${error.code}: ${error.message}` : `- ${error.code}`);
     }
   }
-  lines.push("", phrases.disclaimer, REPO_URL, "");
+  lines.push("");
   return lines.join("\n");
-}
-
-export function renderShareLines(report: SanitizedReport, phrases: ReportPhrases): string[] {
-  const lines = [
-    `Clash Assist ${report.version}`,
-    `${report.os} ${report.arch} · ${report.client}`,
-    `${phrases.nodeCount}: ${report.nodeCount}`,
-    `${phrases.restore}: ${phraseFor(report.restore, phrases)}`,
-  ];
-  for (const check of report.checks) {
-    if (check.nodeIndex != null) continue;
-    lines.push(`${check.name}: ${phrases.levelLabel(check.level)}`);
-  }
-  const rollup = new Map<number, CheckLevel>();
-  for (const check of report.checks) {
-    if (check.nodeIndex == null) continue;
-    rollup.set(check.nodeIndex, worse(rollup.get(check.nodeIndex), check.level));
-  }
-  const nodes = [...rollup.entries()].sort((a, b) => a[0] - b[0]);
-  const shown = nodes.slice(0, SHARE_NODE_LIMIT);
-  for (const [index, level] of shown) {
-    lines.push(`${phrases.nodeLabel(index)}: ${phrases.levelLabel(level)}`);
-  }
-  if (nodes.length > shown.length) lines.push(phrases.moreNodes(nodes.length - shown.length));
-  lines.push(phrases.disclaimer, REPO_URL);
-  return lines;
 }
 
 export type CardLike = { name: string; level: string; message?: string };

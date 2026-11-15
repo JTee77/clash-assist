@@ -1,11 +1,8 @@
 export {
-  REPO_URL,
   assembleInput,
   buildReport,
   redactionsForNodes,
   renderMarkdown,
-  renderShareLines,
-  SHARE_NODE_LIMIT,
 } from "./diagnostic";
 export type {
   DiagnosticInput,
@@ -14,6 +11,9 @@ export type {
   SanitizedReport,
 } from "./diagnostic";
 export { cleanContact, sanitizeText } from "./sanitize";
+export { distinctMessages } from "./messages";
+export { shouldOfferErrorReport } from "./offer";
+export type { ErrorReportSurface } from "./offer";
 export {
   FEEDBACK_URL,
   MAX_SENDS_PER_WINDOW,
@@ -24,12 +24,5 @@ export {
   postJsonFollow,
   sendDiagnostic,
 } from "./sendClient";
-export type { KeyValueStore, PostOnce, SendInput, SendResult } from "./sendClient";
-export { renderSharePngBase64 } from "./shareCard";
-export {
-  postOnceViaTauri,
-  reportHostInfo,
-  savePngDocument,
-  saveTextDocument,
-} from "./transport";
-export type { SavedPng } from "./transport";
+export type { GetOnce, KeyValueStore, PostOnce, SendInput, SendResult } from "./sendClient";
+export { getOnceViaTauri, postOnceViaTauri, reportHostInfo } from "./transport";

@@ -741,33 +741,18 @@ fn report_host_info() -> feedback::ReportHostInfo {
     feedback::host_info()
 }
 
-/// 向反馈接口 POST 一次 JSON。不跟随重定向：302 原样返回，由前端用同一份正文再 POST。
+/// 向反馈接口 POST 一次 JSON。不跟随重定向。
+/// 302/303 由前端改用 `feedback_get` 读取，不再把同一份 JSON 重新 POST。
 #[tauri::command]
 async fn feedback_post(url: String, body: String) -> Result<feedback::FeedbackExchange, String> {
     feedback::post_feedback(&url, &body).await
 }
 
-/// 系统保存对话框，把诊断报告写成 Markdown 或纯文本。用户取消时返回 null。
+/// 向反馈接口 GET 一次，不跟随重定向，不带正文。
+/// 用于 Apps Script 302/303 之后读取 echo 结果。echo 只接受 GET/HEAD。
 #[tauri::command]
-fn save_text_document(
-    app: tauri::AppHandle,
-    default_name: String,
-    content: String,
-    extension: String,
-) -> Result<Option<String>, String> {
-    feedback::save_text_document(&app, &default_name, &content, &extension)
-}
-
-/// 系统保存对话框，写入分享 PNG，并在旁边写同名文字摘要。
-/// 摘要文件已存在时先询问；用户拒绝则保留原文件，PNG 仍然保存。用户取消保存对话框时返回 null。
-#[tauri::command]
-fn save_png_document(
-    app: tauri::AppHandle,
-    default_name: String,
-    png_base64: String,
-    sidecar_text: String,
-) -> Result<Option<feedback::SavedShareFiles>, String> {
-    feedback::save_png_document(&app, &default_name, &png_base64, &sidecar_text)
+async fn feedback_get(url: String) -> Result<feedback::FeedbackExchange, String> {
+    feedback::get_feedback(&url).await
 }
 
 /// 用默认浏览器打开 release 页面（只接受本项目 GitHub releases 下的 URL）。
@@ -1130,8 +1115,7 @@ pub fn run() {
             set_ui_language,
             report_host_info,
             feedback_post,
-            save_text_document,
-            save_png_document
+            feedback_get
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -139,8 +139,6 @@ export const zhHans = {
   "home.copyAddr": "复制",
   "home.copiedAddr": "已复制",
 
-  "report.export": "导出诊断报告",
-  "report.share": "分享结果",
   "report.send": "发送这份错误报告",
   "report.docTitle": "诊断报告",
   "report.previewTitle": "发送错误报告",
@@ -152,11 +150,6 @@ export const zhHans = {
   "report.sent": "已发送",
   "report.sendFailed": "发送失败：{error}",
   "report.rateLimited": "发送过于频繁，请约 {minutes} 分钟后再试。",
-  "report.saved": "已保存",
-  "report.saveFailed": "保存失败：{error}",
-  "report.shareTitle": "分享检测结果",
-  "report.saveImage": "保存图片",
-  "report.disclaimer": "非官方诊断结果，与 Clash 或任何机场、VPN 服务无关。",
   "report.nodeLabel": "节点 {n}",
   "report.restoreSucceeded": "已切回原节点",
   "report.restoreFailed": "未能切回原节点",
@@ -172,9 +165,6 @@ export const zhHans = {
   "report.restore": "切回原节点",
   "report.checks": "检查项",
   "report.errors": "错误",
-  "report.moreNodes": "其余 {n} 个未列出",
-  "report.shareSaved": "已保存图片和文字摘要",
-  "report.shareSavedImageOnly": "已保存图片。同名文字摘要已存在，未覆盖。",
   "report.cancel": "取消",
 } as const;
 

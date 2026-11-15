@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useI18n, type MessageKey } from "../i18n";
 import { sourceNoticesOf, type SourceNotice } from "../lib/mihomo";
+import { shouldOfferErrorReport } from "../lib/report";
 import { openVergeReleasePage } from "../lib/update";
 
 const REJECT_KEYS: Record<string, MessageKey> = {
@@ -131,7 +132,7 @@ export function DiagnosticsNotices({
                 </button>
               ) : null}
               {noticeHasRecheck(n) ? recheck : null}
-              {onSendReport && view.level !== "info" ? (
+              {onSendReport && shouldOfferErrorReport({ surface: "notice", level: view.level }) ? (
                 <button type="button" className="btn btn-sm" onClick={onSendReport}>
                   {t("report.send")}
                 </button>

@@ -2,10 +2,12 @@
  * 错误报告发送客户端。
  *
  * 预览由界面持有；这里失败时原样把 report 交回去，调用方不要清掉预览。
- * Apps Script 的 exec 地址会 302 到 script.googleusercontent.com。
- * 浏览器和 reqwest 的默认策略都会把这次 302 的 POST 改成 GET 并丢掉正文，
- * 所以跳转由这里自己跟，每一次都用原来的 JSON 再 POST 一次。
- * 真正发出那一跳的传输层必须关闭自动重定向（见 Rust `feedback::exchange_once`）。
+ * 第一跳 POST 到 exec，正文就是报告。Apps Script 随后 302/303 到
+ * script.googleusercontent.com/macros/echo。那一跳只接受 GET/HEAD，
+ * 再 POST 同一份 JSON 会得到 HTTP 405，但报告其实已经写上。
+ * 所以 302/303（以及指向 echo 的其它跳转）改用 GET、不带正文。
+ * 307/308 若落在确实还要 POST 的主机上，才继续 POST。
+ * 真正发出的那一跳必须关闭自动重定向（见 Rust `feedback::exchange_once` / `exchange_get`）。
  */
 
 import { cleanContact, sanitizeText } from "./sanitize";
@@ -18,8 +20,12 @@ export const MAX_SENDS_PER_WINDOW = 5;
 export const SEND_WINDOW_MS = 60 * 60 * 1000;
 export const RATE_LIMITED = "rate_limited";
 const STORE_KEY = "clash-assist.feedbackSends";
-const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+/** 这些状态把 POST 改成 GET。echo 结果页只接受 GET。 */
+const SWITCH_TO_GET = new Set([301, 302, 303]);
+/** 这些状态保持方法。指向 echo 时仍然改 GET，避免 405。 */
+const KEEP_POST = new Set([307, 308]);
 const MAX_REDIRECTS = 5;
+const ECHO_HOST = "script.googleusercontent.com";
 
 export type PostOnceResult = {
   status: number;
@@ -29,6 +35,26 @@ export type PostOnceResult = {
 
 /** 一次 POST，不跟随重定向。body 必须原样送出。 */
 export type PostOnce = (url: string, body: string) => Promise<PostOnceResult>;
+
+/** 一次 GET，不跟随重定向，不带正文。 */
+export type GetOnce = (url: string) => Promise<PostOnceResult>;
+
+/** Apps Script 的一次性结果地址。只接受 GET/HEAD。 */
+export function isEchoResultUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, "") || "/";
+    return u.protocol === "https:" && u.hostname === ECHO_HOST && path === "/macros/echo";
+  } catch {
+    return false;
+  }
+}
+
+function methodAfterRedirect(status: number, nextUrl: string): "POST" | "GET" {
+  if (isEchoResultUrl(nextUrl)) return "GET";
+  if (KEEP_POST.has(status)) return "POST";
+  return "GET";
+}
 
 export type KeyValueStore = {
   get(key: string): string | null;
@@ -100,19 +126,26 @@ function writeStamps(store: KeyValueStore, stamps: readonly number[]): void {
   }
 }
 
-/** 跟随 301/302/303/307/308，方法保持 POST，正文保持调用方传入的 JSON。 */
+/**
+ * 第一跳 POST JSON。302/303 的 Location 用 GET 接着读，不再把 JSON POST 到 echo。
+ * 307/308 只有在下一跳不是 echo 时才继续 POST。
+ */
 export async function postJsonFollow(
   startUrl: string,
   body: string,
   postOnce: PostOnce,
+  getOnce: GetOnce,
 ): Promise<PostOnceResult> {
   let url = startUrl;
+  let method: "POST" | "GET" = "POST";
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const res = await postOnce(url, body);
-    const location = res.location?.trim();
-    if (REDIRECT_STATUS.has(res.status) && location) {
+    const res = method === "GET" ? await getOnce(url) : await postOnce(url, body);
+    const location = res.location?.trim() ?? "";
+    if ((SWITCH_TO_GET.has(res.status) || KEEP_POST.has(res.status)) && location) {
       if (hop === MAX_REDIRECTS) return res;
-      url = new URL(location, url).href;
+      const next = new URL(location, url).href;
+      method = methodAfterRedirect(res.status, next);
+      url = next;
       continue;
     }
     return res;
@@ -166,6 +199,7 @@ export async function sendDiagnostic(
   input: SendInput,
   deps: {
     postOnce: PostOnce;
+    getOnce: GetOnce;
     store?: KeyValueStore;
     now?: number;
     url?: string;
@@ -186,7 +220,12 @@ export async function sendDiagnostic(
     writeStamps(store, [...stamps, now].filter((n) => now - n < SEND_WINDOW_MS));
   };
   try {
-    const res = await postJsonFollow(deps.url ?? FEEDBACK_URL, payloadJson(input), deps.postOnce);
+    const res = await postJsonFollow(
+      deps.url ?? FEEDBACK_URL,
+      payloadJson(input),
+      deps.postOnce,
+      deps.getOnce,
+    );
     remember();
     const interpreted = interpretFeedback(res.status, res.body);
     if (!interpreted.ok) {
