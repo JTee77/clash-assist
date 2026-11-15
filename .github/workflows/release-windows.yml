@@ -151,6 +151,8 @@ jobs:
           ./scripts/scan-nsis-rmdir.ps1 @scan
           exit $LASTEXITCODE
 
+      # 只覆盖两个 Windows 包，供本 workflow 的 sha256sum -c 与 attestation 使用。
+      # 不上传到 draft：draft 上的 SHA256SUMS.txt 要等 Mac DMG 上传后由人工生成，覆盖三个安装包。
       - name: 改名（V8）、打便携 zip、生成 SHA256SUMS.txt
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -297,7 +299,8 @@ jobs:
         run: |
           $sums = Get-Content -Raw -LiteralPath (Join-Path $env:RUNNER_TEMP 'win-dist/SHA256SUMS.txt')
           $mode = if ($env:EVENT_NAME -eq 'push') { "tag $($env:REF_NAME)：接下来进入 attest 与 release（draft，需审批）" } else { '演练（dry_run）：不做 attestation、不建 release' }
-          @("### Windows 构建 $($env:VERSION)", '', $mode, '', '```', $sums.TrimEnd(), '```') -join "`n" |
+          $sumsNote = '下面的 SHA256SUMS.txt 只含两个 Windows 包，供 attest 与 sha256sum -c 使用，不会上传到 draft。draft 上的校验文件要等 Mac DMG 上传后另行生成，覆盖三个安装包。'
+          @("### Windows 构建 $($env:VERSION)", '', $mode, '', $sumsNote, '', '```', $sums.TrimEnd(), '```') -join "`n" |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
   # S-5 ③：attestation 放在独立 job——build job 运行大量第三方构建代码，不应同时持有 OIDC 令牌。
@@ -327,6 +330,8 @@ jobs:
 
   # M-6：不 checkout、不执行仓库代码；只下载 artifact、复核哈希、写 draft。environment `release` 需用户审批，
   # 且应只允许 v* tag 部署（S-R3，见仓库设置清单）。
+  # 只把 setup.exe 与便携 zip 写入 draft。artifact 里的 SHA256SUMS.txt 只含两个 Windows 包，
+  # 用于 sha256sum -c 与 attestation，不上传。draft 上的 SHA256SUMS.txt 要等 Mac DMG 上传后由人工生成。
   release:
     needs: [build, attest]
     if: github.event_name == 'push' && github.ref_type == 'tag'
@@ -356,6 +361,8 @@ jobs:
           name: release-notes
           path: notes
 
+      # artifact 里仍有仅含两个 Windows 包的 SHA256SUMS.txt（给 sha256sum -c 与 attestation）。
+      # 上传到 draft 的只有 setup.exe 与便携 zip。
       - name: 复核 artifact（文件集合与 SHA256SUMS）
         run: |
           set -euo pipefail
@@ -407,22 +414,29 @@ jobs:
       - name: 只允许写 draft，禁止覆盖已有资产
         run: |
           set -euo pipefail
+          ver="${TAG#v}"
+          # 不上传 SHA256SUMS.txt。那份只含两个 Windows 包，不能当作 draft 的校验文件。
+          files=(
+            "dist/Clash.Assist_${ver}_x64-setup.exe"
+            "dist/Clash.Assist_${ver}_x64-portable.zip"
+          )
           if gh release view "$TAG" -R "$REPO" --json isDraft -q .isDraft > state 2>/dev/null; then
             [ "$(cat state)" = "true" ] || { echo "::error::release $TAG 已发布，拒绝写入"; exit 1; }
-            echo "draft 已存在（例如已上传 Mac DMG），追加 Windows 资产；同名资产已存在时上传会失败"
-            gh release upload "$TAG" dist/* -R "$REPO"
+            echo "draft 已存在（例如已上传 Mac DMG），只追加 setup.exe 与便携 zip；同名资产已存在时上传会失败"
+            gh release upload "$TAG" "${files[@]}" -R "$REPO"
           else
-            gh release create "$TAG" dist/* -R "$REPO" --draft --verify-tag --title "Clash Assist $TAG" --notes-file notes/release-notes.md
+            gh release create "$TAG" "${files[@]}" -R "$REPO" --draft --verify-tag --title "Clash Assist $TAG" --notes-file notes/release-notes.md
           fi
 
       - name: 上传后核对 GitHub digest 与本地哈希一致
         run: |
           set -euo pipefail
+          ver="${TAG#v}"
           id="$(gh release view "$TAG" -R "$REPO" --json databaseId -q .databaseId)"
           gh api "repos/$REPO/releases/$id/assets" --paginate --jq '.[] | [.name, .state, (.digest // "")] | @tsv' > remote.tsv
           cat remote.tsv
           fail=0
-          for f in dist/*; do
+          for f in "dist/Clash.Assist_${ver}_x64-setup.exe" "dist/Clash.Assist_${ver}_x64-portable.zip"; do
             name="$(basename "$f")"
             want="sha256:$(sha256sum "$f" | cut -d' ' -f1)"
             row="$(awk -F'\t' -v n="$name" '$1 == n' remote.tsv)"
@@ -440,5 +454,7 @@ jobs:
           {
             echo "### draft release $TAG 已写入"
             echo
-            echo "下一步：把 Mac DMG（Clash.Assist_<版本>_aarch64.dmg）上传到这个 draft，然后运行 publish-release.yml（gh workflow run publish-release.yml --ref $TAG -f tag=$TAG），检查通过并审批后由它发布。不要在网页上直接点 Publish。发布前确认仓库已开启 immutable releases（C-3）。"
+            echo "本 job 只上传了 setup.exe 与便携 zip，没有上传 SHA256SUMS.txt。"
+            echo
+            echo "下一步：把 Mac DMG（Clash.Assist_<版本>_aarch64.dmg）上传到这个 draft。DMG 就位后，生成覆盖 setup.exe、便携 zip 与 aarch64.dmg 三个安装包的 SHA256SUMS.txt 并上传到同一 draft，然后运行 publish-release.yml（gh workflow run publish-release.yml --ref $TAG -f tag=$TAG），检查通过并审批后由它发布。不要在网页上直接点 Publish。发布前确认仓库已开启 immutable releases（C-3）。"
           } >> "$GITHUB_STEP_SUMMARY"

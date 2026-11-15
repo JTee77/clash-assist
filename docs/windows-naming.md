@@ -12,7 +12,7 @@
 |---|---|---|
 | 安装包 | `Clash.Assist_<ver>_x64-setup.exe` | NSIS 按用户安装（`currentUser`，不需要管理员权限）。更新器的 `WinSetupX64` 只匹配这个名字 |
 | 便携包 | `Clash.Assist_<ver>_x64-portable.zip` | 不提供一键更新，界面显示「前往发布页下载」 |
-| 校验文件 | `SHA256SUMS.txt` | 与上面两个资产放在同一个 draft release 中 |
+| 校验文件 | `SHA256SUMS.txt` | 列出安装包、便携包与 `Clash.Assist_<ver>_aarch64.dmg`；DMG 上传到 draft 之后由人工生成并上传 |
 
 - `<ver>` 是不带 `v` 前缀的版本号，例如 tag `v0.3.0` 对应 `Clash.Assist_0.3.0_x64-setup.exe`。
 - tag、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`package.json` 四处的版本必须一致。
@@ -46,7 +46,7 @@
 ## 依赖这些名称的位置（落地时同步）
 
 - 2.4 更新器（M5 已落地，见 [windows-updater.md](windows-updater.md)）：`parse_release_asset`（`AssetKind::WinSetupX64`）、`validate_asset_url`、`update_check/install.rs`（安装形态）、`update_check/windows.rs::prepare_update_dir`、`update_check/pending.rs`
-- 3 `release-windows.yml`：改名、打便携 zip、生成 `SHA256SUMS.txt`
+- 3 `release-windows.yml`：改名、打便携 zip；构建时生成仅含两个 Windows 包的 `SHA256SUMS.txt`（不上传到 draft）
 - 3 `src-tauri/windows/hooks.nsh`：卸载时删除应用数据
 - `platform::app_log_dir()`：Windows 上为 `%LOCALAPPDATA%\ClashAssist\logs`（M5 起；之前在 `%APPDATA%\logs\ClashAssist`）
 - M4 冒烟测试 `scripts/smoke-windows.ps1`、M5 `updater-e2e.yml`

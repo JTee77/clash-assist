@@ -9,14 +9,14 @@ workflow 用 `gh api` 抓下来的快照文件，全部检查通过才返回 0�
   3. 资产恰好是这四个，名字与版本号一致，多一个、少一个、重名都失败：
        Clash.Assist_<ver>_x64-setup.exe     （release-windows.yml 写入）
        Clash.Assist_<ver>_x64-portable.zip  （release-windows.yml 写入）
-       SHA256SUMS.txt                       （release-windows.yml 写入，已做 attestation）
+       SHA256SUMS.txt                       （DMG 上传之后由人工写入，列出三个安装包）
        Clash.Assist_<ver>_aarch64.dmg       （人工上传；任何 .dmg 都计数，必须恰好一个）
      未知 / 多余资产一律失败：开了 immutable releases 后，发布出去的资产无法再删改；
      多余文件不在 SHA256SUMS 和 provenance 里，也可能被客户端或用户误选。确需新资产时改本脚本的清单。
   4. 每个资产 state == uploaded、size > 0、GitHub digest 形如 sha256:<64 位十六进制>；
-  5. 下载下来的 SHA256SUMS.txt 本身的 sha256 等于其 GitHub digest，且内容恰好两行，
-     分别对应 setup.exe 与便携 zip，哈希等于这两个资产的 GitHub digest
-     （即 draft 里的 Windows 包就是 attest 过的那两个；不改动 SHA256SUMS.txt）；
+  5. 下载下来的 SHA256SUMS.txt 本身的 sha256 等于其 GitHub digest，且恰好列出三个安装包
+     （setup.exe、便携 zip、aarch64.dmg），哈希分别等于这三个资产的 GitHub digest
+     （不改动、不重新生成 SHA256SUMS.txt）；
   6. 平台改动标记（#71，docs/windows-updater.md「某平台无变化时不提示更新」）：draft 的发布说明里
      恰好一条 `<!-- clash-assist:platforms macos=X.Y.Z windows=X.Y.Z -->`，macos / windows 各一次，
      值与 tag 提交上的 release/platforms.json（workflow 经 API 按该提交读取）完全一致；
@@ -168,17 +168,17 @@ def check_sums(sums_bytes: bytes, found: dict[str, dict], version: str, errs: li
             errs.append(f"{SUMS_NAME} 里 {m.group(2)} 出现了两次")
             return
         entries[m.group(2)] = m.group(1)
-    want_names = {names["setup"], names["zip"]}
+    want_names = {names["setup"], names["zip"], names["dmg"]}
     if set(entries) != want_names:
         errs.append(f"{SUMS_NAME} 应恰好列出 {sorted(want_names)}，实际：{sorted(entries)}")
         return
-    for key in ("setup", "zip"):
+    for key in ("setup", "zip", "dmg"):
         a = found.get(key)
         if a is None:
             continue
         if a.get("digest") != "sha256:" + entries[names[key]]:
             errs.append(f"{names[key]} 的 GitHub digest {a.get('digest')!r} 与 {SUMS_NAME} 里的 "
-                        f"sha256:{entries[names[key]]} 不一致（draft 里的包不是 attest 过的那个）")
+                        f"sha256:{entries[names[key]]} 不一致（draft 里的包不是这份校验对应的那个）")
 
 
 def _ver(v: str) -> tuple[int, ...]:
@@ -404,13 +404,29 @@ def self_test() -> int:
     case("资产重名", lambda r, a: a.append(dict(asset(a, "setup.exe"), id=11)), want="setup.exe 应恰好一个")
     case("SHA256SUMS 内容被改过（与 digest 不符）", lambda r, a: base_sums + b"\n", want="与 GitHub digest")
     case("setup.exe 被替换（digest 与 SHA256SUMS 不符）",
-         lambda r, a: asset(a, "setup.exe").__setitem__("digest", "sha256:" + "1" * 64), want="不是 attest 过的那个")
+         lambda r, a: asset(a, "setup.exe").__setitem__("digest", "sha256:" + "1" * 64), want="的 GitHub digest")
 
-    def sums_with_dmg(r, a):
-        extra = base_sums + b"%s  Clash.Assist_0.3.1_aarch64.dmg\n" % (b"2" * 64)
-        asset(a, SUMS_NAME)["digest"] = "sha256:" + hashlib.sha256(extra).hexdigest()
-        return extra
-    case("SHA256SUMS 被追加 DMG 行", sums_with_dmg, want="应恰好列出")
+    # fixture 已含 DMG 行（三个安装包都列出才通过）。缺行或哈希不符必须失败。
+    def sums_without_dmg(r, a):
+        lines = [l for l in base_sums.splitlines() if l and not l.endswith(b".dmg")]
+        body = b"\n".join(lines) + b"\n"
+        asset(a, SUMS_NAME)["digest"] = "sha256:" + hashlib.sha256(body).hexdigest()
+        return body
+
+    def sums_dmg_bad_hash(r, a):
+        dmg = b"Clash.Assist_0.3.1_aarch64.dmg"
+        lines = []
+        for l in base_sums.splitlines():
+            if l.endswith(dmg):
+                lines.append(b"2" * 64 + b"  " + dmg)
+            elif l:
+                lines.append(l)
+        body = b"\n".join(lines) + b"\n"
+        asset(a, SUMS_NAME)["digest"] = "sha256:" + hashlib.sha256(body).hexdigest()
+        return body
+
+    case("SHA256SUMS 缺少 DMG 行", sums_without_dmg, want="应恰好列出")
+    case("SHA256SUMS 里 DMG 哈希不符", sums_dmg_bad_hash, want="aarch64.dmg 的 GitHub digest")
     case("复读时 DMG 被替换", lambda r, a: asset(a, ".dmg").__setitem__("digest", "sha256:" + "3" * 64),
          baseline=lambda r, a: None, want="与第一次检查时不一致")
     case("复读时 release id 变了", lambda r, a: rel_of(r).__setitem__("id", 123), baseline=lambda r, a: None,

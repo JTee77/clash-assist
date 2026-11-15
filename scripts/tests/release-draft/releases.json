@@ -38,9 +38,9 @@
         "id": 1000,
         "name": "SHA256SUMS.txt",
         "content_type": "text/plain; charset=utf-8",
-        "size": 201,
+        "size": 298,
         "state": "uploaded",
-        "digest": "sha256:cdbe4a6518c005e86871af73fd7728ada9c61a442f719146f26dfdf38e843b99",
+        "digest": "sha256:8b91436baec8d52ab6ba8ba68005069d47c46cf92c6ac50637562db4b85cc41f",
         "label": ""
       }
     ],

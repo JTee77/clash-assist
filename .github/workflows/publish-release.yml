@@ -1,17 +1,19 @@
 name: Publish release (draft → published)
 
-# 0.3.1 起的发布前闸门（Ellie PR70 评审 §6 / S-4）：Windows draft 由 release-windows.yml 写入，
-# DMG 由人工上传到同一 draft；发布只能走本 workflow，全部检查通过后才把 draft 改为已发布。
-# 不在网页上直接点 Publish。
+# 0.3.1 起的发布前闸门（Ellie PR70 评审 §6 / S-4）：Windows draft 由 release-windows.yml 写入
+# （只含 setup.exe 与便携 zip），DMG 由人工上传到同一 draft。SHA256SUMS.txt 只在 DMG 已经在
+# draft 上之后上传，且必须列出 setup.exe、便携 zip 与 aarch64.dmg 三个安装包。发布只能走本
+# workflow，全部检查通过后才把 draft 改为已发布。不在网页上直接点 Publish。
 #
-# 用法（tag 必须已推送、Windows draft 已写好、DMG 已上传）：
+# 用法（tag 必须已推送、Windows 的 setup.exe 与便携 zip 已写入 draft、DMG 已上传，
+# 且 SHA256SUMS.txt 已在 DMG 就位之后上传）：
 #   gh workflow run publish-release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 # --ref 必须就是该 tag：environment `release` 只允许 v* tag 部署（S-R3），且这样检出的检查脚本
 # 就是 tag 上（main 历史里）的代码。
 #
 # 本 workflow 只读 release 与资产、下载 SHA256SUMS.txt 核对、按 tag 提交读 release/platforms.json
 # 核对发布说明里的平台改动标记（#71），最后一步只发 PATCH draft=false；
-# 不上传、不删除、不改任何资产，也不重新生成 SHA256SUMS.txt（它已做过 attestation）。
+# 不上传、不删除、不改任何资产，也不重新生成 SHA256SUMS.txt。
 on:
   workflow_dispatch:
     inputs:
