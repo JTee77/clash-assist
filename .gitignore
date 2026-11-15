@@ -43,3 +43,6 @@ design/
 
 # Large Icon Composer preview dumps (kept locally / on agent box; not in git)
 icon-src/logo03/composer-previews/
+
+# Local process notes (kept on this machine, not published to GitHub)
+/local-docs/
