@@ -75,7 +75,8 @@
     },
     {
       "name": "02-global-mode-real-leaf",
-      "note": "全局模式：GLOBAL 直接指向真叶时优先取它（PREFER 表第 2 位）",
+      "note": "全局模式：mode=global 时 GLOBAL 的真叶优先于「节点选择」（规则模式下不能这样）",
+      "mode": "global",
       "expectedCurrent": "US-05",
       "proxies": {
         "GLOBAL": {
@@ -2205,6 +2206,37 @@
         "REJECT": {
           "type": "Reject"
         }
+      }
+    },
+    {
+      "name": "16-rule-verge-global-on-leaf",
+      "note": "规则模式（Clash Verge）：GLOBAL.now 是 HK21，😣 节点选择.now 是 HK17。混合端口走节点选择，当前节点必须是 HK17，不能是 HK21。",
+      "mode": "rule",
+      "expectedCurrent": "香港高速3-HK17",
+      "proxies": {
+        "GLOBAL": {
+          "type": "Selector",
+          "now": "香港高速3-HK21",
+          "all": [
+            "DIRECT",
+            "香港高速3-HK21",
+            "香港高速3-HK17",
+            "香港高速3-美国82 gemini"
+          ]
+        },
+        "😣 节点选择": {
+          "type": "Selector",
+          "now": "香港高速3-HK17",
+          "all": [
+            "香港高速3-美国82 gemini",
+            "香港高速3-HK17",
+            "香港高速3-HK21"
+          ]
+        },
+        "香港高速3-HK21": { "type": "Hysteria2" },
+        "香港高速3-HK17": { "type": "Hysteria2" },
+        "香港高速3-美国82 gemini": { "type": "Hysteria2" },
+        "DIRECT": { "type": "Direct" }
       }
     }
   ]

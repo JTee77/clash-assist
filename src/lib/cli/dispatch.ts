@@ -14,7 +14,9 @@ import {
   getProxies,
   isClientId,
   mockNodes,
+  nodeTestBlockReason,
   normalizeClientId,
+  refreshClashMode,
   type ClientId,
   type ConnectionState,
   type ProxyNode,
@@ -1015,6 +1017,13 @@ async function dispatchInner(
       );
 
       if (target.kind === "current") {
+        if (!parsed.mock && connection.config && !connection.usingMock) {
+          await refreshClashMode(connection.config, { force: true });
+          const blocked = nodeTestBlockReason(connection.config.mode);
+          if (blocked) {
+            return errEnvelope("check", "check_failed", blocked, ver);
+          }
+        }
         emit({
           type: "stage",
           stage: "test",

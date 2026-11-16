@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { planRestore } from "../runner/restore";
 import {
   buildProxyMapFromSlim,
   resolveCurrentProxy,
   resolveCurrentProxyFromSlim,
+  resolveSelectorSnapshotFromMap,
+  resolveSwitchPlanFromMap,
   type SlimGroupLike,
   type SlimNodeLike,
 } from "./currentProxy";
@@ -23,6 +26,8 @@ import corpus from "../../../tests/fixtures/proxies/cases.json";
 type CorpusCase = {
   name: string;
   note: string;
+  /** Clash mode. Omitted → non-global (do not let GLOBAL hide a real main picker). */
+  mode?: string | null;
   expectedCurrent: string | null;
   proxies: Record<string, ProxyInfo>;
 };
@@ -68,7 +73,7 @@ describe("共享语料：resolveCurrentProxy 必须等于 expectedCurrent（原�
 
   for (const c of cases) {
     it(`${c.name} — ${c.note}`, () => {
-      expect(resolveCurrentProxy(c.proxies)).toBe(c.expectedCurrent);
+      expect(resolveCurrentProxy(c.proxies, { mode: c.mode })).toBe(c.expectedCurrent);
     });
   }
 });
@@ -77,8 +82,8 @@ describe("共享语料：GUI 主路径（Rust 搬运 → 前端重建字典）�
   for (const c of cases) {
     it(`${c.name} — 重建后仍得 ${String(c.expectedCurrent)}`, () => {
       const slim = asSlimPayload(c.proxies);
-      const rebuilt = resolveCurrentProxyFromSlim(slim.nodes, slim.groups);
-      expect(rebuilt).toBe(resolveCurrentProxy(c.proxies));
+      const rebuilt = resolveCurrentProxyFromSlim(slim.nodes, slim.groups, { mode: c.mode });
+      expect(rebuilt).toBe(resolveCurrentProxy(c.proxies, { mode: c.mode }));
       expect(rebuilt).toBe(c.expectedCurrent);
     });
 
@@ -96,4 +101,23 @@ describe("共享语料：GUI 主路径（Rust 搬运 → 前端重建字典）�
       }
     });
   }
+});
+
+describe("语料 16：Verge 规则模式下 GLOBAL 停在别的叶子", () => {
+  const verge = cases.find((c) => c.name === "16-rule-verge-global-on-leaf");
+  const HK17 = "香港高速3-HK17";
+  const US82 = "香港高速3-美国82 gemini";
+  const MAIN = "😣 节点选择";
+
+  it("当前叶子、切换组和恢复目标都是节点选择上的 HK17，不是 GLOBAL", () => {
+    expect(verge).toBeTruthy();
+    const proxies = verge!.proxies;
+    expect(resolveCurrentProxy(proxies, { mode: verge!.mode })).toBe(HK17);
+    const snap = resolveSelectorSnapshotFromMap(proxies, HK17, { mode: "rule" });
+    expect(snap).toEqual({ group: MAIN, now: HK17 });
+    expect(resolveSwitchPlanFromMap(proxies, US82, "GLOBAL", { mode: "rule" })).toEqual([
+      { group: MAIN, name: US82 },
+    ]);
+    expect(planRestore(true, snap)).toEqual({ kind: "restore", group: MAIN, now: HK17 });
+  });
 });

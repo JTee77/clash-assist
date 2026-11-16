@@ -15,6 +15,17 @@
  * down the chain. If there is no such name, the Selector with the most real
  * leaves wins. Null only when that is still ambiguous, or the main picker
  * itself is sitting on DIRECT.
+ *
+ * Which group carries mixed-port traffic depends on Clash mode (`options.mode`,
+ * from GET /configs):
+ * - `global`: GLOBAL is the switch / 「使用中」 group.
+ * - `rule` (and any other non-global mode, including a missing mode): GLOBAL is
+ *   not that group when a real main picker exists (`Proxy`, `节点选择` /
+ *   `😣 节点选择` / `🚀 节点选择`, `手动选择`, …). A GLOBAL selector sitting on
+ *   a real node must not hide the main picker.
+ * - `direct`: traffic does not go through a proxy selector. Current node is
+ *   null and a node test must fail instead of switching some group and
+ *   reporting that path.
  */
 import { IGNORE_PROXY_TYPES, JUNK_NAME_KEYWORDS, type ProxyInfo } from "./types";
 
@@ -32,6 +43,42 @@ export const PREFER_GROUP_NAMES = [
 ];
 
 const MAX_HOPS = 8;
+
+/** Clash running mode as it affects which selector carries mixed-port traffic. */
+export type ClashTrafficMode = "global" | "rule" | "direct";
+
+export type ProxyResolveOptions = {
+  /**
+   * GET /configs `mode`. Omitted or unknown non-global values are treated as
+   * rule: do not let GLOBAL outrank a real main picker.
+   */
+  mode?: string | null;
+};
+
+/**
+ * `global` is the only mode where the GLOBAL selector carries mixed-port traffic.
+ * `direct` bypasses proxies. Everything else (rule, script, missing) follows rules.
+ */
+export function normalizeClashMode(
+  mode: string | null | undefined,
+): ClashTrafficMode | undefined {
+  if (typeof mode !== "string") return undefined;
+  const m = mode.trim().toLowerCase();
+  if (!m) return undefined;
+  if (m === "global") return "global";
+  if (m === "direct") return "direct";
+  return "rule";
+}
+
+/** Shown when a node test would not traverse any proxy selector. */
+export const DIRECT_MODE_BLOCK_MESSAGE =
+  "当前是直连模式，流量不经过节点，没法检测。请先在 Clash 里改成规则或全局模式。";
+
+export function nodeTestBlockReason(
+  mode: string | null | undefined,
+): string | null {
+  return normalizeClashMode(mode) === "direct" ? DIRECT_MODE_BLOCK_MESSAGE : null;
+}
 
 function isJunkName(name: string): boolean {
   if (name.startsWith("PASS") || name.startsWith("REJECT")) return true;
@@ -155,8 +202,23 @@ function uniqueCandBy(
 
 function resolvePrimaryEntry(
   proxies: Record<string, ProxyInfo>,
+  options?: ProxyResolveOptions,
 ): { group: string; leaf: string } | null {
+  const mode = normalizeClashMode(options?.mode);
+  if (mode === "direct") return null;
+
+  // Global mode: mixed-port traffic follows GLOBAL only. A main picker that
+  // points somewhere else is not the exit, and GLOBAL→DIRECT is not a node.
+  if (mode === "global" && proxies.GLOBAL) {
+    const leaf = followToLeaf(proxies, "GLOBAL");
+    return leaf ? { group: "GLOBAL", leaf } : null;
+  }
+
   for (const g of PREFER_GROUP_NAMES) {
+    // In rule mode (and when mode is unknown) GLOBAL is not the traffic group
+    // just because its `now` is a real leaf. Verge keeps GLOBAL on a node while
+    // mixed-port still follows `节点选择`.
+    if (g === "GLOBAL") continue;
     if (!proxies[g]) continue;
     const leaf = followToLeaf(proxies, g);
     if (leaf) return { group: g, leaf };
@@ -168,6 +230,9 @@ function resolvePrimaryEntry(
 
   for (const [name, p] of Object.entries(proxies)) {
     if (!isGroupType(p)) continue;
+    // Same hole as the prefer list: a GLOBAL leaf must not beat a renamed
+    // main picker, and must not beat "largest selector" when other groups exist.
+    if (name === "GLOBAL") continue;
     const rank = selectorNameRank(name);
     const selector = isSelectorType(p);
     if (selector && rank >= 2) sawStrongSelector = true;
@@ -185,28 +250,55 @@ function resolvePrimaryEntry(
   }
 
   // A renamed main picker (「🚀 节点选择」) owns the answer. If every such
-  // selector is on DIRECT, do not borrow a niche policy group's node.
+  // selector is on DIRECT, do not borrow a niche policy group's node — or GLOBAL.
   if (sawStrongSelector) {
     const hit = uniqueCandByRank(strong);
     return hit ? { group: hit.group, leaf: hit.leaf } : null;
   }
 
-  if (resolved.length === 0) return null;
-  const only = resolved[0].leaf;
-  if (resolved.every((c) => c.leaf === only)) {
-    const firstSel = resolved.find((c) => c.selector) ?? resolved[0];
-    return { group: firstSel.group, leaf: firstSel.leaf };
+  if (resolved.length > 0) {
+    const only = resolved[0].leaf;
+    if (resolved.every((c) => c.leaf === only)) {
+      const firstSel = resolved.find((c) => c.selector) ?? resolved[0];
+      return { group: firstSel.group, leaf: firstSel.leaf };
+    }
+    const selectors = resolved.filter((c) => c.selector);
+    const hit = uniqueCandBySize(selectors.length > 0 ? selectors : resolved);
+    return hit ? { group: hit.group, leaf: hit.leaf } : null;
   }
 
-  const selectors = resolved.filter((c) => c.selector);
-  const hit = uniqueCandBySize(selectors.length > 0 ? selectors : resolved);
-  return hit ? { group: hit.group, leaf: hit.leaf } : null;
+  // Nothing else can name a leaf (minimal config whose only selector is GLOBAL).
+  const globalLeaf = followToLeaf(proxies, "GLOBAL");
+  return globalLeaf ? { group: "GLOBAL", leaf: globalLeaf } : null;
 }
 
 export function resolveCurrentProxy(
   proxies: Record<string, ProxyInfo>,
+  options?: ProxyResolveOptions,
 ): string | null {
-  return resolvePrimaryEntry(proxies)?.leaf ?? null;
+  return resolvePrimaryEntry(proxies, options)?.leaf ?? null;
+}
+
+/**
+ * Effective leaf of the group that carries mixed-port traffic.
+ * Direct mode is never a proxy leaf. After a temporary switch this must equal
+ * the node under test — a shared exit IP is not evidence either way.
+ */
+export function effectiveTrafficLeaf(
+  proxies: Record<string, ProxyInfo>,
+  options?: ProxyResolveOptions,
+): string | null {
+  return resolveCurrentProxy(proxies, options);
+}
+
+export function switchedLeafMatches(
+  proxies: Record<string, ProxyInfo>,
+  targetNode: string,
+  options?: ProxyResolveOptions,
+): boolean {
+  if (!targetNode) return false;
+  if (normalizeClashMode(options?.mode) === "direct") return false;
+  return effectiveTrafficLeaf(proxies, options) === targetNode;
 }
 
 /** Rust `mihomo_list_nodes` 返回的一条真实节点（只带 name + type 就够判定用）。 */
@@ -252,8 +344,9 @@ export function buildProxyMapFromSlim(
 export function resolveCurrentProxyFromSlim(
   nodes: readonly SlimNodeLike[],
   groups: readonly SlimGroupLike[],
+  options?: ProxyResolveOptions,
 ): string | null {
-  return resolveCurrentProxy(buildProxyMapFromSlim(nodes, groups));
+  return resolveCurrentProxy(buildProxyMapFromSlim(nodes, groups), options);
 }
 
 export type SelectorSnapshot = {
@@ -271,14 +364,20 @@ export type SelectorSnapshot = {
  * 在 proxies 字典里解析主控 Selector 策略组快照（纯函数，供 client.ts 与单测共用）。
  *
  * 规则：
- * 1. 绝不在规则模式下盲选停在 DIRECT/REJECT 的 `GLOBAL`。
- * 2. 优先取与 `resolveCurrentProxy` 同一权威主 Selector（如 `Proxy`、`🔰 节点选择`、`🚀 节点选择` 或节点最多的主组）。
- * 3. 若主组通过嵌套子组（如 `🔰 节点选择` -> `♻️ 自动选择` 或 `🇭🇰 香港节点`）指向叶子，
+ * 1. `mode=direct`：没有可测的代理路径，返回 null（调用方必须明确失败，不能静默测）。
+ * 2. `mode=global`：切换组就是 `GLOBAL`（哪怕它当前停在 DIRECT，测节点时要切的也是它）。
+ * 3. 规则模式（以及没读到 mode）：绝不把 `GLOBAL` 当主切换组，只要还存在真正的主选择组
+ *    （含 emoji 前缀的 `节点选择`）。`GLOBAL` 停在真实节点上也不行——规则模式的混合端口
+ *    流量不跟 GLOBAL。`GLOBAL` 停在 DIRECT 时同样跳过。
+ * 4. 优先取与 `resolveCurrentProxy` 同一权威主 Selector（如 `Proxy`、`🔰 节点选择`、`🚀 节点选择` 或节点最多的主组）。
+ *    策略组（NETFLIX / AI / Telegram）不能因为 `now` 是叶子就被当成主切换组。
+ * 5. 若主组通过嵌套子组（如 `🔰 节点选择` -> `♻️ 自动选择` 或 `🇭🇰 香港节点`）指向叶子，
  *    将整条 Selector 链记入 `restoreChain`，确保测完后即便切过主组也能恢复回原来的子组。
  */
 export function resolveSelectorSnapshotFromMap(
   proxies: Record<string, ProxyInfo>,
   nodeName?: string | null,
+  options?: ProxyResolveOptions,
 ): SelectorSnapshot | null {
   const isSwitchable = (p: ProxyInfo | undefined) => {
     if (!p) return false;
@@ -304,8 +403,22 @@ export function resolveSelectorSnapshotFromMap(
     return chain;
   };
 
+  const mode = normalizeClashMode(options?.mode);
+  if (mode === "direct") return null;
+
+  // Global mode: the traffic group is GLOBAL even when `now` is DIRECT
+  // (a test switches GLOBAL itself). Do not fall through to 节点选择.
+  if (mode === "global" && proxies.GLOBAL && isSwitchable(proxies.GLOBAL)) {
+    const chain = buildChain("GLOBAL");
+    return {
+      group: "GLOBAL",
+      now: proxies.GLOBAL.now ?? nodeName ?? null,
+      ...(chain.length > 1 ? { restoreChain: chain } : {}),
+    };
+  }
+
   // 1) 先用权威主组识别算法找当前真正生效的顶层策略组
-  const primary = resolvePrimaryEntry(proxies);
+  const primary = resolvePrimaryEntry(proxies, options);
   if (primary) {
     const p = proxies[primary.group];
     // 若顶层本身是 URLTest（例如「自动选择」），找引用它的外层主 Selector
@@ -349,13 +462,15 @@ export function resolveSelectorSnapshotFromMap(
     if (nodeName && !p.all?.includes(nodeName)) continue;
     if (!nodeName && !p.now) continue;
 
-    // 规则模式下 GLOBAL.now === "DIRECT"，绝不优先选它当主切换组
+    // 规则模式（以及未知 mode）下 GLOBAL 不是流量组：停在 DIRECT 或停在真实节点都不优先。
+    // 只有 mode=global 才让 GLOBAL 参与打分。
     const isGlobalDirect =
       name === "GLOBAL" && (!p.now || p.now === "DIRECT" || p.now === "REJECT");
+    const globalNotTraffic = name === "GLOBAL" && mode !== "global";
     const exactPreferIdx = PREFER_GROUP_NAMES.indexOf(name);
     const rank = selectorNameRank(name);
     const selBonus = isSelectorType(p) ? 100 : 0;
-    const globalPenalty = isGlobalDirect ? -500 : 0;
+    const globalPenalty = isGlobalDirect || globalNotTraffic ? -500 : 0;
     const preferBonus =
       exactPreferIdx >= 0 && !isGlobalDirect ? (20 - exactPreferIdx) * 10 : 0;
     const leaves = countRealLeaves(proxies, p);
@@ -387,9 +502,26 @@ export function resolveSwitchPlanFromMap(
   proxies: Record<string, ProxyInfo>,
   targetNode: string,
   primaryGroupHint?: string | null,
+  options?: ProxyResolveOptions,
 ): Array<{ group: string; name: string }> {
-  const snap = resolveSelectorSnapshotFromMap(proxies, targetNode);
-  const mainGroup = primaryGroupHint ?? snap?.group ?? null;
+  const mode = normalizeClashMode(options?.mode);
+  if (mode === "direct") return [];
+
+  const snap = resolveSelectorSnapshotFromMap(proxies, targetNode, options);
+  // The mode-aware snapshot wins over a caller hint. In rule mode a hint of
+  // GLOBAL (the old bug: one snapshot group reused for every node) must not
+  // override `节点选择`. GLOBAL is the switch target only in global mode, or
+  // when it is genuinely the only selector.
+  let mainGroup: string | null;
+  if (mode === "global") {
+    mainGroup = proxies.GLOBAL ? "GLOBAL" : (snap?.group ?? primaryGroupHint ?? null);
+  } else {
+    const snapped =
+      snap?.group && snap.group !== "GLOBAL" ? snap.group : null;
+    const hinted =
+      primaryGroupHint && primaryGroupHint !== "GLOBAL" ? primaryGroupHint : null;
+    mainGroup = snapped ?? hinted ?? snap?.group ?? null;
+  }
 
   const isSelector = (name: string) => isSelectorType(proxies[name]);
 
@@ -433,8 +565,9 @@ export function resolveSwitchPlanFromMap(
     if (plan) return plan;
   }
 
-  // 若主组（或 hint）里找不到，遍历所有高优先级 Selector 寻找能切到 targetNode 的组
-  const fallbackSnap = resolveSelectorSnapshotFromMap(proxies, targetNode);
+  // 若主组（或 hint）里找不到，再按同一套 mode 规则找能切到 targetNode 的组。
+  // 不另起一套打分，避免规则模式下退回 GLOBAL 或某个策略组。
+  const fallbackSnap = resolveSelectorSnapshotFromMap(proxies, targetNode, options);
   if (fallbackSnap?.group) {
     const plan = findPathFromGroup(fallbackSnap.group);
     if (plan) return plan;

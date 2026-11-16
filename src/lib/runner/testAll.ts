@@ -5,7 +5,9 @@
 import { mapPool, runNodeDiagnostics } from "../egress";
 import {
   findSelectorGroup,
+  nodeTestBlockReason,
   probeDelay,
+  refreshClashMode,
   resolveSelectorSnapshot,
   restoreProxy,
   switchProxy,
@@ -80,6 +82,17 @@ export async function testAll(
     const results: NodeScoreResult[] = [];
     const alive: ProxyNode[] = [];
     const canSwitch = !!config && !connection.usingMock && !forceMock;
+
+    if (canSwitch && config) {
+      await refreshClashMode(config, { force: true });
+      const blocked = nodeTestBlockReason(config.mode);
+      if (blocked) {
+        // 直连模式切任何 Selector 都不会改变 mixed-port 流量，不能把直连结果记成节点成绩。
+        hooks.onGate?.({ ok: false, message: blocked });
+        hooks.onHint?.(blocked);
+        return false;
+      }
+    }
 
     const upsertScore = (score: NodeScoreResult) => {
       const i = results.findIndex((r) => r.nodeName === score.nodeName);
@@ -199,12 +212,14 @@ export async function testAll(
           );
           continue;
         }
+        // 先记「可能已经改过组」：switchProxy 在校验失败前可能已经 PUT 了前面几步，
+        // 结束时必须按快照切回，不能因为最终校验失败就留下半套切换。
+        didSwitch = true;
         const ok = await switchProxy(config!, group, n.name);
         if (!ok) {
           upsertScore(scoreDeadNode(n.name, "切换失败，没法检测这个节点。"));
           continue;
         }
-        didSwitch = true;
         await new Promise((r) => setTimeout(r, 250));
         if (shouldAbort()) break;
         hooks.onNodeCards(asRunning(NODE_PLACEHOLDERS));

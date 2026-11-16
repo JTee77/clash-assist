@@ -18,14 +18,18 @@ import {
 } from "./types";
 import { detectRegion, detectRegions } from "./regions";
 import {
+  nodeTestBlockReason,
   resolveCurrentProxy,
   resolveCurrentProxyFromSlim,
   resolveSelectorSnapshotFromMap,
   resolveSwitchPlanFromMap,
+  switchedLeafMatches,
+  type ProxyResolveOptions,
   type SlimGroupLike,
   type SelectorSnapshot,
 } from "./currentProxy";
-export type { SelectorSnapshot };
+export type { SelectorSnapshot, ProxyResolveOptions };
+export { nodeTestBlockReason, switchedLeafMatches };
 import { mockProxiesRaw } from "./mock";
 import { mergeProviderNodes, missingProviderNames, resolveProviderNode, type ProviderMap } from "./providerNodes";
 import {
@@ -263,8 +267,9 @@ function toNode(name: string, p: ProxyInfo, region?: string): ProxyNode {
 
 export function filterNodes(
   proxies: Record<string, ProxyInfo>,
+  options?: ProxyResolveOptions,
 ): { nodes: ProxyNode[]; currentProxy: string | null } {
-  const currentProxy = resolveCurrentProxy(proxies);
+  const currentProxy = resolveCurrentProxy(proxies, options);
   const entries = Object.entries(proxies).filter(
     ([name, p]) => !IGNORE_PROXY_TYPES.has(p.type) && !isJunkName(name),
   );
@@ -281,8 +286,9 @@ export function filterNodes(
  */
 export function resolveNodesFromGroups(
   proxies: Record<string, ProxyInfo>,
+  options?: ProxyResolveOptions,
 ): { nodes: ProxyNode[]; currentProxy: string | null } {
-  const currentProxy = resolveCurrentProxy(proxies);
+  const currentProxy = resolveCurrentProxy(proxies, options);
 
   const leafNames = new Set<string>();
   const preferGroups = ["Proxy", "GLOBAL", "proxy"];
@@ -484,6 +490,9 @@ async function syncLiveMixedPort(config: ControllerConfig): Promise<ControllerCo
       let next: ControllerConfig = inboundAuth
         ? { ...config, inboundAuth: true }
         : config;
+      if (typeof obj.mode === "string" && obj.mode.trim()) {
+        next = { ...next, mode: obj.mode.trim() };
+      }
 
       if (typeof mp === "number" && mp > 0 && mp <= 65535) {
         return { ...next, mixedPort: mp, mixedPortDisabled: false };
@@ -500,6 +509,32 @@ async function syncLiveMixedPort(config: ControllerConfig): Promise<ControllerCo
     /* ignore and keep discovered mixedPort */
   }
   return config;
+}
+
+/**
+ * Copy the live Clash mode onto `config` (mutates, so a test loop keeps it).
+ * Outside the Tauri shell this is a no-op: unit tests must not hit the controller,
+ * and production always runs inside Tauri where GET /configs is available.
+ * Pass `force` when the user may have changed mode since the last read.
+ */
+export async function refreshClashMode(
+  config: ControllerConfig,
+  opts?: { force?: boolean },
+): Promise<string | undefined> {
+  if (!isTauri()) return config.mode;
+  if (config.mode && !opts?.force) return config.mode;
+  const live = await syncLiveMixedPort(config);
+  if (live.mode) config.mode = live.mode;
+  return config.mode;
+}
+
+async function readProxyMap(
+  config: ControllerConfig,
+  timeoutMs = 6000,
+): Promise<Record<string, ProxyInfo> | null> {
+  const res = await httpApi(config, "GET", "/proxies", undefined, timeoutMs);
+  if (!res || !is2xx(res.status) || !res.json) return null;
+  return (res.json as { proxies?: Record<string, ProxyInfo> }).proxies ?? {};
 }
 
 async function connectedState(
@@ -618,6 +653,7 @@ export type GetProxiesResult = {
 
 async function getProxiesViaSlimCommand(
   config: ControllerConfig,
+  options?: ProxyResolveOptions,
 ): Promise<GetProxiesResult | null> {
   if (!isTauri()) return null;
   try {
@@ -667,7 +703,11 @@ async function getProxiesViaSlimCommand(
     }));
     return {
       nodes,
-      currentProxy: resolveCurrentProxyFromSlim(res.nodes ?? [], res.groups ?? []),
+      currentProxy: resolveCurrentProxyFromSlim(
+        res.nodes ?? [],
+        res.groups ?? [],
+        options,
+      ),
       usingMock: false,
       error: res.error ?? (nodes.length === 0 ? "节点列表为空" : null),
       unauthorized: !!res.unauthorized,
@@ -698,8 +738,11 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
     unauthorized,
   });
 
+  await refreshClashMode(config, { force: true });
+  const modeOpts: ProxyResolveOptions = { mode: config.mode };
+
   // Prefer slim Rust command — strips history arrays and caps body size.
-  const slim = await getProxiesViaSlimCommand(config);
+  const slim = await getProxiesViaSlimCommand(config, modeOpts);
   if (slim) return slim;
 
   // Fallback: full /proxies via TCP/unix/browser (dev / non-Tauri).
@@ -734,9 +777,9 @@ export async function getProxies(config: ControllerConfig): Promise<GetProxiesRe
       proxies = mergeProviderNodes(proxies, providerMap);
     }
   }
-  let filtered = filterNodes(proxies);
+  let filtered = filterNodes(proxies, modeOpts);
   if (filtered.nodes.length === 0) {
-    filtered = resolveNodesFromGroups(proxies);
+    filtered = resolveNodesFromGroups(proxies, modeOpts);
   }
   if (filtered.nodes.length === 0) {
     return {
@@ -806,11 +849,25 @@ export async function resolveSelectorSnapshot(
   config: ControllerConfig,
   nodeName?: string | null,
 ): Promise<SelectorSnapshot | null> {
-  const res = await httpApi(config, "GET", "/proxies", undefined, 18000);
-  if (!res || !is2xx(res.status) || !res.json) return null;
-  const obj = res.json as { proxies?: Record<string, ProxyInfo> };
-  const proxies = obj.proxies ?? {};
-  return resolveSelectorSnapshotFromMap(proxies, nodeName);
+  await refreshClashMode(config);
+  const proxies = await readProxyMap(config, 18000);
+  if (!proxies) return null;
+  return resolveSelectorSnapshotFromMap(proxies, nodeName, { mode: config.mode });
+}
+
+/**
+ * True when the traffic-carrying group's effective leaf is already `nodeName`.
+ * Does not switch. Direct mode is never a match.
+ */
+export async function confirmTrafficLeaf(
+  config: ControllerConfig,
+  nodeName: string,
+): Promise<boolean> {
+  await refreshClashMode(config);
+  if (nodeTestBlockReason(config.mode)) return false;
+  const proxies = await readProxyMap(config);
+  if (!proxies) return false;
+  return switchedLeafMatches(proxies, nodeName, { mode: config.mode });
 }
 
 export async function switchProxy(
@@ -818,23 +875,31 @@ export async function switchProxy(
   group: string,
   name: string,
 ): Promise<boolean> {
-  const enc = encodeURIComponent(group);
-  const res = await httpApi(config, "PUT", `/proxies/${enc}`, { name });
-  if (res && is2xx(res.status)) return true;
+  if (!name) return false;
+  await refreshClashMode(config);
+  // Direct mode: switching a selector does not change mixed-port traffic.
+  if (nodeTestBlockReason(config.mode)) return false;
 
-  // 若目标节点位于主组下属的地区子组中（如「🚀 节点选择」->「🇺🇸 美国节点」-> 节点），
-  // 自动查询 /proxies 计算多步切换路径并依次执行
-  const mapRes = await httpApi(config, "GET", "/proxies", undefined, 6000);
-  if (!mapRes || !is2xx(mapRes.status) || !mapRes.json) return false;
-  const proxies = (mapRes.json as { proxies?: Record<string, ProxyInfo> }).proxies ?? {};
-  const steps = resolveSwitchPlanFromMap(proxies, name, group);
+  const proxies = await readProxyMap(config);
+  if (!proxies) return false;
+  const steps = resolveSwitchPlanFromMap(proxies, name, group, { mode: config.mode });
   if (steps.length === 0) return false;
-  for (const step of steps) {
-    const stepEnc = encodeURIComponent(step.group);
-    const r = await httpApi(config, "PUT", `/proxies/${stepEnc}`, { name: step.name });
-    if (!r || !is2xx(r.status)) return false;
+
+  // Already on the target leaf: don't PUT, but still re-read before trusting it.
+  const already = switchedLeafMatches(proxies, name, { mode: config.mode });
+  if (!already) {
+    for (const step of steps) {
+      const stepEnc = encodeURIComponent(step.group);
+      const r = await httpApi(config, "PUT", `/proxies/${stepEnc}`, { name: step.name });
+      if (!r || !is2xx(r.status)) return false;
+    }
   }
-  return true;
+
+  // Hard check: the traffic group's effective leaf (nested `now` included) is the
+  // target. A 2xx on the wrong group, or a shared exit IP, is not success.
+  const after = await readProxyMap(config);
+  if (!after) return false;
+  return switchedLeafMatches(after, name, { mode: config.mode });
 }
 
 /** 切回原先节点（含嵌套子组链）；任一步失败返回 false（调用方必须向用户报错，不可静默）。 */
