@@ -12,9 +12,7 @@ Ping numbers inside a proxy client often look great on paper, even when a node i
 - 🛡️ **Privacy & Leak Check**: One-click check to verify whether your setup is accidentally leaking your real IP or DNS, and whether domestic/overseas split routing works as expected.
 - 🔍 **Region Filter & Auto-Saved Results**: Filter by region (e.g., Japan, Hong Kong) or keyword to test only the nodes you care about. Test results are saved automatically so they are ready the next time you open the app.
 
-> **Supported Clients**: on macOS, **Clash Verge (Clash Verge Rev)** and **FlClash**; on Windows, **Clash Verge Rev** for now.
-
-**0.3.4**: Testing nodes in rule mode no longer switches the wrong policy group.  
+> **Supported Clients**: on macOS, **Clash Verge (Clash Verge Rev)** and **FlClash**; on Windows, **Clash Verge Rev** for now.  
 > *(Note: Clash Assist is a diagnostic companion tool only — it does not provide any proxy nodes or VPN services.)*
 
 ---
