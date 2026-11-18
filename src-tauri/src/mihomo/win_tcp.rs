@@ -165,29 +165,54 @@ pub async fn http_via_tcp(
     // secret 来自 FlClash 配置文件，不采用前端传入的值，也不读取 Verge yaml。
     // Bearer 只在监听进程被证明是当前用户的 FlClashCore.exe 之后发出。
     // Verge 的 secret 闸门保持关闭。
-    let fl_secret = tauri::async_runtime::spawn_blocking(move || {
-        super::discovery::flclash_tcp_secret(addr.port())
+    let claim = tauri::async_runtime::spawn_blocking(move || {
+        super::discovery::flclash_tcp_claim(addr.port())
     })
     .await
     .ok()
     .flatten();
-    if let Some(fl_secret) = fl_secret {
+    if let Some(claim) = claim {
         let policy = TrustPolicy::for_images(super::trust::FLCLASH_CORE_IMAGES);
-        let bearer = (!fl_secret.is_empty()).then_some(fl_secret);
-        return http_via_tcp_with(
-            &policy,
-            true,
-            super::trust::TcpFallback::Allowed { denied_seen: false },
-            addr,
-            method,
-            path,
-            body,
-            bearer.as_deref(),
-            timeout_ms,
-            "flclash-tcp(listener-verified)",
-        )
-        .await
-        .map(|(r, _)| r);
+        let send_flclash = if claim.verge_same_port {
+            let check = check_listener(&policy, addr);
+            match super::trust::shared_port_route(&check) {
+                super::trust::SharedPortRoute::Flclash => true,
+                super::trust::SharedPortRoute::Verge => false,
+                super::trust::SharedPortRoute::Refuse => {
+                    let why = tcp_send_plan(
+                        &check,
+                        true,
+                        false,
+                        &super::trust::TcpFallback::Allowed { denied_seen: false },
+                    );
+                    let msg = match why {
+                        super::trust::TcpPlan::Refuse(msg) => msg,
+                        _ => "端口同时被其它配置占用，且监听者不是 FlClash 内核，拒绝连接".into(),
+                    };
+                    crate::append_app_log(&format!("[tcp] {addr} 拒绝：{msg}"));
+                    return Err(msg);
+                }
+            }
+        } else {
+            true
+        };
+        if send_flclash {
+            let bearer = (!claim.secret.is_empty()).then_some(claim.secret);
+            return http_via_tcp_with(
+                &policy,
+                true,
+                super::trust::TcpFallback::Allowed { denied_seen: false },
+                addr,
+                method,
+                path,
+                body,
+                bearer.as_deref(),
+                timeout_ms,
+                "flclash-tcp(listener-verified)",
+            )
+            .await
+            .map(|(r, _)| r);
+        }
     }
     let fallback = fallback_state().await;
     let effective = if secret.is_empty() {

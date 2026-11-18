@@ -138,6 +138,8 @@ export function clientLabel(id: ClientId | null): string {
 
 const FLCLASH_EC_DISABLED =
   "检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「刷新节点」";
+const FLCLASH_EC_REMOTE =
+  "FlClash 的外部控制器不是本机地址，已拒绝连接。请把它改成 127.0.0.1 后再点「刷新节点」。";
 const FLCLASH_MISSING =
   "未检测到 FlClash 的配置。请先安装并打开 FlClash，在「设置 → 常规 → 入站」开启「外部控制器」后再点「刷新节点」。";
 const FLCLASH_NOT_RUNNING =
@@ -167,6 +169,7 @@ export function flclashLocalMessage(source?: string, detail?: string | null): st
   if (detail && /image-mismatch/i.test(detail)) return FLCLASH_IMAGE;
   const base = flclashBase(source);
   if (base.startsWith("flclash-ec-disabled")) return FLCLASH_EC_DISABLED;
+  if (base.startsWith("flclash-ec-remote")) return FLCLASH_EC_REMOTE;
   if (
     !base ||
     base === "defaults" ||

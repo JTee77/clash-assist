@@ -964,6 +964,33 @@ pub enum TcpPlan {
     SendBearer,
 }
 
+/// 同一个 TCP 端口同时出现在 FlClash 配置和 Verge yaml 里时，按监听进程决定把请求交给谁。
+///
+/// `Verified` 只可能来自 FlClash 映像白名单（调用方用那份策略做了校验）。映像是 Verge
+/// 内核，或端口上没有监听者时，回到 Verge 的原路径，并且不发送 FlClash 的 secret。
+/// 其它映像、别的用户、服务模式：拒绝，零字节。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharedPortRoute {
+    Flclash,
+    Verge,
+    Refuse,
+}
+
+pub fn shared_port_route(check: &ListenerCheck) -> SharedPortRoute {
+    match check {
+        ListenerCheck::Verified { .. } => SharedPortRoute::Flclash,
+        ListenerCheck::NotListening { .. } => SharedPortRoute::Verge,
+        ListenerCheck::Rejected(TcpReject::ImageMismatch { image, .. })
+            if VERGE_CORE_IMAGES
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(image)) =>
+        {
+            SharedPortRoute::Verge
+        }
+        _ => SharedPortRoute::Refuse,
+    }
+}
+
 /// 由监听者判定、是否有 secret、secret 闸门、M-3 回落状态决定这次 TCP 请求怎么发。
 ///
 /// `secret_gate_open` 在生产中恒为 [`crate::mihomo::win_tcp::WINDOWS_TCP_SECRET_GATE_OPEN`]（false），

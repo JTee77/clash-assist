@@ -1312,3 +1312,47 @@ fn single_request_io_on_trusted_pipe_only_tightens_to_verified_only() {
         assert_eq!(tighten_fallback(None, f), None);
     }
 }
+
+#[test]
+fn shared_port_keeps_flclash_secret_off_verge_and_spoofed_names() {
+    let verified = ListenerCheck::Verified {
+        pid: 10,
+        image: r"D:\Fl Clash\FlClashCore.exe".into(),
+    };
+    assert_eq!(shared_port_route(&verified), SharedPortRoute::Flclash);
+
+    let verge = ListenerCheck::Rejected(TcpReject::ImageMismatch {
+        pid: 11,
+        image: "verge-mihomo.exe".into(),
+    });
+    assert_eq!(shared_port_route(&verge), SharedPortRoute::Verge);
+    let alpha = ListenerCheck::Rejected(TcpReject::ImageMismatch {
+        pid: 12,
+        image: "VERGE-MIHOMO-ALPHA.EXE".into(),
+    });
+    assert_eq!(shared_port_route(&alpha), SharedPortRoute::Verge);
+
+    let spoof_dir = ListenerCheck::Rejected(TcpReject::ImageMismatch {
+        pid: 13,
+        image: "FlClash.exe".into(),
+    });
+    assert_eq!(shared_port_route(&spoof_dir), SharedPortRoute::Refuse);
+    let other_user = ListenerCheck::Rejected(TcpReject::TokenMismatch {
+        pid: 14,
+        sid: "S-1-5-21-9".into(),
+    });
+    assert_eq!(shared_port_route(&other_user), SharedPortRoute::Refuse);
+    let plan = tcp_send_plan(
+        &other_user,
+        true,
+        true,
+        &TcpFallback::Allowed { denied_seen: false },
+    );
+    assert!(matches!(plan, TcpPlan::Refuse(_)));
+    assert_eq!(
+        shared_port_route(&ListenerCheck::NotListening {
+            ipv6_dual_stack_hint: false,
+        }),
+        SharedPortRoute::Verge
+    );
+}

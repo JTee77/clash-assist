@@ -64,6 +64,9 @@ pub struct ParsedControllerYaml {
     pub unix_path: Option<String>,
     /// True when `external-controller:` exists but is blank (`''` / `""` / empty).
     pub tcp_ec_blank: bool,
+    /// True when the controller address is not loopback / wildcard. Do not connect there
+    /// and do not reuse the port on 127.0.0.1.
+    pub tcp_ec_remote: bool,
     /// Raw `external-controller-pipe` value (Windows named pipe, quotes removed).
     pub pipe_path: Option<String>,
 }
@@ -156,16 +159,22 @@ pub fn parse_controller_yaml(
 fn merge_parsed(into: &mut ParsedControllerYaml, other: ParsedControllerYaml) {
     // Prefer earlier file's EC decision. clash-verge.yaml (read first) may set
     // tcp_ec_blank; do not let stale config.yaml host:port override that.
-    if into.tcp_ec_blank {
+    // A non-local controller address is the same kind of decision: do not fall
+    // back to a later file's port, and do not reuse that port on loopback.
+    if into.tcp_ec_blank || (into.tcp_ec_remote && into.port.is_none()) {
         // keep port None
     } else if into.port.is_none() {
         into.port = other.port;
         if into.port.is_none() && other.tcp_ec_blank {
             into.tcp_ec_blank = true;
         }
+        if into.port.is_none() && other.tcp_ec_remote {
+            into.tcp_ec_remote = true;
+        }
     }
     if into.port.is_some() {
         into.tcp_ec_blank = false;
+        into.tcp_ec_remote = false;
     }
     if into.secret.is_empty() && !other.secret.is_empty() {
         into.secret = other.secret;
@@ -681,52 +690,104 @@ pub(crate) fn windows_yaml_secret() -> Option<String> {
     (!parsed.secret.is_empty()).then_some(parsed.secret)
 }
 
-/// 这次 TCP 端口是否只属于已开启外部控制器的 FlClash。
+/// 这次 TCP 端口是否是 FlClash 显式打开、且地址在本机的外部控制器。
 ///
-/// `flclash:defaults` 与 `flclash-ec-disabled` 不认领端口。Verge yaml 显式写出了同一个
-/// TCP 端口时也不认领，避免把 FlClash 的 secret 发到 Verge 的监听者，或跳过 Verge 的管道校验。
+/// 不认领 `flclash:defaults`、关闭的控制器、非本机地址，也不把「文件里没写端口」
+/// 回落成 9090。与 Verge 抢同一个端口时仍返回 true：真正发给谁由监听进程决定
+/// （见 `trust::shared_port_route`），避免把 secret 发给错误的内核，也避免
+/// Verge 配置里写了 9090 就让正在听的 FlClashCore 永远连不上。
 #[cfg(any(windows, test))]
 pub(crate) fn flclash_tcp_eligible(
     source: &str,
-    discovered_port: u16,
+    explicit_port: Option<u16>,
     request_port: u16,
-    verge_explicit_port: Option<u16>,
 ) -> bool {
-    if request_port == 0 || request_port != discovered_port {
+    let Some(port) = explicit_port else {
+        return false;
+    };
+    if request_port == 0 || request_port != port {
         return false;
     }
     let base = source.split(';').next().unwrap_or(source);
-    if base.starts_with("flclash-ec-disabled") || base == "flclash:defaults" {
+    if base.starts_with("flclash-ec-disabled")
+        || base.starts_with("flclash-ec-remote")
+        || base == "flclash:defaults"
+    {
         return false;
     }
-    if !base.starts_with("flclash:") {
-        return false;
-    }
-    verge_explicit_port != Some(request_port)
+    base.starts_with("flclash:")
 }
 
-/// FlClash 外部控制器的 secret。`None` 表示这个端口不走 FlClash TCP。
-/// `Some("")` 表示配置里开了控制器但没有 secret。secret 只留在 Rust 侧。
+/// 本机可连接的控制器地址：回环，或包含回环的通配监听。其它地址一律不当作本地控制器。
+pub(crate) fn controller_host_is_local(host: &str) -> bool {
+    let h = host.trim().trim_matches(|c| c == '[' || c == ']');
+    h.eq_ignore_ascii_case("localhost")
+        || h == "127.0.0.1"
+        || h == "0.0.0.0"
+        || h == "::1"
+        || h == "::"
+        || h == "*"
+}
+
+/// `external-controller` 标量：关闭、本机端口，或非本机（拒绝）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ControllerBind {
+    Closed,
+    Local(u16),
+    Remote,
+}
+
+pub(crate) fn classify_controller_bind(raw: &str) -> ControllerBind {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("close") {
+        return ControllerBind::Closed;
+    }
+    if trimmed.eq_ignore_ascii_case("open") {
+        return ControllerBind::Local(9090);
+    }
+    if let Ok(port) = trimmed.parse::<u16>() {
+        return if port == 0 {
+            ControllerBind::Closed
+        } else {
+            ControllerBind::Local(port)
+        };
+    }
+    let Some((host, port_str)) = trimmed.rsplit_once(':') else {
+        return ControllerBind::Remote;
+    };
+    let Ok(port) = port_str.trim().parse::<u16>() else {
+        return ControllerBind::Remote;
+    };
+    if port == 0 || !controller_host_is_local(host) {
+        ControllerBind::Remote
+    } else {
+        ControllerBind::Local(port)
+    }
+}
+
+/// FlClash 在这个端口上的 secret，以及 Verge yaml 是否也写了同一个 TCP 端口。
+/// `None` 表示这个端口不是 FlClash 显式打开的本机控制器。secret 只留在 Rust 侧。
 #[cfg(windows)]
-pub(crate) fn flclash_tcp_secret(port: u16) -> Option<String> {
+pub(crate) struct FlclashTcpClaim {
+    pub secret: String,
+    pub verge_same_port: bool,
+}
+
+#[cfg(windows)]
+pub(crate) fn flclash_tcp_claim(port: u16) -> Option<FlclashTcpClaim> {
     let spec = platform::client_discovery("flclash")?;
     let prefs = platform::flclash_preference_paths();
-    let found = discover_flclash_with_paths(
-        &prefs,
-        &spec.yaml_paths,
-        spec.default_port,
-        spec.default_mixed,
-    );
-    let (verge, verge_files) = read_verge_parsed();
-    let verge_port = if verge_files.is_empty() {
-        None
-    } else {
-        verge.port
-    };
-    if !flclash_tcp_eligible(&found.source, found.port, port, verge_port) {
+    let (parsed, sources) = collect_flclash(&prefs, &spec.yaml_paths);
+    let source = flclash_source_label(&parsed, &sources).finish();
+    if !flclash_tcp_eligible(&source, parsed.port, port) {
         return None;
     }
-    Some(found.secret)
+    let (verge, verge_files) = read_verge_parsed();
+    let verge_same_port = !verge_files.is_empty() && verge.port == Some(port);
+    Some(FlclashTcpClaim {
+        secret: parsed.secret,
+        verge_same_port,
+    })
 }
 
 /// 把 `secret:` 行的值替换为占位符（任意缩进）。
@@ -957,15 +1018,10 @@ pub fn parse_flclash_json_str(raw_json: &str) -> Option<ParsedControllerYaml> {
         .or_else(|| patch.get("externalController"))
     {
         if let Some(ec_str) = ec_val.as_str() {
-            let trimmed = ec_str.trim();
-            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("close") {
-                out.tcp_ec_blank = true;
-            } else if trimmed.eq_ignore_ascii_case("open") {
-                out.port = Some(9090);
-            } else if let Some((_, port_str)) = trimmed.rsplit_once(':') {
-                if let Ok(p) = port_str.trim().parse::<u16>() {
-                    out.port = Some(p);
-                }
+            match classify_controller_bind(ec_str) {
+                ControllerBind::Closed => out.tcp_ec_blank = true,
+                ControllerBind::Local(port) => out.port = Some(port),
+                ControllerBind::Remote => out.tcp_ec_remote = true,
             }
         } else if let Some(b) = ec_val.as_bool() {
             if b {
@@ -1028,14 +1084,53 @@ fn read_flclash_pref_file(path: &Path) -> Option<ParsedControllerYaml> {
     parse_flclash_json_str(&content)
 }
 
-/// Discover FlClash controller from preferences (`.plist` / `shared_preferences.json`)
-/// and runtime `config.yaml` files.
-pub fn discover_flclash_with_paths(
+fn read_flclash_yaml(path: &Path) -> Option<ParsedControllerYaml> {
+    let content = crate::safe_fs::read_to_string(path).ok()?;
+    let mut parsed = parse_controller_yaml_rich(&content);
+    // The shared yaml parser keeps any host:port. FlClash must not treat a
+    // non-local address as permission to dial 127.0.0.1 on that port.
+    if let Some(raw) = yaml_external_controller_value(&content) {
+        match classify_controller_bind(&raw) {
+            ControllerBind::Closed => {
+                parsed.port = None;
+                parsed.tcp_ec_blank = true;
+                parsed.tcp_ec_remote = false;
+            }
+            ControllerBind::Local(port) => {
+                parsed.port = Some(port);
+                parsed.tcp_ec_blank = false;
+                parsed.tcp_ec_remote = false;
+            }
+            ControllerBind::Remote => {
+                parsed.port = None;
+                parsed.tcp_ec_blank = false;
+                parsed.tcp_ec_remote = true;
+            }
+        }
+    }
+    Some(parsed)
+}
+
+fn yaml_external_controller_value(content: &str) -> Option<String> {
+    let re = Regex::new(r"(?m)^external-controller:[ \t]*(.*?)[ \t]*(?:#.*)?$").ok()?;
+    let raw = re.captures(content)?.get(1)?.as_str().trim();
+    let unquoted = if raw.len() >= 2 {
+        let b = raw.as_bytes();
+        if (b[0] == b'\'' && b[b.len() - 1] == b'\'') || (b[0] == b'"' && b[b.len() - 1] == b'"') {
+            raw[1..raw.len() - 1].trim()
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+    Some(unquoted.to_string())
+}
+
+fn collect_flclash(
     pref_paths: &[String],
     yaml_paths: &[String],
-    default_port: u16,
-    default_mixed: u16,
-) -> DiscoverResult {
+) -> (ParsedControllerYaml, Vec<String>) {
     let mut parsed = ParsedControllerYaml::default();
     let mut sources: Vec<String> = Vec::new();
 
@@ -1050,20 +1145,18 @@ pub fn discover_flclash_with_paths(
     for raw in yaml_paths {
         let path = expand_path_str(raw);
         let is_file = crate::safe_fs::is_file(&path);
-        // 与原来的 `if is_file { … } else if path.is_dir() { … }` 等价：只有不是文件时才查 is_dir
         let is_dir = !is_file && crate::safe_fs::is_dir(&path);
         if is_file {
-            if let Some(p) = read_and_parse(&path) {
+            if let Some(p) = read_flclash_yaml(&path) {
                 sources.push(path.display().to_string());
                 merge_parsed(&mut parsed, p);
             }
         } else if is_dir {
             let cfg_yaml = path.join("config.yaml");
-            let cfg_is_file = crate::safe_fs::is_file(&cfg_yaml);
-            if cfg_is_file {
+            if crate::safe_fs::is_file(&cfg_yaml) {
                 let disp = cfg_yaml.display().to_string();
                 if !sources.contains(&disp) {
-                    if let Some(p) = read_and_parse(&cfg_yaml) {
+                    if let Some(p) = read_flclash_yaml(&cfg_yaml) {
                         sources.push(disp);
                         merge_parsed(&mut parsed, p);
                     }
@@ -1071,19 +1164,34 @@ pub fn discover_flclash_with_paths(
             }
         }
     }
+    (parsed, sources)
+}
 
+fn flclash_source_label(parsed: &ParsedControllerYaml, sources: &[String]) -> SourceLabel {
+    if sources.is_empty() {
+        SourceLabel::new("flclash", "defaults".into())
+    } else if parsed.tcp_ec_remote && parsed.port.is_none() {
+        SourceLabel::files("flclash-ec-remote", sources)
+    } else if parsed.tcp_ec_blank && parsed.port.is_none() {
+        SourceLabel::files("flclash-ec-disabled", sources)
+    } else {
+        SourceLabel::files("flclash", sources)
+    }
+}
+
+/// Discover FlClash controller from preferences (`.plist` / `shared_preferences.json`)
+/// and runtime `config.yaml` files.
+pub fn discover_flclash_with_paths(
+    pref_paths: &[String],
+    yaml_paths: &[String],
+    default_port: u16,
+    default_mixed: u16,
+) -> DiscoverResult {
+    let (parsed, sources) = collect_flclash(pref_paths, yaml_paths);
     let port = parsed.port.unwrap_or(default_port);
     let mixed = parsed.mixed_port.unwrap_or(default_mixed);
+    let source = flclash_source_label(&parsed, &sources).finish();
     let secret = parsed.secret;
-
-    let source = if sources.is_empty() {
-        SourceLabel::new("flclash", "defaults".into())
-    } else if parsed.tcp_ec_blank && parsed.port.is_none() {
-        SourceLabel::files("flclash-ec-disabled", &sources)
-    } else {
-        SourceLabel::files("flclash", &sources)
-    }
-    .finish();
 
     DiscoverResult {
         host: "127.0.0.1".into(),
@@ -1790,20 +1898,46 @@ mixed-port: 7897
     }
 
     #[test]
-    fn flclash_tcp_eligible_requires_open_controller_and_no_verge_port_collision() {
+    fn flclash_tcp_eligible_uses_explicit_local_port_only() {
         let src = r"flclash:C:\Users\ada\AppData\Roaming\com.follow\clash\shared_preferences.json";
-        assert!(flclash_tcp_eligible(src, 9090, 9090, None));
-        assert!(flclash_tcp_eligible(src, 9090, 9090, Some(9097)));
-        assert!(!flclash_tcp_eligible("flclash:defaults", 9090, 9090, None));
+        assert!(flclash_tcp_eligible(src, Some(19090), 19090));
+        assert!(!flclash_tcp_eligible(src, Some(19090), 9090));
+        assert!(!flclash_tcp_eligible(src, None, 9090));
+        assert!(!flclash_tcp_eligible("flclash:defaults", Some(9090), 9090));
         assert!(!flclash_tcp_eligible(
-            "flclash-ec-disabled:C:\\Users\\ada\\AppData\\Roaming\\com.follow\\clash\\shared_preferences.json",
+            "flclash-ec-disabled:C:\\Users\\ada\\shared_preferences.json",
+            Some(9090),
             9090,
-            9090,
-            None,
         ));
-        assert!(!flclash_tcp_eligible(src, 9090, 9091, None));
-        assert!(!flclash_tcp_eligible(src, 9090, 9090, Some(9090)));
-        assert!(!flclash_tcp_eligible("verge-config:x", 9097, 9097, None));
+        assert!(!flclash_tcp_eligible(
+            "flclash-ec-remote:C:\\Users\\ada\\shared_preferences.json",
+            None,
+            9090,
+        ));
+        assert_eq!(
+            classify_controller_bind("127.0.0.1:19090"),
+            ControllerBind::Local(19090)
+        );
+        assert_eq!(
+            classify_controller_bind("[::1]:9090"),
+            ControllerBind::Local(9090)
+        );
+        assert_eq!(
+            classify_controller_bind("0.0.0.0:9090"),
+            ControllerBind::Local(9090)
+        );
+        assert!(matches!(
+            classify_controller_bind("192.168.1.9:9090"),
+            ControllerBind::Remote
+        ));
+        assert!(matches!(
+            classify_controller_bind(""),
+            ControllerBind::Closed
+        ));
+        assert!(matches!(
+            classify_controller_bind("close"),
+            ControllerBind::Closed
+        ));
     }
 
     #[test]
@@ -1830,6 +1964,54 @@ mixed-port: 7897
             &verge,
             "FlClashCore.exe",
         ));
+    }
+
+    #[test]
+    fn flclash_remote_controller_is_not_dialed_on_loopback_and_spaces_round_trip() {
+        let tmp = std::env::temp_dir().join(format!("clash assist flclash {}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pref = tmp.join("shared_preferences.json");
+        crate::safe_fs::write_for_test(
+            &pref,
+            br#"{"flutter.config":"{\"patchClashConfig\":{\"external-controller\":\"192.168.1.9:19090\",\"secret\":\"remote-secret\"}}"}"#,
+        )
+        .unwrap();
+        let remote = discover_flclash_with_paths(&[pref.display().to_string()], &[], 9090, 7890);
+        assert!(
+            remote.source.starts_with("flclash-ec-remote:"),
+            "{}",
+            remote.source
+        );
+        assert!(!flclash_tcp_eligible(&remote.source, None, 19090));
+        assert!(!remote.source.contains("remote-secret"));
+
+        crate::safe_fs::write_for_test(
+            &pref,
+            br#"{"flutter.config":"{\"patchClashConfig\":{\"external-controller\":\"127.0.0.1:19090\",\"secret\":\"local-secret\"}}"}"#,
+        )
+        .unwrap();
+        let yaml = tmp.join("config.yaml");
+        crate::safe_fs::write_for_test(
+            &yaml,
+            b"external-controller: 10.1.2.3:9090\nsecret: yaml-secret\nmixed-port: 7890\n",
+        )
+        .unwrap();
+        let local = discover_flclash_with_paths(
+            &[pref.display().to_string()],
+            &[yaml.display().to_string()],
+            9090,
+            7890,
+        );
+        assert_eq!(
+            local.port, 19090,
+            "prefs local port wins over a remote yaml"
+        );
+        assert!(local.source.starts_with("flclash:"), "{}", local.source);
+        assert!(flclash_tcp_eligible(&local.source, Some(19090), 19090));
+        assert!(!flclash_tcp_eligible(&local.source, Some(19090), 9090));
+        assert!(pref.display().to_string().contains(' '));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

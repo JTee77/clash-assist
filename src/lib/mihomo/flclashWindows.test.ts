@@ -83,6 +83,9 @@ describe("Windows FlClash 发现提示", () => {
     expect(flclashLocalMessage(WIN_SOURCE, "监听者校验失败：image-mismatch：FlClash.exe")).toContain(
       "FlClashCore",
     );
+    expect(flclashLocalMessage("flclash-ec-remote:C:\\x\\shared_preferences.json")).toContain(
+      "不是本机地址",
+    );
 
     h.invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "discover_mihomo_for_client") {

@@ -31,6 +31,13 @@ Windows therefore:
 4. Treats an open controller with nothing listening as “FlClash is not running”.
 5. Connects with TCP to `127.0.0.1` only after the listener is the current user’s `FlClashCore.exe`.
 6. Sends the secret from those files, and only after that check. The secret is not returned to the webview. A subscription URL in `config.yaml` is not copied into the source label or the discovery log.
-7. Does not use this path when Verge’s yaml explicitly claims the same TCP port, and does not add `FlClashCore.exe` to the Verge image list. Verge’s named-pipe checks and the Verge TCP secret gate are unchanged.
+7. Accepts a non-default port only when the address is loopback or a wildcard (`127.0.0.1`, `localhost`, `::1`, `0.0.0.0`, `::`). A LAN or public address is not dialed, and that port is not reused on `127.0.0.1`.
+8. If Verge's yaml names the same TCP port, the listener decides. `FlClashCore.exe` owned by the current user gets the FlClash secret. `verge-mihomo.exe` stays on the Verge path and does not receive that secret. Any other image or user is refused with no bytes sent. Verge's named-pipe checks and the Verge TCP secret gate are unchanged.
 
 `FlClash.exe` itself is not accepted as the listener. If a future FlClash build moves the core into the UI process, this check will refuse the connection until the allow-list is updated from upstream.
+
+## Limits that remain
+
+- The image check is the file name, same as Verge. A process the current user runs as `FlClashCore.exe` from any folder, including a portable unzip, is accepted. Another user's process is not. Pinning one install directory would miss portable copies.
+- The process handle is held until the post-connect PID check, same as Verge, so a PID recycled between the check and the connect is rejected.
+- This was not run against an installed FlClash on Windows. Paths with spaces are covered by a fixture. A build that does not use `%APPDATA%\com.follow\clash` is not detected.
