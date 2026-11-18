@@ -279,7 +279,53 @@ pub fn flclash_preference_paths() -> Vec<String> {
     ]
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows FlClash data directory.
+///
+/// Flutter `path_provider` `getApplicationSupportDirectory` is
+/// `FOLDERID_RoamingAppData` + VERSIONINFO CompanyName + ProductName.
+/// `windows/runner/Runner.rc` in chen08209/FlClash (`be847366`, 2026-11) sets
+/// CompanyName `com.follow` and ProductName `clash`, so the directory is
+/// `%APPDATA%\com.follow\clash`. Upstream issues #1770 and #2126 show the same
+/// path, including `shared_preferences.json` and `config.yaml` (`lib/common/path.dart`).
+/// Portable builds use this directory too (issue #1882). The REST controller is
+/// TCP only (`ExternalControllerStatus`: closed, or `127.0.0.1:9090`); the core
+/// process is `FlClashCore.exe` next to `FlClash.exe`. There is no named pipe.
+#[cfg(any(windows, test))]
+pub fn flclash_windows_roaming_dir(roaming: &std::path::Path) -> PathBuf {
+    roaming.join("com.follow").join("clash")
+}
+
+#[cfg(any(windows, test))]
+pub fn flclash_windows_pref_paths(roaming: Option<PathBuf>) -> Vec<String> {
+    let Some(roaming) = roaming else {
+        return Vec::new();
+    };
+    vec![flclash_windows_roaming_dir(&roaming)
+        .join("shared_preferences.json")
+        .display()
+        .to_string()]
+}
+
+#[cfg(any(windows, test))]
+pub fn flclash_windows_yaml_paths(roaming: Option<PathBuf>) -> Vec<String> {
+    let Some(roaming) = roaming else {
+        return Vec::new();
+    };
+    let dir = flclash_windows_roaming_dir(&roaming);
+    vec![
+        dir.join("config.yaml").display().to_string(),
+        dir.display().to_string(),
+    ]
+}
+
+#[cfg(windows)]
+pub fn flclash_preference_paths() -> Vec<String> {
+    flclash_windows_pref_paths(dirs::config_dir())
+}
+
+/// Linux and other non-macOS, non-Windows targets keep the historical placeholder
+/// paths. Windows does not: those macOS locations never exist there.
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn flclash_preference_paths() -> Vec<String> {
     vec![
         "~/Library/Application Support/com.follow.clash/shared_preferences.json".into(),
@@ -338,9 +384,8 @@ pub fn client_discovery(client_id: &str) -> Option<ClientDiscovery> {
     Some(spec)
 }
 
-/// Non-macOS placeholder table. Only `clashx_meta`'s Linux-style path is kept
-/// (it is valid on Linux); other clients get TCP defaults only until a real
-/// Windows/Linux port tunes their locations.
+/// Non-macOS table. Windows FlClash uses `%APPDATA%\com.follow\clash`
+/// (see [`flclash_windows_roaming_dir`]). Other clients stay TCP defaults.
 #[cfg(not(target_os = "macos"))]
 pub fn client_discovery(client_id: &str) -> Option<ClientDiscovery> {
     let spec = match client_id {
@@ -351,7 +396,23 @@ pub fn client_discovery(client_id: &str) -> Option<ClientDiscovery> {
             sock_candidates: vec![],
             source_prefix: "clashx_meta",
         },
-        "flclash" | "mihomo_party" | "nyanpasu" => ClientDiscovery {
+        #[cfg(windows)]
+        "flclash" => ClientDiscovery {
+            yaml_paths: flclash_windows_yaml_paths(dirs::config_dir()),
+            default_port: 9090,
+            default_mixed: 7890,
+            sock_candidates: vec![],
+            source_prefix: "flclash",
+        },
+        #[cfg(not(windows))]
+        "flclash" => ClientDiscovery {
+            yaml_paths: vec![],
+            default_port: 9090,
+            default_mixed: 7890,
+            sock_candidates: vec![],
+            source_prefix: "placeholder",
+        },
+        "mihomo_party" | "nyanpasu" => ClientDiscovery {
             yaml_paths: vec![],
             default_port: 9090,
             default_mixed: 7890,
@@ -517,5 +578,59 @@ mod tests {
         // Verge is handled by discover_controller, not the table.
         assert!(client_discovery("verge").is_none());
         assert!(client_discovery("nope").is_none());
+    }
+
+    #[test]
+    fn windows_flclash_layout_is_roaming_com_follow_clash() {
+        let roaming = std::path::PathBuf::from("roaming-root");
+        let dir = flclash_windows_roaming_dir(&roaming);
+        assert_eq!(dir, roaming.join("com.follow").join("clash"));
+        let prefs = flclash_windows_pref_paths(Some(roaming.clone()));
+        assert_eq!(prefs.len(), 1);
+        assert!(prefs[0].ends_with(
+            std::path::Path::new("com.follow")
+                .join("clash")
+                .join("shared_preferences.json")
+                .to_string_lossy()
+                .as_ref()
+        ));
+        let yaml = flclash_windows_yaml_paths(Some(roaming));
+        assert_eq!(yaml.len(), 2);
+        assert!(yaml[0].ends_with(
+            std::path::Path::new("com.follow")
+                .join("clash")
+                .join("config.yaml")
+                .to_string_lossy()
+                .as_ref()
+        ));
+        assert!(flclash_windows_pref_paths(None).is_empty());
+        assert!(flclash_windows_yaml_paths(None).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_flclash_discovery_uses_roaming_and_not_verge_pipes() {
+        let spec = client_discovery("flclash").expect("flclash");
+        assert_eq!(spec.default_port, 9090);
+        assert_eq!(spec.default_mixed, 7890);
+        assert!(spec.sock_candidates.is_empty());
+        assert_eq!(spec.source_prefix, "flclash");
+        let roaming = dirs::config_dir().expect("roaming");
+        let dir = flclash_windows_roaming_dir(&roaming);
+        assert_eq!(
+            spec.yaml_paths,
+            flclash_windows_yaml_paths(Some(roaming.clone()))
+        );
+        assert!(spec.yaml_paths.iter().any(|p| p.contains("com.follow")));
+        assert!(!spec.yaml_paths.iter().any(|p| p.contains("verge")));
+        assert_eq!(
+            flclash_preference_paths(),
+            flclash_windows_pref_paths(Some(roaming))
+        );
+        assert!(dir.join("shared_preferences.json").ends_with(
+            std::path::Path::new("com.follow")
+                .join("clash")
+                .join("shared_preferences.json")
+        ));
     }
 }

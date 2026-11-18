@@ -37,6 +37,7 @@ import {
   clientLabel,
   clientPreset,
   clientUnreachableHint,
+  flclashLocalMessage,
   mihomoPartySock,
   vergeLikeDefault,
 } from "./clients";
@@ -77,14 +78,16 @@ function is2xx(status: number): boolean {
   return status >= 200 && status < 300;
 }
 
-async function rustHttp(
+type RustCall = { http: HttpResult | null; error: string | null };
+
+async function rustHttpCall(
   config: ControllerConfig,
   method: string,
   path: string,
   body?: string,
   timeoutMs = 3000,
-): Promise<HttpResult | null> {
-  if (!isTauri()) return null;
+): Promise<RustCall> {
+  if (!isTauri()) return { http: null, error: null };
   try {
     const res = await invoke<{ status: number; body: string }>("mihomo_http", {
       req: {
@@ -103,10 +106,21 @@ async function rustHttp(
     } catch {
       json = null;
     }
-    return { status: res.status, json, raw: res.body };
-  } catch {
-    return null;
+    return { http: { status: res.status, json, raw: res.body }, error: null };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e ?? "");
+    return { http: null, error };
   }
+}
+
+async function rustHttp(
+  config: ControllerConfig,
+  method: string,
+  path: string,
+  body?: string,
+  timeoutMs = 3000,
+): Promise<HttpResult | null> {
+  return (await rustHttpCall(config, method, path, body, timeoutMs)).http;
 }
 
 async function unixHttp(
@@ -425,12 +439,14 @@ export async function discoverAndProbe(
     }
   }
 
+  const flclashMessage =
+    clientId === "flclash" ? result.message : clientUnreachableHint(clientId, config.source);
   return {
     ...result,
-    message: clientUnreachableHint(clientId, config.source),
+    message: flclashMessage,
     proxiesError:
       clientId === "flclash"
-        ? clientUnreachableHint("flclash", config.source)
+        ? flclashMessage
         : `请确认【${label}】已打开并已连接节点`,
   };
 }
@@ -561,12 +577,13 @@ async function probeWithConfig(
   const label = clientId ? clientLabel(clientId) : "客户端";
   const preferSock = opts?.preferSock === true && trySock;
 
-  const runTcp = async () => rustHttp(config, "GET", "/version", undefined, 1500);
+  const runTcp = async () => rustHttpCall(config, "GET", "/version", undefined, 1500);
   const runSock = async () =>
     trySock ? unixHttp(config, "GET", "/version", undefined, 2000) : null;
 
   let viaTcp: HttpResult | null = null;
   let viaSock: HttpResult | null = null;
+  let tcpError: string | null = null;
 
   if (preferSock) {
     viaSock = await runSock();
@@ -576,9 +593,13 @@ async function probeWithConfig(
     if (viaSock && is2xx(viaSock.status)) {
       return await connectedState(config, label);
     }
-    viaTcp = await runTcp();
+    const tcp = await runTcp();
+    viaTcp = tcp.http;
+    tcpError = tcp.error;
   } else {
-    viaTcp = await runTcp();
+    const tcp = await runTcp();
+    viaTcp = tcp.http;
+    tcpError = tcp.error;
     if (viaTcp && (viaTcp.status === 401 || viaTcp.status === 403)) {
       return unauthorizedState(config);
     }
@@ -620,11 +641,15 @@ async function probeWithConfig(
     };
   }
 
+  const message =
+    clientId === "flclash"
+      ? flclashLocalMessage(config.source, tcpError)
+      : clientId
+        ? clientUnreachableHint(clientId, config.source)
+        : "请先打开并连上你的VPN软件，再点「刷新节点」";
   return {
     status: "unreachable",
-    message: clientId
-      ? clientUnreachableHint(clientId, config.source)
-      : "请先打开并连上你的VPN软件，再点「刷新节点」",
+    message,
     config,
     currentProxy: null,
     usingMock: false,

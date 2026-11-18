@@ -160,6 +160,35 @@ pub async fn http_via_tcp(
 ) -> Result<UnixHttpResult, String> {
     super::transport::check_raw_request(method, path)?;
     let addr = loopback_addr(host, port)?;
+    // FlClash 的外部控制器是回环 TCP，没有 Verge 那种命名管道。只在配置明确开启、
+    // 端口不与 Verge 显式 TCP 端口冲突时走这条路径，并且不看 Verge 管道的 M-3 状态。
+    // secret 来自 FlClash 配置文件，不采用前端传入的值，也不读取 Verge yaml。
+    // Bearer 只在监听进程被证明是当前用户的 FlClashCore.exe 之后发出。
+    // Verge 的 secret 闸门保持关闭。
+    let fl_secret = tauri::async_runtime::spawn_blocking(move || {
+        super::discovery::flclash_tcp_secret(addr.port())
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(fl_secret) = fl_secret {
+        let policy = TrustPolicy::for_images(super::trust::FLCLASH_CORE_IMAGES);
+        let bearer = (!fl_secret.is_empty()).then_some(fl_secret);
+        return http_via_tcp_with(
+            &policy,
+            true,
+            super::trust::TcpFallback::Allowed { denied_seen: false },
+            addr,
+            method,
+            path,
+            body,
+            bearer.as_deref(),
+            timeout_ms,
+            "flclash-tcp(listener-verified)",
+        )
+        .await
+        .map(|(r, _)| r);
+    }
     let fallback = fallback_state().await;
     let effective = if secret.is_empty() {
         tauri::async_runtime::spawn_blocking(super::discovery::windows_yaml_secret)
@@ -180,6 +209,7 @@ pub async fn http_via_tcp(
         body,
         effective.as_deref(),
         timeout_ms,
+        "verge-tcp(listener-verified)",
     )
     .await
     .map(|(r, _)| r)
@@ -198,6 +228,7 @@ pub(crate) async fn http_via_tcp_with(
     body: Option<&str>,
     secret: Option<&str>,
     timeout_ms: u64,
+    label: &'static str,
 ) -> Result<(UnixHttpResult, &'static str), String> {
     super::transport::check_raw_request(method, path)?;
     #[cfg(test)]
@@ -218,7 +249,7 @@ pub(crate) async fn http_via_tcp_with(
                 crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
                 return Err(why);
             }
-            (*pid, "verge-tcp(listener-verified)")
+            (*pid, label)
         }
         // tcp_send_plan 只对 Verified 返回发送计划。
         _ => return Err("内部错误：未验证的监听者不应进入发送路径".to_string()),

@@ -17,6 +17,11 @@ pub const ERROR_ACCESS_DENIED: u32 = 5;
 /// 生产环境的 Verge 内核映像白名单（§2.2 L2）。只比较文件名，大小写不敏感。
 pub const VERGE_CORE_IMAGES: &[&str] = &["verge-mihomo.exe", "verge-mihomo-alpha.exe"];
 
+/// FlClash 桌面端把 Mihomo 放在独立进程 `FlClashCore.exe`（`lib/common/path.dart`
+/// 的 `corePath`）。外部控制器监听在这个进程上，不在 `FlClash.exe` 上。
+/// 只比较文件名，大小写不敏感。不并入 [`VERGE_CORE_IMAGES`]。
+pub const FLCLASH_CORE_IMAGES: &[&str] = &["FlClashCore.exe"];
+
 /// S-2 诊断里视为「宽泛主体」的 SID：BU（Users）、AU（Authenticated Users）、WD（Everyone）。
 const BROAD_TRUSTEES: &[(&str, &str)] = &[
     ("S-1-5-32-545", "BU"),
@@ -1027,12 +1032,16 @@ pub struct TrustPolicy {
 }
 
 impl TrustPolicy {
-    pub fn production() -> Self {
+    pub fn for_images(images: &[&str]) -> Self {
         TrustPolicy {
-            images: VERGE_CORE_IMAGES.iter().map(|s| s.to_string()).collect(),
+            images: images.iter().map(|s| (*s).to_string()).collect(),
             #[cfg(test)]
             overrides: Overrides::default(),
         }
+    }
+
+    pub fn production() -> Self {
+        Self::for_images(VERGE_CORE_IMAGES)
     }
 
     /// §2.2 判定（测试构建中先套上 overrides）。

@@ -681,6 +681,54 @@ pub(crate) fn windows_yaml_secret() -> Option<String> {
     (!parsed.secret.is_empty()).then_some(parsed.secret)
 }
 
+/// 这次 TCP 端口是否只属于已开启外部控制器的 FlClash。
+///
+/// `flclash:defaults` 与 `flclash-ec-disabled` 不认领端口。Verge yaml 显式写出了同一个
+/// TCP 端口时也不认领，避免把 FlClash 的 secret 发到 Verge 的监听者，或跳过 Verge 的管道校验。
+#[cfg(any(windows, test))]
+pub(crate) fn flclash_tcp_eligible(
+    source: &str,
+    discovered_port: u16,
+    request_port: u16,
+    verge_explicit_port: Option<u16>,
+) -> bool {
+    if request_port == 0 || request_port != discovered_port {
+        return false;
+    }
+    let base = source.split(';').next().unwrap_or(source);
+    if base.starts_with("flclash-ec-disabled") || base == "flclash:defaults" {
+        return false;
+    }
+    if !base.starts_with("flclash:") {
+        return false;
+    }
+    verge_explicit_port != Some(request_port)
+}
+
+/// FlClash 外部控制器的 secret。`None` 表示这个端口不走 FlClash TCP。
+/// `Some("")` 表示配置里开了控制器但没有 secret。secret 只留在 Rust 侧。
+#[cfg(windows)]
+pub(crate) fn flclash_tcp_secret(port: u16) -> Option<String> {
+    let spec = platform::client_discovery("flclash")?;
+    let prefs = platform::flclash_preference_paths();
+    let found = discover_flclash_with_paths(
+        &prefs,
+        &spec.yaml_paths,
+        spec.default_port,
+        spec.default_mixed,
+    );
+    let (verge, verge_files) = read_verge_parsed();
+    let verge_port = if verge_files.is_empty() {
+        None
+    } else {
+        verge.port
+    };
+    if !flclash_tcp_eligible(&found.source, found.port, port, verge_port) {
+        return None;
+    }
+    Some(found.secret)
+}
+
 /// 把 `secret:` 行的值替换为占位符（任意缩进）。
 #[cfg(any(windows, test))]
 fn redact_secret_lines(content: &str) -> String {
@@ -1740,6 +1788,98 @@ mixed-port: 7897
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn flclash_tcp_eligible_requires_open_controller_and_no_verge_port_collision() {
+        let src = r"flclash:C:\Users\ada\AppData\Roaming\com.follow\clash\shared_preferences.json";
+        assert!(flclash_tcp_eligible(src, 9090, 9090, None));
+        assert!(flclash_tcp_eligible(src, 9090, 9090, Some(9097)));
+        assert!(!flclash_tcp_eligible("flclash:defaults", 9090, 9090, None));
+        assert!(!flclash_tcp_eligible(
+            "flclash-ec-disabled:C:\\Users\\ada\\AppData\\Roaming\\com.follow\\clash\\shared_preferences.json",
+            9090,
+            9090,
+            None,
+        ));
+        assert!(!flclash_tcp_eligible(src, 9090, 9091, None));
+        assert!(!flclash_tcp_eligible(src, 9090, 9090, Some(9090)));
+        assert!(!flclash_tcp_eligible("verge-config:x", 9097, 9097, None));
+    }
+
+    #[test]
+    fn flclash_core_image_is_not_a_verge_image() {
+        let fl = super::super::trust::FLCLASH_CORE_IMAGES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>();
+        let verge = super::super::trust::VERGE_CORE_IMAGES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>();
+        assert!(super::super::trust::image_allowed(
+            &fl,
+            r"D:\Program Files\FlClash\FlClashCore.exe",
+        ));
+        assert!(super::super::trust::image_allowed(&fl, "flclashcore.exe"));
+        assert!(!super::super::trust::image_allowed(
+            &fl,
+            r"D:\Program Files\FlClash\FlClash.exe",
+        ));
+        assert!(!super::super::trust::image_allowed(&fl, "verge-mihomo.exe"));
+        assert!(!super::super::trust::image_allowed(
+            &verge,
+            "FlClashCore.exe",
+        ));
+    }
+
+    #[test]
+    fn flclash_discovery_hides_subscription_urls_and_reports_missing_files() {
+        let tmp =
+            std::env::temp_dir().join(format!("clash-assist-flclash-win-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let missing = discover_flclash_with_paths(
+            &[tmp.join("shared_preferences.json").display().to_string()],
+            &[tmp.join("config.yaml").display().to_string()],
+            9090,
+            7890,
+        );
+        assert_eq!(missing.source, "flclash:defaults");
+        assert!(missing.secret.is_empty());
+        assert!(missing.sock_path.is_none());
+
+        let pref = tmp.join("shared_preferences.json");
+        let yaml = tmp.join("config.yaml");
+        let sub = "https://example.invalid/sub?token=SHOULD-NOT-LEAK";
+        crate::safe_fs::write_for_test(
+            &pref,
+            br#"{"flutter.config":"{\"patchClashConfig\":{\"mixed-port\":7890,\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"disk-secret-not-for-ui\"}}"}"#,
+        )
+        .expect("pref");
+        let yaml_body = format!(
+            "mixed-port: 7890\nexternal-controller: 127.0.0.1:9090\nsecret: disk-secret-not-for-ui\nproxy-providers:\n  sub:\n    type: http\n    url: {sub}\n"
+        );
+        crate::safe_fs::write_for_test(&yaml, yaml_body.as_bytes()).expect("yaml");
+        let found = discover_flclash_with_paths(
+            &[pref.display().to_string()],
+            &[yaml.display().to_string()],
+            9090,
+            7890,
+        );
+        assert_eq!(found.port, 9090);
+        assert_eq!(found.secret, "disk-secret-not-for-ui");
+        assert!(found.source.starts_with("flclash:"), "{}", found.source);
+        assert!(
+            !found.source.contains("SHOULD-NOT-LEAK"),
+            "{}",
+            found.source
+        );
+        assert!(!found.source.contains(sub), "{}", found.source);
+        let line = selected_log_line(&found);
+        assert!(!line.contains("disk-secret"), "{line}");
+        assert!(!line.contains("SHOULD-NOT-LEAK"), "{line}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 /// P-1：Windows 上发现结果不得携带 secret（§2.1 规则 4 / C-1 / C-4）。
@@ -1771,6 +1911,29 @@ mod windows_secret_tests {
             assert!(discover_for_client(id).secret.is_empty(), "{id}");
         }
         assert!(discover_controller().secret.is_empty());
+    }
+
+    #[test]
+    fn flclash_discover_withholds_secret_after_a_successful_read() {
+        let tmp = std::env::temp_dir().join(format!(
+            "clash-assist-flclash-withhold-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pref = tmp.join("shared_preferences.json");
+        crate::safe_fs::write_for_test(
+            &pref,
+            br#"{"flutter.config":"{\"patchClashConfig\":{\"external-controller\":\"127.0.0.1:9090\",\"secret\":\"ui-must-not-see\"}}"}"#,
+        )
+        .unwrap();
+        let raw = discover_flclash_with_paths(&[pref.display().to_string()], &[], 9090, 7890);
+        assert_eq!(raw.secret, "ui-must-not-see");
+        let out = withhold_secret_on_windows(raw);
+        assert!(out.secret.is_empty());
+        assert!(out.source.starts_with("flclash:"));
+        assert!(!out.source.contains("ui-must-not-see"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

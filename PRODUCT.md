@@ -1,23 +1,23 @@
-# Clash伴侣 / Clash Assist — 产品说明（v0.3.4）
+# Clash伴侣 / Clash Assist — 产品说明（v0.3.5）
 
 ## 定位
 **Clash伴侣**（Clash Assist）是 macOS（Apple Silicon）与 Windows 10 / 11（x64）的桌面应用，诊断代理**出口质量**——不只是「能不能打开国外网站」。
 
 一句话：**看看你的代理会不会漏 DNS、关心的服务能不能用、实际够不够快。**
 
-**不提供**任何节点或 VPN 服务。当前支持 **Clash Verge / Clash Verge Rev** 与 **FlClash**。
+**不提供**任何节点或 VPN 服务。macOS 与 Windows 都支持 **Clash Verge / Clash Verge Rev** 与 **FlClash**。
 
 许可证：**GPL-3.0**（GNU 通用公共许可证第 3 版；可商用，分发改版须同样开源）。
 
 ## 受众
-- 已在 macOS 或 Windows 上使用 Clash Verge / Clash Verge Rev 的用户，以及使用 FlClash 的 Mac 用户
+- 已在 macOS 或 Windows 上使用 Clash Verge / Clash Verge Rev 或 FlClash 的用户
 - 需要比「能开 Google」更深的检查
 - 普通用户使用 GUI；进阶用户可在 Mac 上使用 CLI
 
 ## 平台
 - **macOS**：仅 Apple Silicon（arm64），未经公证（v1 不做 Intel）
-- **Windows**：Windows 10 / 11 x64。安装版支持应用内一键更新，便携版不支持。目前只支持 Clash Verge Rev
-- **FlClash** 与命令行工具目前仅 macOS
+- **Windows**：Windows 10 / 11 x64。安装版支持应用内一键更新，便携版不支持。支持 Clash Verge Rev 与 FlClash
+- 命令行工具目前仅 macOS
 - Intel Mac 与移动端不在范围内
 - 分发：GitHub Releases（macOS `.dmg`，Windows 安装包 `.exe` 与便携 zip）
 
@@ -38,8 +38,9 @@
 
 ## 近期版本更新
 
-**当前版本：0.3.4**（产品名 Clash伴侣 / Clash Assist）
+**当前版本：0.3.5**（产品名 Clash伴侣 / Clash Assist）
 
+- **0.3.5**：Windows 版支持 FlClash（与 Mac 版同一套刷新、当前节点、测节点和测完切回）。外部控制器仍需在 FlClash「设置 → 常规 → 入站」里打开。命令行工具仍只在 Mac 上提供。
 - **0.3.4**：规则模式下测节点，不再切到错误的策略组。
 - **0.3.3**：去掉诊断报告导出，以及把结果存成图片和文字摘要的分享。发送错误报告成功后不再误报失败；这个按钮只在需要开发者看的错误上出现。发出的报告不再附带非官方说明和仓库地址。
 - **0.3.2**：可以把去掉订阅地址、密钥、IP 和本机路径的诊断报告存成 Markdown；出错时先预览再发送，失败可以重试，也不会自动发送；可以把不含节点名和 IP 的结果存成图片，并附上一段可分享的说明。
@@ -78,7 +79,7 @@
 刷新节点后先 `runLightGate`：客户端是否连上、海外是否大致通、是否像未走代理直连。不过则口语提示，不进入节点测评。
 
 ### CLI（0.1.12 骨架；0.1.16 收口 + 最小 serve；0.1.17 面向 AI 助手补齐）
-与 GUI **共用** `lib/runner` + `egress` + `score` + `mihomo`。**支持 `--client verge`**（Clash Verge / Clash Verge Rev）与 **`--client flclash`**（FlClash）。
+与 GUI **共用** `lib/runner` + `egress` + `score` + `mihomo`。**支持 `--client verge`**（Clash Verge / Clash Verge Rev）与 **`--client flclash`**（FlClash）。命令行目前只在 macOS 上提供。
 
 ```text
 clash-assist --cli discover --client verge

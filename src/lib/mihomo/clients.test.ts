@@ -9,16 +9,15 @@ import {
 } from "./clients";
 
 describe("Windows 客户端列表与 sock 候选（windows-plan §2.7）", () => {
-  it("Windows 只保留 Clash Verge；macOS 保持 Verge + FlClash", () => {
-    expect(clientOptionsFor(true).map((o) => o.id)).toEqual(["verge"]);
+  it("Windows 与 macOS 都提供 Clash Verge 和 FlClash", () => {
+    expect(clientOptionsFor(true).map((o) => o.id)).toEqual(["verge", "flclash"]);
     expect(clientOptionsFor(false).map((o) => o.id)).toEqual(["verge", "flclash"]);
   });
 
-  it("Windows 上存储的 flclash 归一化为 null（强制重新选择）", () => {
+  it("Windows 上存储的 flclash 仍可选", () => {
     expect(normalizeClientId("verge", true)).toBe("verge");
-    expect(normalizeClientId("flclash", true)).toBeNull();
+    expect(normalizeClientId("flclash", true)).toBe("flclash");
     expect(normalizeClientId("flclash", false)).toBe("flclash");
-    // 名称仍可显示（不依赖当前平台的下拉列表）
     expect(clientLabel("flclash")).toBe("FlClash");
   });
 
