@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Liquid Glass icon from precompiled icons/Assets.car (see scripts/build-assets-car.sh) -->
+	<!-- Liquid Glass icon name. tauri-bundler compiles icons/AppIcon.icon into the bundle Assets.car. -->
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<!-- OS-level localized display name: Resources/<lang>.lproj/InfoPlist.strings (src-tauri/locales) -->
