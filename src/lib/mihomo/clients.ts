@@ -146,6 +146,8 @@ const FLCLASH_NOT_RUNNING =
   "已找到 FlClash 的配置，但外部控制器没有在监听。请先打开 FlClash 并连上节点后再点「刷新节点」。";
 const FLCLASH_IMAGE =
   "监听该端口的程序不是 FlClash 内核（FlClashCore），已拒绝连接。请确认「外部控制器」端口没有被其他程序占用，并在 FlClash 中重启后再点「刷新节点」。";
+const FLCLASH_UNVERIFIED =
+  "外部控制器端口上的程序无法确认为你的 FlClash 内核，已拒绝连接。请确认是本机安装的 FlClash 在监听 127.0.0.1:9090 后再点「刷新节点」。";
 const FLCLASH_GENERAL =
   "请确认 FlClash 已打开并连接节点，且在 FlClash「设置 → 常规 → 入站」中开启了「外部控制器」";
 
@@ -167,6 +169,7 @@ export function clientUnreachableHint(id: ClientId, source?: string): string {
  */
 export function flclashLocalMessage(source?: string, detail?: string | null): string {
   if (detail && /image-mismatch/i.test(detail)) return FLCLASH_IMAGE;
+  if (detail && /listener-unverified/i.test(detail)) return FLCLASH_UNVERIFIED;
   const base = flclashBase(source);
   if (base.startsWith("flclash-ec-disabled")) return FLCLASH_EC_DISABLED;
   if (base.startsWith("flclash-ec-remote")) return FLCLASH_EC_REMOTE;

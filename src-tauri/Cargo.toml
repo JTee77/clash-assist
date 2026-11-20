@@ -68,6 +68,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_NetworkManagement_Ndis",      # IF_OPER_STATUS、NET_LUID_LH（IpHelper 结构体依赖）
   "Win32_Networking_WinSock",          # SOCKADDR_INET、AF_INET/AF_INET6/AF_UNSPEC
   "Win32_System_RemoteDesktop",        # WTSEnumerateProcessesExW（规则 4 的 foreign-user 判定，C-4 / F4）
+  "Win32_System_Services",             # FlClashHelperService 的 ImagePath / --owner-sid（Session 0 内核）
 ] }
 
 [profile.release]

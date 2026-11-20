@@ -139,8 +139,32 @@ pub fn nt_path(pid: u32) -> Result<String, FactErr> {
     Ok(from_wide(&buf[..chars]))
 }
 
+/// Toolhelp32 里的父进程 PID。不打开目标进程。
+pub fn parent_pid(pid: u32) -> Result<u32, FactErr> {
+    let pe = snapshot_entry(pid)?;
+    let parent = pe.th32ParentProcessID;
+    if parent == 0 {
+        return Err(FactErr::new("Process32NextW", 1168));
+    }
+    Ok(parent)
+}
+
 /// L2 ③：Toolhelp32 快照里的 szExeFile。
 pub fn snapshot_name(pid: u32) -> Result<String, FactErr> {
+    let pe = snapshot_entry(pid)?;
+    Ok(exe_file(&pe))
+}
+
+fn exe_file(pe: &PROCESSENTRY32W) -> String {
+    let n = pe
+        .szExeFile
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(pe.szExeFile.len());
+    from_wide(&pe.szExeFile[..n])
+}
+
+fn snapshot_entry(pid: u32) -> Result<PROCESSENTRY32W, FactErr> {
     // SAFETY: 普通调用；失败返回 INVALID_HANDLE_VALUE。
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     let snap = owned_handle_invalid(snap, "CreateToolhelp32Snapshot")?;
@@ -154,12 +178,7 @@ pub fn snapshot_name(pid: u32) -> Result<String, FactErr> {
     }
     while ok != 0 {
         if pe.th32ProcessID == pid {
-            let n = pe
-                .szExeFile
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(pe.szExeFile.len());
-            return Ok(from_wide(&pe.szExeFile[..n]));
+            return Ok(pe);
         }
         // SAFETY: 同上。
         ok = unsafe { Process32NextW(snap.as_raw_handle(), &mut pe) };

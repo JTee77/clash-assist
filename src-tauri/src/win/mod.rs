@@ -4,6 +4,7 @@
 //! （spike/pipe-probe/src/win，只读参考），去掉了 JSON 报告，换成 `trust` 的事实类型。
 
 pub mod facts;
+pub mod helper;
 pub mod identity;
 pub mod paths;
 pub mod process;

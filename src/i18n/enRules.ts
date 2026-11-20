@@ -350,6 +350,7 @@ export const EN_RULES: [string, string][] = [
   ["FlClash 的外部控制器不是本机地址，已拒绝连接。请把它改成 127.0.0.1 后再点「刷新节点」。", "FlClash's External Controller is not a local address, so the connection was refused. Set it to 127.0.0.1, then click “Refresh nodes”."],
   ["已找到 FlClash 的配置，但外部控制器没有在监听。请先打开 FlClash 并连上节点后再点「刷新节点」。", "FlClash configuration was found, but its External Controller is not listening. Open FlClash and connect to a node, then click “Refresh nodes”."],
   ["监听该端口的程序不是 FlClash 内核（FlClashCore），已拒绝连接。请确认「外部控制器」端口没有被其他程序占用，并在 FlClash 中重启后再点「刷新节点」。", "The program listening on this port is not the FlClash core (FlClashCore). The connection was refused. Make sure the External Controller port is not used by another program, restart FlClash, then click “Refresh nodes”."],
+  ["外部控制器端口上的程序无法确认为你的 FlClash 内核，已拒绝连接。请确认是本机安装的 FlClash 在监听 127.0.0.1:9090 后再点「刷新节点」。", "The program on the external-controller port could not be confirmed as your FlClash core, so the connection was refused. Make sure the installed FlClash is listening on 127.0.0.1:9090, then click “Refresh nodes”."],
   ["节点列表为空", "Node list is empty"],
   ["mihomo_list_nodes 失败: {0}", "mihomo_list_nodes failed: {0}"],
   ["mihomo_list_nodes 调用失败", "mihomo_list_nodes call failed"],

@@ -137,12 +137,44 @@ fn check_listener_held(
     let v4 = tcp::listeners_v4(addr.port());
     let v6 = tcp::listeners_v6(addr.port());
     let mut facts = OsProcessFacts::new(known);
-    let check = policy.decide_tcp(addr, v4, v6, &mut facts);
+    let mut check = policy.decide_tcp(addr, v4, v6, &mut facts);
     let held = match &check {
         ListenerCheck::Verified { pid, .. } => facts.into_held(*pid),
         _ => None,
     };
+    // Session 0 的 FlClashCore 拒绝 OpenProcess。只在 FlClash 映像策略下，用 Helper
+    // 服务的 owner-sid 与同目录内核补上验证。证明失败仍是 listener-unverified，不建连。
+    // Verge 的 TCP 判定不走这里。
+    let promotion = if held.is_none() && policy_is_flclash(policy) {
+        match check {
+            ListenerCheck::Unverified { pid: Some(pid), .. } => {
+                Some((pid, crate::win::helper::prove_flclash_helper_core(pid)))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some((pid, result)) = promotion {
+        match result {
+            Ok(image) => check = ListenerCheck::VerifiedUnheld { pid, image },
+            Err(why) => {
+                if let ListenerCheck::Unverified { reasons, .. } = &mut check {
+                    reasons.push(format!("helper: {why}"));
+                }
+            }
+        }
+    }
     (check, held)
+}
+
+fn policy_is_flclash(policy: &TrustPolicy) -> bool {
+    policy.images.len() == super::trust::FLCLASH_CORE_IMAGES.len()
+        && policy
+            .images
+            .iter()
+            .zip(super::trust::FLCLASH_CORE_IMAGES)
+            .all(|(got, expect)| got.eq_ignore_ascii_case(expect))
 }
 
 /// 生产入口（`transport::http_via_tcp_async` 在 Windows 上的实现）。
@@ -263,7 +295,7 @@ pub(crate) async fn http_via_tcp_with(
     let (check, held) = check_listener_held(policy, addr);
     let has_secret = secret.is_some_and(|s| !s.is_empty());
     let plan = tcp_send_plan(&check, has_secret, gate_open, &fallback);
-    let (pid, label) = match (&plan, &check) {
+    let (pid, label, recheck_helper) = match (&plan, &check) {
         (TcpPlan::Refuse(why), _) => {
             crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
             return Err(why.clone());
@@ -274,9 +306,10 @@ pub(crate) async fn http_via_tcp_with(
                 crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
                 return Err(why);
             }
-            (*pid, label)
+            (*pid, label, false)
         }
-        // tcp_send_plan 只对 Verified 返回发送计划。
+        (_, ListenerCheck::VerifiedUnheld { pid, .. }) => (*pid, label, true),
+        // tcp_send_plan 只对已验证的监听者返回发送计划。
         _ => return Err("内部错误：未验证的监听者不应进入发送路径".to_string()),
     };
 
@@ -296,6 +329,12 @@ pub(crate) async fn http_via_tcp_with(
         drop(stream);
         crate::append_app_log(&format!("[tcp] {addr} 连接后校验失败：{why}"));
         return Err(why);
+    }
+    if recheck_helper && crate::win::helper::prove_flclash_helper_core(pid).is_err() {
+        drop(stream);
+        let why = "连接后无法再次确认这是当前用户的 FlClash 内核，拒绝（listener-unverified）";
+        crate::append_app_log(&format!("[tcp] {addr} 连接后校验失败：{why}"));
+        return Err(why.to_string());
     }
     let bearer = match plan {
         TcpPlan::SendBearer => secret,

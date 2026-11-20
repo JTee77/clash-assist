@@ -784,6 +784,13 @@ pub enum ListenerCheck {
         pid: u32,
         image: String,
     },
+    /// FlClash 官方 Helper（Session 0、LocalSystem）拉起的 `FlClashCore.exe`。
+    /// 中完整性进程打不开该进程句柄，所以没有可持有的句柄；调用方必须在写出
+    /// 第一个字节之前再用同一组事实复核映像与父进程。
+    VerifiedUnheld {
+        pid: u32,
+        image: String,
+    },
     /// 无法证明是本人的内核（读不到、SYSTEM 服务模式、API 失败等）。`reasons` 只用于日志。
     Unverified {
         pid: Option<u32>,
@@ -976,9 +983,18 @@ pub enum SharedPortRoute {
     Refuse,
 }
 
+pub fn listener_verified(check: &ListenerCheck) -> bool {
+    matches!(
+        check,
+        ListenerCheck::Verified { .. } | ListenerCheck::VerifiedUnheld { .. }
+    )
+}
+
 pub fn shared_port_route(check: &ListenerCheck) -> SharedPortRoute {
     match check {
-        ListenerCheck::Verified { .. } => SharedPortRoute::Flclash,
+        ListenerCheck::Verified { .. } | ListenerCheck::VerifiedUnheld { .. } => {
+            SharedPortRoute::Flclash
+        }
         ListenerCheck::NotListening { .. } => SharedPortRoute::Verge,
         ListenerCheck::Rejected(TcpReject::ImageMismatch { image, .. })
             if VERGE_CORE_IMAGES
@@ -988,6 +1004,124 @@ pub fn shared_port_route(check: &ListenerCheck) -> SharedPortRoute {
             SharedPortRoute::Verge
         }
         _ => SharedPortRoute::Refuse,
+    }
+}
+
+/// FlClash Helper（Session 0）拉起的内核。事实全部由调用方注入，本函数不做系统调用。
+///
+/// 接受条件同时成立：NT 路径与快照文件名都是 `FlClashCore.exe`；父进程快照名是
+/// `FlClashHelperService.exe`，且其 NT 路径与服务注册的映像是同一个文件；内核与
+/// 该服务在同一目录；服务命令行的 `--owner-sid` 是当前用户。WTS 指向其他用户、
+/// 或令牌能读到且不是 SYSTEM / 本人时拒绝。缺任何一项都拒绝。
+#[derive(Clone, Debug, Default)]
+pub struct HelperCoreFacts {
+    pub nt_image: Option<String>,
+    pub snapshot_name: Option<String>,
+    pub parent_snapshot_name: Option<String>,
+    pub parent_nt_image: Option<String>,
+    pub service_nt_image: Option<String>,
+    pub owner_matches: bool,
+    pub wts_foreign: bool,
+    pub token_other_user: bool,
+}
+
+pub fn accept_flclash_helper_core(facts: &HelperCoreFacts) -> Result<String, &'static str> {
+    if facts.wts_foreign {
+        return Err("wts-foreign");
+    }
+    if facts.token_other_user {
+        return Err("token-other");
+    }
+    let nt = facts.nt_image.as_deref().ok_or("nt-image")?;
+    if !image_allowed_static(FLCLASH_CORE_IMAGES, nt) {
+        return Err("image");
+    }
+    let snap = facts.snapshot_name.as_deref().ok_or("snapshot")?;
+    if !snap.eq_ignore_ascii_case("FlClashCore.exe") {
+        return Err("snapshot");
+    }
+    let parent = facts.parent_snapshot_name.as_deref().ok_or("parent")?;
+    if !parent.eq_ignore_ascii_case("FlClashHelperService.exe") {
+        return Err("parent");
+    }
+    let parent_nt = facts.parent_nt_image.as_deref().ok_or("parent-nt")?;
+    let service_nt = facts.service_nt_image.as_deref().ok_or("service-nt")?;
+    if !eq_ignore_nt(parent_nt, service_nt) {
+        return Err("parent-not-service");
+    }
+    if nt_directory(nt) != nt_directory(service_nt) {
+        return Err("directory");
+    }
+    if !facts.owner_matches {
+        return Err("owner");
+    }
+    Ok(nt.to_string())
+}
+
+fn image_allowed_static(images: &[&str], path_or_name: &str) -> bool {
+    let name = file_name(path_or_name);
+    images.iter().any(|image| image.eq_ignore_ascii_case(name))
+}
+
+fn eq_ignore_nt(left: &str, right: &str) -> bool {
+    normalize_nt(left) == normalize_nt(right)
+}
+
+/// NtQuery 与 `GetFinalPathNameByHandleW(VOLUME_NAME_NT)` 都是 `\Device\…`。
+/// 去掉 `\??\` / `\\?\` 前缀并统一斜杠，避免同一文件因为前缀对不上而被拒绝。
+fn normalize_nt(path: &str) -> String {
+    let path = path.trim();
+    let path = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\??\"))
+        .unwrap_or(path);
+    path.replace('/', "\\").to_ascii_lowercase()
+}
+
+/// 从服务的 ImagePath 取出 exe 与 `--owner-sid`。带空格的路径必须加引号。
+pub fn parse_helper_service_command(raw: &str) -> Option<(String, String)> {
+    let raw = raw.trim();
+    let (exe, rest) = if let Some(quoted) = raw.strip_prefix('"') {
+        let (exe, rest) = quoted.split_once('"')?;
+        if exe.is_empty() {
+            return None;
+        }
+        (exe.to_string(), rest.trim())
+    } else {
+        let (exe, rest) = raw.split_once(char::is_whitespace).unwrap_or((raw, ""));
+        if exe.is_empty() {
+            return None;
+        }
+        (exe.to_string(), rest.trim())
+    };
+    let mut tokens = rest.split_whitespace();
+    while let Some(flag) = tokens.next() {
+        if flag.eq_ignore_ascii_case("--owner-sid") {
+            let sid = tokens.next()?;
+            if is_sid(sid) {
+                return Some((exe, sid.to_string()));
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn is_sid(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("S-1-") else {
+        return false;
+    };
+    let mut parts = rest.split('-');
+    parts.clone().count() >= 2
+        && parts.all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        && rest.split('-').count() <= 16
+}
+
+fn nt_directory(path: &str) -> String {
+    let path = normalize_nt(path);
+    match path.rfind('\\') {
+        Some(i) => path[..i].to_string(),
+        None => String::new(),
     }
 }
 
@@ -1003,7 +1137,7 @@ pub fn tcp_send_plan(
 ) -> TcpPlan {
     match fallback {
         TcpFallback::Blocked(why) => return TcpPlan::Refuse(why.clone()),
-        TcpFallback::VerifiedOnly(why) if !matches!(check, ListenerCheck::Verified { .. }) => {
+        TcpFallback::VerifiedOnly(why) if !listener_verified(check) => {
             return TcpPlan::Refuse(why.clone())
         }
         _ => {}
@@ -1030,7 +1164,7 @@ pub fn tcp_send_plan(
             },
             reasons.join("；")
         )),
-        ListenerCheck::Verified { .. } => {
+        ListenerCheck::Verified { .. } | ListenerCheck::VerifiedUnheld { .. } => {
             if !has_secret {
                 TcpPlan::SendWithoutAuth
             } else if secret_gate_open {

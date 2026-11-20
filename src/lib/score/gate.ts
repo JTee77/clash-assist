@@ -24,6 +24,7 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
           specificMsg.includes("未检测到 FlClash") ||
           specificMsg.includes("已找到 FlClash") ||
           specificMsg.includes("不是 FlClash 内核") ||
+          specificMsg.includes("无法确认为你的 FlClash 内核") ||
           specificMsg.includes("请确认 FlClash 已打开") ||
           specificMsg.includes("请先打开并连上【"));
       return {

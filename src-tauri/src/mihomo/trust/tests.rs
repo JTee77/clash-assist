@@ -1083,6 +1083,10 @@ fn send_plan_matrix() {
         pid: 7,
         image: "verge-mihomo.exe".into(),
     };
+    let unheld = ListenerCheck::VerifiedUnheld {
+        pid: 30736,
+        image: r"\Device\HarddiskVolume3\Program Files\FlClash\FlClashCore.exe".into(),
+    };
     let unverified = ListenerCheck::Unverified {
         pid: Some(7),
         reasons: vec![],
@@ -1096,8 +1100,9 @@ fn send_plan_matrix() {
     let denied = TcpFallback::Allowed { denied_seen: true };
     let blocked = TcpFallback::Blocked("x".into());
 
-    // 闸门关闭（生产）：任何情况下都不会 SendBearer
-    for c in [&verified, &unverified, &rejected, &none] {
+    // 闸门关闭（生产 Verge）：任何情况下都不会 SendBearer。FlClash 的 Session 0
+    // 内核也只有调用方把闸门打开时才带 Bearer。
+    for c in [&verified, &unheld, &unverified, &rejected, &none] {
         for s in [true, false] {
             for fb in [&ok, &denied, &blocked] {
                 assert_ne!(tcp_send_plan(c, s, false, fb), TcpPlan::SendBearer);
@@ -1117,6 +1122,11 @@ fn send_plan_matrix() {
         tcp_send_plan(&verified, true, true, &ok),
         TcpPlan::SendBearer
     );
+    assert_eq!(tcp_send_plan(&unheld, true, true, &ok), TcpPlan::SendBearer);
+    assert!(matches!(
+        tcp_send_plan(&unheld, true, false, &ok),
+        TcpPlan::Refuse(_)
+    ));
     assert_eq!(
         tcp_send_plan(&verified, true, true, &denied),
         TcpPlan::SendBearer
@@ -1134,6 +1144,10 @@ fn send_plan_matrix() {
         for g in [true, false] {
             assert!(matches!(
                 tcp_send_plan(&verified, s, g, &blocked),
+                TcpPlan::Refuse(_)
+            ));
+            assert!(matches!(
+                tcp_send_plan(&unheld, s, g, &blocked),
                 TcpPlan::Refuse(_)
             ));
         }
@@ -1355,4 +1369,90 @@ fn shared_port_keeps_flclash_secret_off_verge_and_spoofed_names() {
         }),
         SharedPortRoute::Verge
     );
+    let unheld = ListenerCheck::VerifiedUnheld {
+        pid: 30736,
+        image: r"\Device\HarddiskVolume3\Program Files\FlClash\FlClashCore.exe".into(),
+    };
+    assert_eq!(shared_port_route(&unheld), SharedPortRoute::Flclash);
+    let plan = tcp_send_plan(
+        &unheld,
+        true,
+        true,
+        &TcpFallback::Allowed { denied_seen: false },
+    );
+    assert!(matches!(plan, TcpPlan::SendBearer));
+}
+
+fn office_desktop_helper() -> HelperCoreFacts {
+    HelperCoreFacts {
+        nt_image: Some(r"\Device\HarddiskVolume3\Program Files\FlClash\FlClashCore.exe".into()),
+        snapshot_name: Some("FlClashCore.exe".into()),
+        parent_snapshot_name: Some("FlClashHelperService.exe".into()),
+        parent_nt_image: Some(
+            r"\Device\HarddiskVolume3\Program Files\FlClash\FlClashHelperService.exe".into(),
+        ),
+        service_nt_image: Some(
+            r"\Device\HarddiskVolume3\Program Files\FlClash\FlClashHelperService.exe".into(),
+        ),
+        owner_matches: true,
+        wts_foreign: false,
+        token_other_user: false,
+    }
+}
+
+#[test]
+fn helper_core_accepts_the_session0_install_seen_on_device() {
+    let image = accept_flclash_helper_core(&office_desktop_helper()).expect("helper core");
+    assert!(image.ends_with("FlClashCore.exe"));
+    let quoted =
+        r#""C:\Program Files\FlClash\FlClashHelperService.exe" --owner-sid S-1-5-21-1-2-3-1001"#;
+    assert_eq!(
+        parse_helper_service_command(quoted),
+        Some((
+            r"C:\Program Files\FlClash\FlClashHelperService.exe".into(),
+            "S-1-5-21-1-2-3-1001".into()
+        ))
+    );
+    let mut prefixed = office_desktop_helper();
+    prefixed.service_nt_image =
+        Some(r"\??\\Device\HarddiskVolume3\Program Files\FlClash\FlClashHelperService.exe".into());
+    prefixed.parent_nt_image =
+        Some(r"\\?\\Device\HarddiskVolume3/Program Files/FlClash/FlClashHelperService.exe".into());
+    assert!(accept_flclash_helper_core(&prefixed).is_ok());
+}
+
+#[test]
+fn helper_core_refuses_wrong_image_other_user_and_unproven_parent() {
+    let mut wrong = office_desktop_helper();
+    wrong.nt_image = Some(r"\Device\HarddiskVolume3\Windows\System32\notepad.exe".into());
+    assert_eq!(accept_flclash_helper_core(&wrong), Err("image"));
+
+    let mut other = office_desktop_helper();
+    other.wts_foreign = true;
+    assert_eq!(accept_flclash_helper_core(&other), Err("wts-foreign"));
+    other.wts_foreign = false;
+    other.token_other_user = true;
+    assert_eq!(accept_flclash_helper_core(&other), Err("token-other"));
+
+    let mut owner = office_desktop_helper();
+    owner.owner_matches = false;
+    assert_eq!(accept_flclash_helper_core(&owner), Err("owner"));
+
+    let mut parent = office_desktop_helper();
+    parent.parent_snapshot_name = Some("FlClash.exe".into());
+    assert_eq!(accept_flclash_helper_core(&parent), Err("parent"));
+
+    let mut moved = office_desktop_helper();
+    moved.nt_image = Some(r"\Device\HarddiskVolume3\Users\Public\FlClashCore.exe".into());
+    assert_eq!(accept_flclash_helper_core(&moved), Err("directory"));
+
+    let mut fake = office_desktop_helper();
+    fake.parent_nt_image = Some(r"\Device\HarddiskVolume3\Temp\FlClashHelperService.exe".into());
+    assert_eq!(accept_flclash_helper_core(&fake), Err("parent-not-service"));
+
+    assert!(parse_helper_service_command(r"C:\FlClash\FlClashHelperService.exe").is_none());
+    assert!(parse_helper_service_command(
+        r#""C:\FlClash\FlClashHelperService.exe" --owner-sid not-a-sid"#
+    )
+    .is_none());
 }

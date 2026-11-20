@@ -83,6 +83,12 @@ describe("Windows FlClash 发现提示", () => {
     expect(flclashLocalMessage(WIN_SOURCE, "监听者校验失败：image-mismatch：FlClash.exe")).toContain(
       "FlClashCore",
     );
+    const unverified = flclashLocalMessage(
+      WIN_SOURCE,
+      "无法验证监听进程身份，不连接（listener-unverified）：wts: pUserSid 为空（未知）；L2 ①：OpenProcess 失败（Win32 5）",
+    );
+    expect(unverified).toContain("无法确认为你的 FlClash 内核");
+    expect(unverified).not.toContain("没有在监听");
     expect(flclashLocalMessage("flclash-ec-remote:C:\\x\\shared_preferences.json")).toContain(
       "不是本机地址",
     );
