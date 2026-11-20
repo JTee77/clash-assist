@@ -20,6 +20,11 @@ export async function runLightGate(connection: ConnectionState): Promise<GateRes
         specificMsg &&
         (specificMsg.includes("未检测到正在运行的VPN软件") ||
           specificMsg.includes("检测到 FlClash 未开启外部控制器") ||
+          specificMsg.includes("不是本机地址") ||
+          specificMsg.includes("未检测到 FlClash") ||
+          specificMsg.includes("已找到 FlClash") ||
+          specificMsg.includes("不是 FlClash 内核") ||
+          specificMsg.includes("无法确认为你的 FlClash 内核") ||
           specificMsg.includes("请确认 FlClash 已打开") ||
           specificMsg.includes("请先打开并连上【"));
       return {

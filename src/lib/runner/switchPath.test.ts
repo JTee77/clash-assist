@@ -161,6 +161,42 @@ describe("测节点不会在切错组或直连模式下记录出口", () => {
     );
   });
 
+  it("Windows FlClash 规则模式切换失败后仍切回原先节点", async () => {
+    h.switchProxy.mockResolvedValue(false);
+    const bag = hooks();
+    const conn = connection("rule");
+    conn.config = {
+      ...conn.config!,
+      port: 9090,
+      secret: "",
+      mixedPort: 7890,
+      source:
+        "flclash:C:\\Users\\ada\\AppData\\Roaming\\com.follow\\clash\\shared_preferences.json",
+      sockPath: null,
+    };
+    const ok = await testAll(
+      {
+        connection: conn,
+        nodes: [node(US82)],
+        forceMock: false,
+        mixedPort: 7890,
+        ensureGate: async () => ({ ok: true, message: "ok" }),
+        shouldAbort: () => false,
+      },
+      bag.api,
+    );
+    expect(ok).toBe(true);
+    expect(h.switchProxy).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 9090, sockPath: null, mode: "rule" }),
+      MAIN,
+      US82,
+    );
+    expect(h.restoreProxy).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.stringContaining("flclash:") }),
+      expect.objectContaining({ group: MAIN, now: HK17 }),
+    );
+  });
+
   it("测单个切换失败时不跑诊断", async () => {
     h.switchProxy.mockResolvedValue(false);
     const bag = hooks();

@@ -61,7 +61,16 @@ fn call(
     secret: Option<&str>,
 ) -> Result<(UnixHttpResult, &'static str), String> {
     tauri::async_runtime::block_on(http_via_tcp_with(
-        policy, gate_open, fallback, addr, "GET", "/version", None, secret, 3000,
+        policy,
+        gate_open,
+        fallback,
+        addr,
+        "GET",
+        "/version",
+        None,
+        secret,
+        3000,
+        "verge-tcp(listener-verified)",
     ))
 }
 

@@ -344,7 +344,9 @@ pub fn tcp_flags(
 ) -> Option<Vec<TcpFlag>> {
     use super::trust::{ListenerCheck, TcpFallback};
     let mut flags = match check {
-        ListenerCheck::Verified { .. } => vec![TcpFlag::ListenerVerified],
+        ListenerCheck::Verified { .. } | ListenerCheck::VerifiedUnheld { .. } => {
+            vec![TcpFlag::ListenerVerified]
+        }
         ListenerCheck::Unverified { service_mode, .. } => {
             let mut v = vec![TcpFlag::ListenerUnverified];
             if *service_mode {
