@@ -259,8 +259,8 @@ jobs:
       - name: NSIS 卸载 hook 实跑（S-12，含 junction）
         if: ${{ !cancelled() }}
         run: |
-          # 指定 tauri build 下载的那一份 makensis（找不到就失败）并断言版本：tauri-cli 2.11.4 下载的是 nsis-3.11
-          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh -MakeNsis (Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe') -ExpectVersion v3.11
+          # 指定 tauri build 下载的那一份 makensis（找不到就失败）并断言版本：tauri-cli 2.12.6 下载的是 nsis-3.13
+          ./scripts/test-nsis-hooks.ps1 -HooksFile src-tauri/windows/hooks.nsh -MakeNsis (Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe') -ExpectVersion v3.13
           exit $LASTEXITCODE
 
       - name: 生成发布说明（不得含系统安全拦截相关文案）
