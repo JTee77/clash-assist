@@ -226,4 +226,4 @@ e2e 的 cases 脚本把这一项记为 `frontend-fallback-contract`，状态为 
 另外，降级由两层拦住：
 
 - 客户端在 check 和启动安装程序之前都要求目标版本严格新于当前版本，并且 PE 版本必须等于 tag。
-- 安装程序本身在静默模式下也拒绝降级（`installer.nsi` 的 M5 段，见 [windows-nsis-template.md](windows-nsis-template.md)）。所以「已装 0.3.1，用 /S 或 /S /UPDATE 运行 0.3.0 安装包」会返回非零码，不会降级。
+- 安装程序本身在静默、被动和 `/UPDATE` 模式下也拒绝降级（tauri-cli 2.12.6 的 `installer.nsi` 在 `.onInit` 里自行给 `$R0` 赋值后 `Abort`，见 [windows-nsis-template.md](windows-nsis-template.md)）。所以「已装 0.3.1，用 /S 或 /S /UPDATE 运行 0.3.0 安装包」会返回非零码，不会降级。
