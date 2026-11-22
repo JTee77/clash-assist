@@ -41,6 +41,8 @@ export type TestAllContext = TestContext & {
 
 export type TestOneContext = TestContext & {
   node: ProxyNode;
+  /** 与测全部同一面停止旗。单节点界面没有停止按钮时可不传。 */
+  shouldAbort?: () => boolean;
 };
 
 export type RunEnvContext = {

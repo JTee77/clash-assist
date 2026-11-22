@@ -37,9 +37,10 @@ const ALL_CLIENT_OPTIONS: ClientOption[] = [
   },
 ];
 
-/** Windows 只支持 Clash Verge（windows-plan §2.7）；其余平台保持现有列表。 */
+/** Clash Verge 与 FlClash 在 macOS 和 Windows 上都可选。 */
 export function clientOptionsFor(windows: boolean): ClientOption[] {
-  return windows ? ALL_CLIENT_OPTIONS.filter((o) => o.id === "verge") : ALL_CLIENT_OPTIONS;
+  void windows;
+  return ALL_CLIENT_OPTIONS;
 }
 
 export const CLIENT_OPTIONS: ClientOption[] = clientOptionsFor(isWindows());
@@ -121,12 +122,12 @@ export function isClientId(v: unknown): v is ClientId {
 }
 
 /**
- * Map stored clientId. Clash Verge and FlClash are selectable today (Windows: Verge only).
+ * Map stored clientId. Clash Verge and FlClash are selectable on macOS and Windows.
  * Legacy clashx_meta/mihomo_party/nyanpasu/mihomo/manual/unknown → null, forcing a fresh pick.
  */
 export function normalizeClientId(v: unknown, windows: boolean = isWindows()): ClientId | null {
-  if (v === "verge") return v;
-  if (v === "flclash" && !windows) return v;
+  void windows;
+  if (v === "verge" || v === "flclash") return v;
   return null;
 }
 
@@ -135,16 +136,53 @@ export function clientLabel(id: ClientId | null): string {
   return ALL_CLIENT_OPTIONS.find((o) => o.id === id)?.label ?? id;
 }
 
+const FLCLASH_EC_DISABLED =
+  "检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「刷新节点」";
+const FLCLASH_EC_REMOTE =
+  "FlClash 的外部控制器不是本机地址，已拒绝连接。请把它改成 127.0.0.1 后再点「刷新节点」。";
+const FLCLASH_MISSING =
+  "未检测到 FlClash 的配置。请先安装并打开 FlClash，在「设置 → 常规 → 入站」开启「外部控制器」后再点「刷新节点」。";
+const FLCLASH_NOT_RUNNING =
+  "已找到 FlClash 的配置，但外部控制器没有在监听。请先打开 FlClash 并连上节点后再点「刷新节点」。";
+const FLCLASH_IMAGE =
+  "监听该端口的程序不是 FlClash 内核（FlClashCore），已拒绝连接。请确认「外部控制器」端口没有被其他程序占用，并在 FlClash 中重启后再点「刷新节点」。";
+const FLCLASH_UNVERIFIED =
+  "外部控制器端口上的程序无法确认为你的 FlClash 内核，已拒绝连接。请确认是本机安装的 FlClash 在监听 127.0.0.1:9090 后再点「刷新节点」。";
+const FLCLASH_GENERAL =
+  "请确认 FlClash 已打开并连接节点，且在 FlClash「设置 → 常规 → 入站」中开启了「外部控制器」";
+
+function flclashBase(source?: string): string {
+  const base = (source ?? "").split(";")[0] ?? "";
+  return base;
+}
+
 /** Plain-language unreachable tip naming the selected app. */
 export function clientUnreachableHint(id: ClientId, source?: string): string {
-  if (id === "flclash") {
-    if (source?.startsWith("flclash-ec-disabled:")) {
-      return "检测到 FlClash 未开启外部控制器，请在 FlClash「设置 → 常规 → 入站」中开启「外部控制器」后再点「刷新节点」";
-    }
-    return "请确认 FlClash 已打开并连接节点，且在 FlClash「设置 → 常规 → 入站」中开启了「外部控制器」";
-  }
+  if (id === "flclash") return flclashLocalMessage(source);
   const name = clientLabel(id);
   return `请先打开并连上【${name}】，再点「刷新节点」`;
+}
+
+/**
+ * FlClash 连不上时的本地操作提示。
+ * `detail` 是控制器拒绝原因（例如 Windows 监听者校验的 image-mismatch），不含密钥。
+ */
+export function flclashLocalMessage(source?: string, detail?: string | null): string {
+  if (detail && /image-mismatch/i.test(detail)) return FLCLASH_IMAGE;
+  if (detail && /listener-unverified/i.test(detail)) return FLCLASH_UNVERIFIED;
+  const base = flclashBase(source);
+  if (base.startsWith("flclash-ec-disabled")) return FLCLASH_EC_DISABLED;
+  if (base.startsWith("flclash-ec-remote")) return FLCLASH_EC_REMOTE;
+  if (
+    !base ||
+    base === "defaults" ||
+    base === "flclash:defaults" ||
+    base.startsWith("preset-")
+  ) {
+    return FLCLASH_MISSING;
+  }
+  if (base.startsWith("flclash:")) return FLCLASH_NOT_RUNNING;
+  return FLCLASH_GENERAL;
 }
 
 /** Legacy Verge unix sock (pre-2.5.6). Prefer Rust discovery for live path. */

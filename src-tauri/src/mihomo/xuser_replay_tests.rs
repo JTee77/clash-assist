@@ -91,6 +91,9 @@ fn xuser_tcp_listener_check() {
         ListenerCheck::Verified { pid, image } => {
             serde_json::json!({ "code": "verified", "pid": pid, "image": image })
         }
+        ListenerCheck::VerifiedUnheld { pid, image } => {
+            serde_json::json!({ "code": "verified-unheld", "pid": pid, "image": image })
+        }
         ListenerCheck::Unverified {
             pid,
             reasons,

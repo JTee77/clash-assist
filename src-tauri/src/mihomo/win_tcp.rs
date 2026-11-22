@@ -137,12 +137,44 @@ fn check_listener_held(
     let v4 = tcp::listeners_v4(addr.port());
     let v6 = tcp::listeners_v6(addr.port());
     let mut facts = OsProcessFacts::new(known);
-    let check = policy.decide_tcp(addr, v4, v6, &mut facts);
+    let mut check = policy.decide_tcp(addr, v4, v6, &mut facts);
     let held = match &check {
         ListenerCheck::Verified { pid, .. } => facts.into_held(*pid),
         _ => None,
     };
+    // Session 0 的 FlClashCore 拒绝 OpenProcess。只在 FlClash 映像策略下，用 Helper
+    // 服务的 owner-sid 与同目录内核补上验证。证明失败仍是 listener-unverified，不建连。
+    // Verge 的 TCP 判定不走这里。
+    let promotion = if held.is_none() && policy_is_flclash(policy) {
+        match check {
+            ListenerCheck::Unverified { pid: Some(pid), .. } => {
+                Some((pid, crate::win::helper::prove_flclash_helper_core(pid)))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some((pid, result)) = promotion {
+        match result {
+            Ok(image) => check = ListenerCheck::VerifiedUnheld { pid, image },
+            Err(why) => {
+                if let ListenerCheck::Unverified { reasons, .. } = &mut check {
+                    reasons.push(format!("helper: {why}"));
+                }
+            }
+        }
+    }
     (check, held)
+}
+
+fn policy_is_flclash(policy: &TrustPolicy) -> bool {
+    policy.images.len() == super::trust::FLCLASH_CORE_IMAGES.len()
+        && policy
+            .images
+            .iter()
+            .zip(super::trust::FLCLASH_CORE_IMAGES)
+            .all(|(got, expect)| got.eq_ignore_ascii_case(expect))
 }
 
 /// 生产入口（`transport::http_via_tcp_async` 在 Windows 上的实现）。
@@ -160,6 +192,60 @@ pub async fn http_via_tcp(
 ) -> Result<UnixHttpResult, String> {
     super::transport::check_raw_request(method, path)?;
     let addr = loopback_addr(host, port)?;
+    // FlClash 的外部控制器是回环 TCP，没有 Verge 那种命名管道。只在配置明确开启、
+    // 端口不与 Verge 显式 TCP 端口冲突时走这条路径，并且不看 Verge 管道的 M-3 状态。
+    // secret 来自 FlClash 配置文件，不采用前端传入的值，也不读取 Verge yaml。
+    // Bearer 只在监听进程被证明是当前用户的 FlClashCore.exe 之后发出。
+    // Verge 的 secret 闸门保持关闭。
+    let claim = tauri::async_runtime::spawn_blocking(move || {
+        super::discovery::flclash_tcp_claim(addr.port())
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(claim) = claim {
+        let policy = TrustPolicy::for_images(super::trust::FLCLASH_CORE_IMAGES);
+        let send_flclash = if claim.verge_same_port {
+            let check = check_listener(&policy, addr);
+            match super::trust::shared_port_route(&check) {
+                super::trust::SharedPortRoute::Flclash => true,
+                super::trust::SharedPortRoute::Verge => false,
+                super::trust::SharedPortRoute::Refuse => {
+                    let why = tcp_send_plan(
+                        &check,
+                        true,
+                        false,
+                        &super::trust::TcpFallback::Allowed { denied_seen: false },
+                    );
+                    let msg = match why {
+                        super::trust::TcpPlan::Refuse(msg) => msg,
+                        _ => "端口同时被其它配置占用，且监听者不是 FlClash 内核，拒绝连接".into(),
+                    };
+                    crate::append_app_log(&format!("[tcp] {addr} 拒绝：{msg}"));
+                    return Err(msg);
+                }
+            }
+        } else {
+            true
+        };
+        if send_flclash {
+            let bearer = (!claim.secret.is_empty()).then_some(claim.secret);
+            return http_via_tcp_with(
+                &policy,
+                true,
+                super::trust::TcpFallback::Allowed { denied_seen: false },
+                addr,
+                method,
+                path,
+                body,
+                bearer.as_deref(),
+                timeout_ms,
+                "flclash-tcp(listener-verified)",
+            )
+            .await
+            .map(|(r, _)| r);
+        }
+    }
     let fallback = fallback_state().await;
     let effective = if secret.is_empty() {
         tauri::async_runtime::spawn_blocking(super::discovery::windows_yaml_secret)
@@ -180,6 +266,7 @@ pub async fn http_via_tcp(
         body,
         effective.as_deref(),
         timeout_ms,
+        "verge-tcp(listener-verified)",
     )
     .await
     .map(|(r, _)| r)
@@ -198,6 +285,7 @@ pub(crate) async fn http_via_tcp_with(
     body: Option<&str>,
     secret: Option<&str>,
     timeout_ms: u64,
+    label: &'static str,
 ) -> Result<(UnixHttpResult, &'static str), String> {
     super::transport::check_raw_request(method, path)?;
     #[cfg(test)]
@@ -207,7 +295,7 @@ pub(crate) async fn http_via_tcp_with(
     let (check, held) = check_listener_held(policy, addr);
     let has_secret = secret.is_some_and(|s| !s.is_empty());
     let plan = tcp_send_plan(&check, has_secret, gate_open, &fallback);
-    let (pid, label) = match (&plan, &check) {
+    let (pid, label, recheck_helper) = match (&plan, &check) {
         (TcpPlan::Refuse(why), _) => {
             crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
             return Err(why.clone());
@@ -218,9 +306,10 @@ pub(crate) async fn http_via_tcp_with(
                 crate::append_app_log(&format!("[tcp] {addr} 拒绝：{why}"));
                 return Err(why);
             }
-            (*pid, "verge-tcp(listener-verified)")
+            (*pid, label, false)
         }
-        // tcp_send_plan 只对 Verified 返回发送计划。
+        (_, ListenerCheck::VerifiedUnheld { pid, .. }) => (*pid, label, true),
+        // tcp_send_plan 只对已验证的监听者返回发送计划。
         _ => return Err("内部错误：未验证的监听者不应进入发送路径".to_string()),
     };
 
@@ -240,6 +329,12 @@ pub(crate) async fn http_via_tcp_with(
         drop(stream);
         crate::append_app_log(&format!("[tcp] {addr} 连接后校验失败：{why}"));
         return Err(why);
+    }
+    if recheck_helper && crate::win::helper::prove_flclash_helper_core(pid).is_err() {
+        drop(stream);
+        let why = "连接后无法再次确认这是当前用户的 FlClash 内核，拒绝（listener-unverified）";
+        crate::append_app_log(&format!("[tcp] {addr} 连接后校验失败：{why}"));
+        return Err(why.to_string());
     }
     let bearer = match plan {
         TcpPlan::SendBearer => secret,
