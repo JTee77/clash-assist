@@ -4,14 +4,16 @@
 
 ### 更新
 
-- 规则模式下测节点，不再切到错误的策略组。
+- Windows 版支持 FlClash，和 Mac 版一样可以刷新节点、看当前节点、测节点，测完切回。Clash Verge Rev 仍可用。
+- FlClash 由官方助手服务拉起时也可以连上本机外部控制器。监听程序对不上时不会连接。
+- 测试条件还在检查时点停止，会停住并保持原节点，不再误报无法安全切换。
 
 ### Windows（x64，Windows 10 / 11）
 
 - `Clash.Assist_{{VERSION}}_x64-setup.exe`：安装版，支持一键更新。
 - `Clash.Assist_{{VERSION}}_x64-portable.zip`：便携版，解压即用，不支持一键更新。
 
-Windows 版目前只支持 Clash Verge Rev。
+Windows 与 Mac 都支持 Clash Verge Rev 和 FlClash。
 
 ### macOS
 
