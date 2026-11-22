@@ -1111,6 +1111,7 @@ async function dispatchInner(
             forceMock: parsed.mock,
             mixedPort,
             ensureGate,
+            shouldAbort: isAborted,
           },
           bag.hooks,
         );

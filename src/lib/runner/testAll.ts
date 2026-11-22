@@ -43,7 +43,6 @@ export async function testAll(
   const { connection, nodes, forceMock, mixedPort, ensureGate, shouldAbort } =
     ctx;
 
-  hooks.onScores?.([]);
   hooks.onHint?.(null);
   hooks.onRestoreError?.(null);
 
@@ -51,8 +50,16 @@ export async function testAll(
   let didSwitch = false;
   const config = connection.config;
 
+  // 停止只结束本轮：不把「读快照失败 / 还没读到组」说成无法安全切换，也不再开新的检测或切换。
+  const stopClean = (): boolean => {
+    hooks.onHint?.(null);
+    hooks.onProgress(null);
+    return false;
+  };
+
   try {
     const g = await ensureGate();
+    if (shouldAbort()) return stopClean();
     hooks.onGate?.(g);
     if (!g.ok) return false;
 
@@ -84,7 +91,13 @@ export async function testAll(
     const canSwitch = !!config && !connection.usingMock && !forceMock;
 
     if (canSwitch && config) {
-      await refreshClashMode(config, { force: true });
+      try {
+        await refreshClashMode(config, { force: true });
+      } catch (err) {
+        if (shouldAbort()) return stopClean();
+        throw err;
+      }
+      if (shouldAbort()) return stopClean();
       const blocked = nodeTestBlockReason(config.mode);
       if (blocked) {
         // 直连模式切任何 Selector 都不会改变 mixed-port 流量，不能把直连结果记成节点成绩。
@@ -101,20 +114,31 @@ export async function testAll(
       hooks.onUpsertScore?.(score);
     };
 
-    if (canSwitch) {
-      originalSnap = await resolveSelectorSnapshot(
-        config,
-        connection.currentProxy,
-      );
-      if (!originalSnap?.now && connection.currentProxy) {
-        const group =
-          (await findSelectorGroup(config, connection.currentProxy)) ??
-          originalSnap?.group;
-        if (group) {
-          originalSnap = { group, now: connection.currentProxy };
+    if (canSwitch && config) {
+      try {
+        originalSnap = await resolveSelectorSnapshot(
+          config,
+          connection.currentProxy,
+        );
+        if (shouldAbort()) return stopClean();
+        if (!originalSnap?.now && connection.currentProxy) {
+          const group =
+            (await findSelectorGroup(config, connection.currentProxy)) ??
+            originalSnap?.group;
+          if (shouldAbort()) return stopClean();
+          if (group) {
+            originalSnap = { group, now: connection.currentProxy };
+          }
         }
+      } catch (err) {
+        if (shouldAbort()) return stopClean();
+        throw err;
       }
     }
+
+    if (shouldAbort()) return stopClean();
+    // 条件检查通过后才清掉本轮目标的旧成绩。停在预检之前时，上一轮结果还在。
+    hooks.onScores?.([]);
 
     const clientDead = list.filter((n) => {
       if (n.lastDelay !== 0 || !n.lastDelayAt) return false;
@@ -170,7 +194,7 @@ export async function testAll(
           // 预检并发，不挂节点名（避免进度文案狂跳；阶段语完整显示）
           testingNode: undefined,
         });
-        if (delay == null) {
+        if (delay == null && !shouldAbort()) {
           upsertScore(scoreDeadNode(n.name, "延迟探测失败，按不可用处理。"));
         }
         return { n, delay, skipped: false };
@@ -193,7 +217,9 @@ export async function testAll(
       }
     }
 
-    if (canSwitch && !shouldAbort() && originalSnap?.group && originalSnap.now) {
+    if (shouldAbort()) return stopClean();
+
+    if (canSwitch && originalSnap?.group && originalSnap.now) {
       for (let i = 0; i < alive.length; i++) {
         if (shouldAbort()) break;
         const n = alive[i]!;
@@ -216,6 +242,7 @@ export async function testAll(
         // 结束时必须按快照切回，不能因为最终校验失败就留下半套切换。
         didSwitch = true;
         const ok = await switchProxy(config!, group, n.name);
+        if (shouldAbort()) break;
         if (!ok) {
           upsertScore(scoreDeadNode(n.name, "切换失败，没法检测这个节点。"));
           continue;
@@ -230,6 +257,7 @@ export async function testAll(
         hooks.onReport?.(r);
         hooks.onNodeCards(r.cards);
         upsertScore(scoreNodeFromCards(n.name, r.cards, r.ranAt));
+        if (shouldAbort()) break;
       }
     } else if (canSwitch) {
       hooks.onHint?.(
@@ -280,8 +308,10 @@ export async function testAll(
 
     hooks.onScores?.(sortScores(results));
     hooks.onProgress(null);
+    if (shouldAbort()) hooks.onHint?.(null);
     return !shouldAbort();
   } catch (err) {
+    if (shouldAbort()) return stopClean();
     const msg = err instanceof Error ? err.message : String(err);
     hooks.onProgress(null);
     hooks.onGate?.({ ok: false, message: `测全部节点时出错：${msg}` });

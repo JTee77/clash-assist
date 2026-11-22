@@ -22,21 +22,34 @@ export async function testOne(
   ctx: TestOneContext,
   hooks: RunnerHooks,
 ): Promise<boolean> {
-  const { node, connection, forceMock, mixedPort, ensureGate } = ctx;
+  const { node, connection, forceMock, mixedPort, ensureGate, shouldAbort } = ctx;
   const config = connection.config;
   let snap: SelectorSnapshot | null = null;
   let didSwitch = false;
+  const aborted = () => shouldAbort?.() === true;
+  const stopClean = (): boolean => {
+    hooks.onHint?.(null);
+    hooks.onProgress(null);
+    return false;
+  };
 
   hooks.onRestoreError?.(null);
 
   try {
     const g = await ensureGate();
+    if (aborted()) return stopClean();
     hooks.onGate?.(g);
     if (!g.ok) return false;
 
     const realSwitch = !!config && !connection.usingMock && !forceMock;
     if (realSwitch && config) {
-      await refreshClashMode(config, { force: true });
+      try {
+        await refreshClashMode(config, { force: true });
+      } catch (err) {
+        if (aborted()) return stopClean();
+        throw err;
+      }
+      if (aborted()) return stopClean();
       const blocked = nodeTestBlockReason(config.mode);
       if (blocked) {
         hooks.onGate?.({ ok: false, message: blocked });
@@ -47,32 +60,49 @@ export async function testOne(
 
     const isCurrent = node.name === connection.currentProxy;
     // 「使用中」必须就是流量组的有效叶子。对不上就照样切换，不能把另一个出口的结果记在这个节点上。
-    const alreadyThere =
-      isCurrent && realSwitch && config
-        ? await confirmTrafficLeaf(config, node.name)
-        : false;
+    let alreadyThere = false;
+    if (isCurrent && realSwitch && config) {
+      try {
+        alreadyThere = await confirmTrafficLeaf(config, node.name);
+      } catch (err) {
+        if (aborted()) return stopClean();
+        throw err;
+      }
+      if (aborted()) return stopClean();
+    }
     if (realSwitch && config && !alreadyThere) {
+      if (aborted()) return stopClean();
       hooks.onProgress({
         text: `正在切换到 ${node.name}…`,
         testingNode: node.name,
         stage: "switch",
       });
-      snap = await resolveSelectorSnapshot(config, connection.currentProxy);
-      const group =
-        snap?.group ?? (await findSelectorGroup(config, node.name));
-      if (!group) {
-        hooks.onHint?.("找不到可切换的策略组，没法单独测这个节点。");
-        return false;
-      }
-      didSwitch = true;
-      const ok = await switchProxy(config, group, node.name);
-      if (!ok) {
-        hooks.onHint?.("切换失败，没法测这个节点。");
-        return false;
+      try {
+        snap = await resolveSelectorSnapshot(config, connection.currentProxy);
+        if (aborted()) return stopClean();
+        const group =
+          snap?.group ?? (await findSelectorGroup(config, node.name));
+        if (aborted()) return stopClean();
+        if (!group) {
+          hooks.onHint?.("找不到可切换的策略组，没法单独测这个节点。");
+          return false;
+        }
+        didSwitch = true;
+        const ok = await switchProxy(config, group, node.name);
+        if (aborted()) return stopClean();
+        if (!ok) {
+          hooks.onHint?.("切换失败，没法测这个节点。");
+          return false;
+        }
+      } catch (err) {
+        if (aborted()) return stopClean();
+        throw err;
       }
       await new Promise((r) => setTimeout(r, 250));
+      if (aborted()) return stopClean();
     }
 
+    if (aborted()) return stopClean();
     hooks.onProgress({
       text: `正在检测 ${node.name}…`,
       testingNode: node.name,
@@ -88,8 +118,9 @@ export async function testOne(
     hooks.onNodeCards(r.cards);
     const scored = scoreNodeFromCards(node.name, r.cards, r.ranAt);
     hooks.onUpsertScore?.(scored);
-    return true;
+    return !aborted();
   } catch (err) {
+    if (aborted()) return stopClean();
     hooks.onHint?.(err instanceof Error ? err.message : String(err));
     return false;
   } finally {

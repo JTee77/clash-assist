@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   restoreProxy: vi.fn(),
   probeDelay: vi.fn(),
   confirmTrafficLeaf: vi.fn(),
+  refreshClashMode: vi.fn(),
 }));
 
 vi.mock("../egress", async (importOriginal) => ({
@@ -25,6 +26,7 @@ vi.mock("../mihomo", async (importOriginal) => ({
   restoreProxy: h.restoreProxy,
   probeDelay: h.probeDelay,
   confirmTrafficLeaf: h.confirmTrafficLeaf,
+  refreshClashMode: h.refreshClashMode,
 }));
 
 const { testAll } = await import("./testAll");
@@ -63,11 +65,18 @@ function hooks() {
   const scores: string[] = [];
   const gates: string[] = [];
   const hints: Array<string | null> = [];
+  const progress: string[] = [];
+  let cleared = false;
   const api: RunnerHooks = {
-    onProgress: () => {},
+    onProgress: (p) => {
+      if (p?.text) progress.push(p.text);
+    },
     onNodeCards: () => {},
     onUpsertScore: (s) => {
       scores.push(`${s.nodeName}:${s.blurb}`);
+    },
+    onScores: (list) => {
+      if (list.length === 0) cleared = true;
     },
     onHint: (m) => hints.push(m),
     onGate: (g) => {
@@ -75,7 +84,7 @@ function hooks() {
     },
     onRestoreError: () => {},
   };
-  return { api, scores, gates, hints };
+  return { api, scores, gates, hints, progress, wasCleared: () => cleared };
 }
 
 describe("测节点不会在切错组或直连模式下记录出口", () => {
@@ -94,6 +103,7 @@ describe("测节点不会在切错组或直连模式下记录出口", () => {
     h.restoreProxy.mockResolvedValue(true);
     h.probeDelay.mockResolvedValue(80);
     h.confirmTrafficLeaf.mockResolvedValue(true);
+    h.refreshClashMode.mockImplementation(async (config: { mode?: string }) => config.mode);
   });
 
   it("直连模式：测全部不切换、不跑诊断", async () => {
@@ -214,5 +224,210 @@ describe("测节点不会在切错组或直连模式下记录出口", () => {
     expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
     expect(bag.hints[bag.hints.length - 1]).toMatch(/切换失败/);
     expect(h.restoreProxy).toHaveBeenCalled();
+  });
+});
+
+const UNSAFE = "没法安全地临时切换";
+
+describe("停止不会被当成无法安全切换", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete (globalThis as { window?: unknown }).window;
+    h.runNodeDiagnostics.mockResolvedValue({
+      ranAt: "2026-11-16T00:00:00.000Z",
+      cards: [],
+      exitIp: { ip: "42.200.231.208" },
+      note: "should-not-run",
+    });
+    h.resolveSelectorSnapshot.mockResolvedValue({ group: MAIN, now: HK17 });
+    h.findSelectorGroup.mockResolvedValue(MAIN);
+    h.switchProxy.mockResolvedValue(true);
+    h.restoreProxy.mockResolvedValue(true);
+    h.probeDelay.mockResolvedValue(80);
+    h.confirmTrafficLeaf.mockResolvedValue(true);
+    h.refreshClashMode.mockImplementation(async (config: { mode?: string }) => config.mode);
+  });
+
+  function runAll(opts: {
+    abortAt: "gate" | "mode" | "snapshot" | "group" | "precheck" | "after-switch" | "never";
+    snapshot?: "ok" | "null";
+  }) {
+    let abort = false;
+    const shouldAbort = () => abort;
+    if (opts.abortAt === "mode") {
+      h.refreshClashMode.mockImplementation(async () => {
+        abort = true;
+        throw new Error("mode read failed");
+      });
+    }
+    if (opts.abortAt === "snapshot") {
+      h.resolveSelectorSnapshot.mockImplementation(async () => {
+        abort = true;
+        throw new Error("snapshot read failed");
+      });
+    }
+    if (opts.abortAt === "group") {
+      h.resolveSelectorSnapshot.mockResolvedValue(null);
+      h.findSelectorGroup.mockImplementation(async () => {
+        abort = true;
+        throw new Error("group read failed");
+      });
+    }
+    if (opts.snapshot === "null") {
+      h.resolveSelectorSnapshot.mockResolvedValue(null);
+      h.findSelectorGroup.mockResolvedValue(null);
+    }
+    if (opts.abortAt === "precheck") {
+      h.probeDelay.mockImplementation(async () => {
+        abort = true;
+        throw new Error("delay read failed");
+      });
+    }
+    if (opts.abortAt === "after-switch") {
+      h.switchProxy.mockImplementation(async () => {
+        abort = true;
+        return true;
+      });
+    }
+    const bag = hooks();
+    const done = testAll(
+      {
+        connection: connection("rule"),
+        nodes: [node(HK17), node(US82)],
+        forceMock: false,
+        mixedPort: 7897,
+        ensureGate: async () => {
+          if (opts.abortAt === "gate") abort = true;
+          return { ok: true, message: "ok" };
+        },
+        shouldAbort,
+      },
+      bag.api,
+    );
+    return { done, bag };
+  }
+
+  it("条件检查中停止：不检测、不切换、不报无法安全切换，也不清掉旧成绩", async () => {
+    const { done, bag } = runAll({ abortAt: "gate" });
+    await expect(done).resolves.toBe(false);
+    expect(h.resolveSelectorSnapshot).not.toHaveBeenCalled();
+    expect(h.switchProxy).not.toHaveBeenCalled();
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(h.restoreProxy).not.toHaveBeenCalled();
+    expect(bag.hints.some((m) => m?.includes(UNSAFE))).toBe(false);
+    expect(bag.gates.some((m) => m.includes("测全部节点时出错"))).toBe(false);
+    expect(bag.progress.some((t) => t.includes("无法安全切换"))).toBe(false);
+    expect(bag.wasCleared()).toBe(false);
+  });
+
+  it("停止落在模式读取失败上：不当成模式阻断，也不开测", async () => {
+    const { done, bag } = runAll({ abortAt: "mode" });
+    await expect(done).resolves.toBe(false);
+    expect(h.resolveSelectorSnapshot).not.toHaveBeenCalled();
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(h.switchProxy).not.toHaveBeenCalled();
+    expect(bag.hints.some((m) => m?.includes(UNSAFE) || m?.includes("直连模式"))).toBe(false);
+    expect(bag.gates).toEqual([]);
+    expect(bag.wasCleared()).toBe(false);
+  });
+
+  it("停止落在快照或策略组读取失败上：不当成无法安全切换", async () => {
+    for (const abortAt of ["snapshot", "group"] as const) {
+      vi.clearAllMocks();
+      h.restoreProxy.mockResolvedValue(true);
+      h.refreshClashMode.mockImplementation(async (config: { mode?: string }) => config.mode);
+      h.probeDelay.mockResolvedValue(80);
+      const { done, bag } = runAll({ abortAt });
+      await expect(done).resolves.toBe(false);
+      expect(h.switchProxy).not.toHaveBeenCalled();
+      expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+      expect(h.restoreProxy).not.toHaveBeenCalled();
+      expect(bag.hints.some((m) => m?.includes(UNSAFE))).toBe(false);
+      expect(bag.gates.some((m) => m.includes("测全部节点时出错"))).toBe(false);
+      expect(bag.progress.some((t) => t.includes("无法安全切换"))).toBe(false);
+      expect(bag.wasCleared()).toBe(false);
+    }
+  });
+
+  it("预检进行中失败且已经停止：不再进入检测", async () => {
+    const { done, bag } = runAll({ abortAt: "precheck" });
+    await expect(done).resolves.toBe(false);
+    expect(h.switchProxy).not.toHaveBeenCalled();
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(bag.hints.some((m) => m?.includes(UNSAFE))).toBe(false);
+    expect(bag.gates.some((m) => m.includes("测全部节点时出错"))).toBe(false);
+  });
+
+  it("已经切换之后停止：切回原节点，不再检测下一个", async () => {
+    const { done, bag } = runAll({ abortAt: "after-switch" });
+    await expect(done).resolves.toBe(false);
+    expect(h.switchProxy).toHaveBeenCalledTimes(1);
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(h.restoreProxy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ group: MAIN, now: HK17 }),
+    );
+    expect(bag.hints.some((m) => m?.includes(UNSAFE))).toBe(false);
+  });
+
+  it("真的读不到当前节点时仍只检测当前节点", async () => {
+    const { done, bag } = runAll({ abortAt: "never", snapshot: "null" });
+    await expect(done).resolves.toBe(true);
+    expect(h.switchProxy).not.toHaveBeenCalled();
+    expect(h.restoreProxy).not.toHaveBeenCalled();
+    expect(h.runNodeDiagnostics).toHaveBeenCalledTimes(1);
+    expect(bag.hints.some((m) => m?.includes(UNSAFE))).toBe(true);
+    expect(bag.progress.some((t) => t.includes("无法安全切换"))).toBe(true);
+  });
+
+  it("测单个在条件检查或切换失败被停止时不误报、切过则切回", async () => {
+    let abort = false;
+    const bag = hooks();
+    h.refreshClashMode.mockImplementation(async () => {
+      abort = true;
+      throw new Error("mode read failed");
+    });
+    const stopped = await testOne(
+      {
+        node: node(US82),
+        connection: connection("rule"),
+        forceMock: false,
+        mixedPort: 7897,
+        ensureGate: async () => ({ ok: true, message: "ok" }),
+        shouldAbort: () => abort,
+      },
+      bag.api,
+    );
+    expect(stopped).toBe(false);
+    expect(h.switchProxy).not.toHaveBeenCalled();
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(h.restoreProxy).not.toHaveBeenCalled();
+    expect(bag.hints.some((m) => m && m.length > 0)).toBe(false);
+
+    abort = false;
+    h.refreshClashMode.mockImplementation(async (config: { mode?: string }) => config.mode);
+    h.switchProxy.mockImplementation(async () => {
+      abort = true;
+      return true;
+    });
+    const afterSwitch = hooks();
+    const switched = await testOne(
+      {
+        node: node(US82),
+        connection: connection("rule"),
+        forceMock: false,
+        mixedPort: 7897,
+        ensureGate: async () => ({ ok: true, message: "ok" }),
+        shouldAbort: () => abort,
+      },
+      afterSwitch.api,
+    );
+    expect(switched).toBe(false);
+    expect(h.runNodeDiagnostics).not.toHaveBeenCalled();
+    expect(h.restoreProxy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ group: MAIN, now: HK17 }),
+    );
+    expect(afterSwitch.hints.some((m) => m?.includes("切换失败"))).toBe(false);
   });
 });

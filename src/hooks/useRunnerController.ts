@@ -292,6 +292,7 @@ export function useRunnerController({
 
   const onAbortAll = () => {
     abortAllRef.current = true;
+    setSwitchHint(null);
     setProgress({ text: "正在停止…", testingNode: undefined });
   };
 
