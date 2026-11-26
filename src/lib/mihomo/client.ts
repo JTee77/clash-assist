@@ -23,6 +23,7 @@ import {
   resolveCurrentProxyFromSlim,
   resolveSelectorSnapshotFromMap,
   resolveSwitchPlanFromMap,
+  switchPlanApplied,
   switchedLeafMatches,
   type ProxyResolveOptions,
   type SlimGroupLike,
@@ -550,7 +551,27 @@ async function readProxyMap(
 ): Promise<Record<string, ProxyInfo> | null> {
   const res = await httpApi(config, "GET", "/proxies", undefined, timeoutMs);
   if (!res || !is2xx(res.status) || !res.json) return null;
-  return (res.json as { proxies?: Record<string, ProxyInfo> }).proxies ?? {};
+  let proxies = (res.json as { proxies?: Record<string, ProxyInfo> }).proxies ?? {};
+  // 节点列表会把订阅叶子补进表里。切换和校验必须用同一份表，
+  // 否则只存在于 provider 的 Http/SS 节点会在叶子校验时被当成不存在。
+  if (missingProviderNames(proxies).length === 0) return proxies;
+  const providersRes = await httpApi(
+    config,
+    "GET",
+    "/providers/proxies",
+    undefined,
+    timeoutMs,
+  );
+  const providerMap = (providersRes?.json as { providers?: ProviderMap } | null)?.providers;
+  if (
+    providersRes &&
+    is2xx(providersRes.status) &&
+    providerMap &&
+    typeof providerMap === "object"
+  ) {
+    proxies = mergeProviderNodes(proxies, providerMap);
+  }
+  return proxies;
 }
 
 async function connectedState(
@@ -892,7 +913,11 @@ export async function confirmTrafficLeaf(
   if (nodeTestBlockReason(config.mode)) return false;
   const proxies = await readProxyMap(config);
   if (!proxies) return false;
-  return switchedLeafMatches(proxies, nodeName, { mode: config.mode });
+  const steps = resolveSwitchPlanFromMap(proxies, nodeName, undefined, {
+    mode: config.mode,
+  });
+  if (steps.length === 0) return false;
+  return switchPlanApplied(proxies, steps, nodeName, { mode: config.mode });
 }
 
 export async function switchProxy(
@@ -910,8 +935,9 @@ export async function switchProxy(
   const steps = resolveSwitchPlanFromMap(proxies, name, group, { mode: config.mode });
   if (steps.length === 0) return false;
 
-  // Already on the target leaf: don't PUT, but still re-read before trusting it.
-  const already = switchedLeafMatches(proxies, name, { mode: config.mode });
+  // Already on the target leaf of the group this plan switches: don't PUT,
+  // but still re-read before trusting it.
+  const already = switchPlanApplied(proxies, steps, name, { mode: config.mode });
   if (!already) {
     for (const step of steps) {
       const stepEnc = encodeURIComponent(step.group);
@@ -920,11 +946,11 @@ export async function switchProxy(
     }
   }
 
-  // Hard check: the traffic group's effective leaf (nested `now` included) is the
-  // target. A 2xx on the wrong group, or a shared exit IP, is not success.
+  // 校验的是这次计划切的那一组（含嵌套 now），不是名字更优先但不含该节点的组。
+  // 2xx 打在错误的组上、或出口 IP 碰巧相同，都不算成功。
   const after = await readProxyMap(config);
   if (!after) return false;
-  return switchedLeafMatches(after, name, { mode: config.mode });
+  return switchPlanApplied(after, steps, name, { mode: config.mode });
 }
 
 /** 切回原先节点（含嵌套子组链）；任一步失败返回 false（调用方必须向用户报错，不可静默）。 */

@@ -5,8 +5,10 @@ import {
   resolveCurrentProxy,
   resolveSelectorSnapshotFromMap,
   resolveSwitchPlanFromMap,
+  switchPlanApplied,
   switchedLeafMatches,
 } from "./currentProxy";
+import { mergeProviderNodes } from "./providerNodes";
 import type { ProxyInfo } from "./types";
 
 const leaf = (name: string, type: string): ProxyInfo => ({ name, type });
@@ -473,5 +475,83 @@ describe("线上 Verge 规则模式：GLOBAL 与 😣 节点选择 停在不同�
     ]);
     const switchedGlobal = vergeProxies(HK17, US82);
     expect(switchedLeafMatches(switchedGlobal, US82, { mode: "global" })).toBe(true);
+  });
+});
+
+describe("规则模式：名字优先的组不含目标，流量组含目标", () => {
+  const SS = "日本 SS";
+  const HTTP = "新加坡 HTTP";
+
+  function disjoint(proxyNow = HTTP): Record<string, ProxyInfo> {
+    return {
+      GLOBAL: group("GLOBAL", "DIRECT", ["DIRECT", SS]),
+      节点选择: group("节点选择", SS, [SS, "DIRECT"]),
+      PROXY: group("PROXY", proxyNow, [HTTP, "DIRECT"]),
+      [SS]: leaf(SS, "Shadowsocks"),
+      [HTTP]: leaf(HTTP, "Http"),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+  }
+
+  it("节点选择只有 SS、PROXY 只有 Http 时，切 Http 走 PROXY，并记下 PROXY 以便切回", () => {
+    const proxies = disjoint();
+    expect(resolveSwitchPlanFromMap(proxies, HTTP, "节点选择", { mode: "rule" })).toEqual([
+      { group: "PROXY", name: HTTP },
+    ]);
+    expect(resolveSwitchPlanFromMap(proxies, HTTP, "GLOBAL", { mode: "rule" })).toEqual([
+      { group: "PROXY", name: HTTP },
+    ]);
+    const snap = resolveSelectorSnapshotFromMap(proxies, SS, { mode: "rule" });
+    expect(snap?.group).toBe("节点选择");
+    expect(snap?.restoreChain).toEqual([
+      { group: "节点选择", now: SS },
+      { group: "PROXY", now: HTTP },
+    ]);
+    const plan = resolveSwitchPlanFromMap(proxies, HTTP, snap?.group, { mode: "rule" });
+    expect(switchPlanApplied(proxies, plan, HTTP, { mode: "rule" })).toBe(true);
+  });
+
+  it("主组自己含目标时仍切主组，不改去切另一个也含目标的 PROXY", () => {
+    const proxies = disjoint();
+    proxies["节点选择"] = group("节点选择", SS, [SS, HTTP, "DIRECT"]);
+    expect(resolveSwitchPlanFromMap(proxies, HTTP, "GLOBAL", { mode: "rule" })).toEqual([
+      { group: "节点选择", name: HTTP },
+    ]);
+  });
+
+  it("没有任何组含该节点时计划为空", () => {
+    expect(
+      resolveSwitchPlanFromMap(disjoint(), "没有这个节点", "PROXY", { mode: "rule" }),
+    ).toEqual([]);
+  });
+
+  it("主组不含目标、且有两个 Selector 都含目标时不猜", () => {
+    const proxies = disjoint();
+    proxies.NETFLIX = group("NETFLIX", HTTP, [HTTP, "DIRECT"]);
+    expect(resolveSwitchPlanFromMap(proxies, HTTP, "节点选择", { mode: "rule" })).toEqual([]);
+  });
+
+  it("全局模式不因为 PROXY 含目标就改切 PROXY", () => {
+    expect(resolveSwitchPlanFromMap(disjoint(), HTTP, "GLOBAL", { mode: "global" })).toEqual([]);
+  });
+});
+
+describe("订阅叶子不在原始 /proxies 里时，合并后才能通过叶子校验", () => {
+  const HTTP = "订阅新加坡 HTTP";
+
+  it("原始表缺少叶子则校验失败，mergeProviderNodes 补上 Http 叶子后通过", () => {
+    const raw: Record<string, ProxyInfo> = {
+      GLOBAL: group("GLOBAL", "DIRECT", ["DIRECT"]),
+      PROXY: group("PROXY", HTTP, [HTTP, "DIRECT"]),
+      DIRECT: leaf("DIRECT", "Direct"),
+    };
+    const plan = resolveSwitchPlanFromMap(raw, HTTP, "PROXY", { mode: "rule" });
+    expect(plan).toEqual([{ group: "PROXY", name: HTTP }]);
+    expect(switchPlanApplied(raw, plan, HTTP, { mode: "rule" })).toBe(false);
+    const merged = mergeProviderNodes(raw, {
+      sub: { vehicleType: "File", proxies: [{ name: HTTP, type: "Http" }] },
+    });
+    expect(merged[HTTP]?.type).toBe("Http");
+    expect(switchPlanApplied(merged, plan, HTTP, { mode: "rule" })).toBe(true);
   });
 });
