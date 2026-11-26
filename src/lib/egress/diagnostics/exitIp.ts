@@ -18,10 +18,17 @@ function emptyExitIp(): ExitIpInfo {
 /**
  * 由组织名/ISP 关键词推断是否机房（datacenter）IP。
  * TLS IP 源（ipwho.is / ip.sb / geojs.io）不像 ip-api 那样提供 hosting 布尔字段，只能推断。
+ *
+ * 只在命中机房关键词时返回 true。空字段、缺字段、或有名字但没命中关键词都返回 null：
+ * 那是证据不足，不是「住宅」。这里也不读 proxy / 信誉字段，命中与否都不表示地址干净。
  */
-export function inferHosting(...fields: (string | null | undefined)[]): boolean {
-  const blob = fields.filter(Boolean).join(" ").toLowerCase();
-  if (!blob) return false;
+export function inferHosting(...fields: (string | null | undefined)[]): true | null {
+  const blob = fields
+    .map((field) => (typeof field === "string" ? field.trim() : ""))
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!blob) return null;
   const keywords = [
     "hosting",
     "cloud",
@@ -51,7 +58,7 @@ export function inferHosting(...fields: (string | null | undefined)[]): boolean 
     "choopa",
     "contabo",
   ];
-  return keywords.some((k) => blob.includes(k));
+  return keywords.some((k) => blob.includes(k)) ? true : null;
 }
 
 /** 单个源解析出的映射字段（null 表示该源失败，尝试下一个）。 */
@@ -163,7 +170,7 @@ export async function fetchExitIp(
         isp: fields.isp ?? null,
         hosting,
         hostingInferred: true,
-        ipTypeLabel: hosting ? "疑似机房(DCH)" : "住宅(ISP)",
+        ipTypeLabel: hosting === true ? "疑似机房(DCH)" : "未判定",
       };
     } catch {
       // 解析失败 → 尝试下一个源
@@ -218,12 +225,16 @@ export function exitIpCard(info: ExitIpInfo): CheckCard {
       metrics: { exitIp: null, countryCode: null, hosting: null },
     };
   }
-  const level: CheckLevel = info.hosting ? "warn" : "pass";
+  const level: CheckLevel = info.hosting === true ? "warn" : "unknown";
   const processLines = [
     `组织 ${info.org ?? "--"} · ISP ${info.isp ?? "--"} · 国家 ${info.country ?? "--"}`,
   ];
-  if (info.hostingInferred) {
+  if (info.hosting === true && info.hostingInferred) {
     processLines.push("机房判定：由组织名关键词推断（当前 IP 源未提供该字段）");
+  } else if (info.hosting !== true) {
+    processLines.push(
+      "线路类型未判定：组织名信息不足，当前来源也没有可直接采用的类型字段。不能据此写成家庭宽带，也不表示地址干净。",
+    );
   }
   return {
     id: "exit-ip",

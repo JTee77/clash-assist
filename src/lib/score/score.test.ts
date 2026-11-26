@@ -66,6 +66,24 @@ describe("scoreNodeFromCards · metrics.downMbps", () => {
     expect(r.totalScore).toBe(84);
     expect(r.stars).toBe(4);
   });
+  it("hosting=null 且结论未判定时，过程里的 ISP / 机房字样不加住宅分也不降成机房", () => {
+    const cards = greenNodeCards().map((c) =>
+      c.id === "exit-ip"
+        ? card(
+            "exit-ip",
+            "unknown",
+            "23.106.130.20 · CA · 未判定",
+            "组织 IT7 Networks Inc · ISP Cluster Logic Inc · 国家 Canada\n机房判定：由组织名关键词推断（当前 IP 源未提供该字段）",
+            { exitIp: "23.106.130.20", countryCode: "CA", hosting: null },
+          )
+        : c,
+    );
+    const r = scoreNodeFromCards("证据不足", cards);
+    const exit = r.breakdown.find((b) => b.key === "exit");
+    expect(exit?.score).not.toBe(95);
+    expect(exit?.note).not.toContain("出口更像住宅线路");
+    expect(exit?.score).not.toBe(55);
+  });
   it("metrics.hosting=true 按机房降分，无视文案「住宅」", () => {
     const cards = greenNodeCards().map((c) =>
       c.id === "exit-ip"

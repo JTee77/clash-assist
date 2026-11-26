@@ -34,8 +34,13 @@ export function formatCardBrief(card: CheckCard): string {
     if (m && (m.countryCode || m.hosting != null)) {
       const cc = (m.countryCode ?? "?").toUpperCase();
       if (m.hosting === true) return `${cc} · 机房`;
-      if (m.hosting === false) return `${cc} · 家宽`;
-      return cc;
+      // 走到这里 hosting 不是 true。false 只表示「没标成机房」，不能默认家宽。
+      // 家宽只在结论已经写明住宅/家宽时沿用那句正面结论。
+      const text = card.conclusion ?? "";
+      if (/住宅|家宽/.test(text) && !/未判定/.test(text)) {
+        return `${cc} · 家宽`;
+      }
+      return `${cc} · 未判定`;
     }
     return shortConclusion(card);
   }
