@@ -434,19 +434,9 @@ export function resolveSelectorSnapshotFromMap(
     const rootInfo = proxies[rootGroup];
     if (rootInfo && isSwitchable(rootInfo)) {
       const chain = buildChain(rootGroup);
-      // 同时记录其它当前指向主组的二级分流策略组（如 🌍 国外媒体、🤖 人工智能、🎥 NETFLIX），
-      // 防止部分机场把节点只放在地区组或专项组里时需要联动切换并恢复。
-      const extras: Array<{ group: string; now: string }> = [];
-      for (const [gName, gInfo] of Object.entries(proxies)) {
-        if (gName === rootGroup || gName === "GLOBAL") continue;
-        if (!isSelectorType(gInfo) || !gInfo.now) continue;
-        if (chain.some((c) => c.group === gName)) continue;
-        // 如果某个分流组当前直接停在某个真实节点（而非指向主组或直连/拦截），也纳入保护快照
-        if (isRealLeaf(proxies, gInfo.now) && countRealLeaves(proxies, gInfo) > 0) {
-          extras.push({ group: gName, now: gInfo.now });
-        }
-      }
-      const fullChain = [...chain, ...extras];
+      // 其它 Selector（专项组，或规则实际走的 PROXY）当前停在叶子或 DIRECT 时一并记下，
+      // 测完按这条链切回，避免只恢复名字更优先的「节点选择」。
+      const fullChain = [...chain, ...otherSelectorRestore(proxies, rootGroup, chain)];
       return {
         group: rootGroup,
         now: rootInfo.now ?? nodeName ?? null,
@@ -482,7 +472,39 @@ export function resolveSelectorSnapshotFromMap(
   const best = scored[0]?.name;
   if (!best) return null;
   const now = proxies[best]?.now ?? nodeName ?? null;
-  return { group: best, now };
+  const chain = buildChain(best);
+  const fullChain = [...chain, ...otherSelectorRestore(proxies, best, chain)];
+  return {
+    group: best,
+    now,
+    ...(fullChain.length > 1 ? { restoreChain: fullChain } : {}),
+  };
+}
+
+/**
+ * Selectors we may switch away from, besides the root, so the end of a test can
+ * put them back. A group parked on DIRECT still counts: that is a real prior
+ * choice, not "no group".
+ */
+function otherSelectorRestore(
+  proxies: Record<string, ProxyInfo>,
+  rootGroup: string,
+  chain: Array<{ group: string; now: string }>,
+): Array<{ group: string; now: string }> {
+  const extras: Array<{ group: string; now: string }> = [];
+  for (const [gName, gInfo] of Object.entries(proxies)) {
+    if (gName === rootGroup || gName === "GLOBAL") continue;
+    if (!isSelectorType(gInfo) || !gInfo.now) continue;
+    if (chain.some((c) => c.group === gName)) continue;
+    const parkedOnDirect = gInfo.now === "DIRECT" || gInfo.now === "REJECT";
+    if (
+      (isRealLeaf(proxies, gInfo.now) || parkedOnDirect) &&
+      countRealLeaves(proxies, gInfo) > 0
+    ) {
+      extras.push({ group: gName, now: gInfo.now });
+    }
+  }
+  return extras;
 }
 
 /**
@@ -565,16 +587,34 @@ export function resolveSwitchPlanFromMap(
     if (plan) return plan;
   }
 
-  // 若主组（或 hint）里找不到，再按同一套 mode 规则找能切到 targetNode 的组。
-  // 不另起一套打分，避免规则模式下退回 GLOBAL 或某个策略组。
-  const fallbackSnap = resolveSelectorSnapshotFromMap(proxies, targetNode, options);
-  if (fallbackSnap?.group) {
-    const plan = findPathFromGroup(fallbackSnap.group);
-    if (plan) return plan;
-    if (proxies[fallbackSnap.group]?.all?.includes(targetNode)) {
-      return [{ group: fallbackSnap.group, name: targetNode }];
-    }
-  }
+  // 全局模式流量只跟 GLOBAL。主组够不着目标时不能改去切别的组。
+  if (mode === "global") return [];
 
-  return [];
+  // 主组（往往是名字更优先的「节点选择」）不含这个节点时，不要因此报切换失败。
+  // 规则模式下若恰好还有一个 Selector 含该节点（例如流量走 PROXY），就切那一个。
+  // 有两个及以上都含该节点时分不清谁在承载探针，保持空计划，不猜。
+  const candidates: Array<Array<{ group: string; name: string }>> = [];
+  for (const name of Object.keys(proxies)) {
+    if (name === "GLOBAL" || name === mainGroup) continue;
+    const plan = findPathFromGroup(name);
+    if (plan) candidates.push(plan);
+  }
+  return candidates.length === 1 ? candidates[0]! : [];
+}
+
+/**
+ * 计划里最外层组沿 `now` 走到的叶子是不是目标。
+ * 用来确认「这次实际切换的组」已经落到目标上，而不是另一个名字更优先、但不含该节点的组。
+ */
+export function switchPlanApplied(
+  proxies: Record<string, ProxyInfo>,
+  steps: ReadonlyArray<{ group: string; name: string }>,
+  targetNode: string,
+  options?: ProxyResolveOptions,
+): boolean {
+  if (!targetNode || steps.length === 0) return false;
+  if (normalizeClashMode(options?.mode) === "direct") return false;
+  const root = steps[steps.length - 1];
+  if (!root) return false;
+  return followToLeaf(proxies, root.group) === targetNode;
 }

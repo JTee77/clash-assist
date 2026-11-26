@@ -113,4 +113,74 @@ describe("switchProxy 按模式切流量组，并在测之前核对有效叶子"
 
     await expect(switchProxy(config("global"), MAIN, US82)).resolves.toBe(true);
   });
+
+  it("规则模式：节点选择不含目标时改切含该节点的 PROXY", async () => {
+    const SS = "日本 SS";
+    const HTTP = "新加坡 HTTP";
+    let proxyNow = "DIRECT";
+    h.invoke.mockImplementation(async (_cmd: string, args: { req: { method: string; path: string; body?: string | null } }) => {
+      const { method, path } = args.req;
+      if (method === "GET" && path === "/proxies") {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            proxies: {
+              GLOBAL: { name: "GLOBAL", type: "Selector", now: "DIRECT", all: ["DIRECT", SS] },
+              节点选择: { name: "节点选择", type: "Selector", now: SS, all: [SS, "DIRECT"] },
+              PROXY: { name: "PROXY", type: "Selector", now: proxyNow, all: [HTTP, "DIRECT"] },
+              [SS]: { name: SS, type: "Shadowsocks" },
+              [HTTP]: { name: HTTP, type: "Http" },
+              DIRECT: { name: "DIRECT", type: "Direct" },
+            },
+          }),
+        };
+      }
+      expect(method).toBe("PUT");
+      expect(path).toBe("/proxies/PROXY");
+      expect(JSON.parse(args.req.body ?? "{}").name).toBe(HTTP);
+      proxyNow = HTTP;
+      return { status: 204, body: "" };
+    });
+
+    await expect(switchProxy(config("rule"), "节点选择", HTTP)).resolves.toBe(true);
+    const puts = h.invoke.mock.calls.filter(([, args]) => args.req.method === "PUT");
+    expect(puts).toHaveLength(1);
+  });
+
+  it("订阅里的 Http 叶子不在原始 /proxies 中，合并后切换校验仍通过", async () => {
+    const HTTP = "订阅新加坡 HTTP";
+    let proxyNow = "DIRECT";
+    h.invoke.mockImplementation(async (_cmd: string, args: { req: { method: string; path: string; body?: string | null } }) => {
+      const { method, path } = args.req;
+      if (method === "GET" && path === "/proxies") {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            proxies: {
+              GLOBAL: { name: "GLOBAL", type: "Selector", now: "DIRECT", all: ["DIRECT"] },
+              PROXY: { name: "PROXY", type: "Selector", now: proxyNow, all: [HTTP, "DIRECT"] },
+              DIRECT: { name: "DIRECT", type: "Direct" },
+            },
+          }),
+        };
+      }
+      if (method === "GET" && path === "/providers/proxies") {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            providers: {
+              sub: { vehicleType: "File", proxies: [{ name: HTTP, type: "Http" }] },
+            },
+          }),
+        };
+      }
+      expect(method).toBe("PUT");
+      expect(path).toBe("/proxies/PROXY");
+      expect(JSON.parse(args.req.body ?? "{}").name).toBe(HTTP);
+      proxyNow = HTTP;
+      return { status: 204, body: "" };
+    });
+
+    await expect(switchProxy(config("rule"), "PROXY", HTTP)).resolves.toBe(true);
+  });
 });
