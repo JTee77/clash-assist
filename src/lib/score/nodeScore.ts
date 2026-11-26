@@ -141,13 +141,17 @@ function scoreExit(cards: CheckCard[]): {
   if (!exit) return { score: 40, note: "未拿到出口信息", measured: true };
   if (exit.level === "fail") return { score: 0, note: exit.conclusion, measured: true };
   const hostingMetric = exit.metrics?.hosting;
-  const copy = `${exit.conclusion} ${exit.process ?? ""}`;
+  const hostingMetricPresent =
+    !!exit.metrics && Object.prototype.hasOwnProperty.call(exit.metrics, "hosting");
+  const conclusion = exit.conclusion ?? "";
+  // 过程行固定带字段名「ISP」，证据不足时也可能提到机房关键词。
+  // 指标已经给出（含明确的 null）就只信指标和结论，不再扫过程。
+  const text = hostingMetricPresent ? conclusion : `${conclusion} ${exit.process ?? ""}`;
   const hosting =
     hostingMetric === true ||
-    (hostingMetric == null && /机房|DCH|hosting/i.test(copy));
-  const residential =
-    hostingMetric === false ||
-    (hostingMetric == null && /住宅|ISP|家宽/i.test(copy));
+    (!hostingMetricPresent && /机房|DCH|hosting/i.test(text));
+  // hosting === false 不是住宅证据。只有结论明确写了住宅/家宽才加分。
+  const residential = /住宅|家宽/.test(conclusion) && !/未判定/.test(conclusion);
   if (exit.level === "pass" && residential && !hosting) {
     return { score: 95, note: "出口更像住宅线路", measured: true };
   }

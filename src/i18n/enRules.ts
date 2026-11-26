@@ -13,6 +13,7 @@ export const EN_RULES: [string, string][] = [
   ["无出口", "No exit"],
   ["{0} · 机房", "{0} · DC"],
   ["{0} · 家宽", "{0} · Resi"],
+  ["{0} · 未判定", "{0} · Unknown"],
   ["失败", "Failed"],
   ["未验证", "Unverified"],
   ["通", "OK"],
@@ -107,6 +108,8 @@ export const EN_RULES: [string, string][] = [
   // ── 出口 IP ──
   ["疑似机房(DCH)", "Likely datacenter (DCH)"],
   ["住宅(ISP)", "Residential (ISP)"],
+  ["未判定", "Unknown"],
+  ["线路类型未判定：组织名信息不足，当前来源也没有可直接采用的类型字段。不能据此写成家庭宽带，也不表示地址干净。", "Line type unknown: the org name is not enough, and this source has no type field we can use directly. That is not a home-broadband result and does not mean the address is clean."],
   ["无法获取出口 IP", "Couldn't get the exit IP"],
   ["检查网络或临时关闭拦截局域网流量的规则。", "Check your network, or temporarily disable rules that block LAN traffic."],
   ["组织 {0} · ISP {1} · 国家 {2}", "Org {0} · ISP {1} · Country {2}"],

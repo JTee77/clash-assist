@@ -65,6 +65,10 @@ export interface ExitIpInfo {
   countryCode: string | null;
   org: string | null;
   isp: string | null;
+  /**
+   * true：关键词命中，疑似机房。null：证据不足（没命中、组织名为空，或来源没有权威字段）。
+   * 不把 false 当作住宅；当前 TLS 源也不会写出 false。
+   */
   hosting: boolean | null;
   /** true when `hosting` was keyword-inferred (TLS sources don't provide it) */
   hostingInferred?: boolean;

@@ -50,6 +50,24 @@ describe("formatCardBrief", () => {
         }),
       ),
     ).not.toContain("1.2.3.4");
+    expect(
+      formatCardBrief(
+        card("exit-ip", "unknown", "23.106.130.20 · CA · 未判定", {
+          exitIp: "23.106.130.20",
+          countryCode: "CA",
+          hosting: null,
+        }),
+      ),
+    ).toBe("CA · 未判定");
+    expect(
+      formatCardBrief(
+        card("exit-ip", "unknown", "96.45.186.222 · US · 未判定", {
+          exitIp: "96.45.186.222",
+          countryCode: "US",
+          hosting: false,
+        }),
+      ),
+    ).toBe("US · 未判定");
   });
 
   it("latency：N ms 或失败", () => {
